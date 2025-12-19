@@ -74,7 +74,7 @@ class NetworkService {
 
   /// 停止發現
   Future<void> stopDiscovery() async {
-    await _mdnsClient?.stop();
+    _mdnsClient?.stop();
     _mdnsClient = null;
     _discoveredDevices.clear();
     _notifyDevicesChanged();

@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:dio/dio.dart';
-import '../models/room.dart';
 import '../models/user.dart';
 
 class SyncService {

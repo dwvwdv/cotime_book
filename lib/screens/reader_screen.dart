@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/book.dart';
+import '../models/room.dart';
 import '../providers/book_provider.dart';
 import '../providers/room_provider.dart';
 import '../providers/user_provider.dart';
@@ -179,7 +180,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         color: Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withValues(alpha: 0.1),
             blurRadius: 4,
             offset: const Offset(0, -2),
           ),
@@ -188,7 +189,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          LinearProgressIndicator(value: progress),
+          LinearProgressIndicator(value: progress.toDouble()),
           const SizedBox(height: 8),
           Text(
             '第 ${_currentChapterIndex + 1}/${widget.book.chapters.length} 章 | '
