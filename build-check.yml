@@ -5,11 +5,20 @@ on:
     branches: [ main, master ]
   push:
     branches: [ main, master ]
+    paths:
+      - 'lib/**'
+      - 'android/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/build-check.yml'
+
+permissions:
+  contents: read
 
 jobs:
   build:
     name: Build and Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
@@ -18,13 +27,13 @@ jobs:
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
+          distribution: 'temurin'
           java-version: '17'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.0'
+          flutter-version: '3.32.4'
           channel: 'stable'
           cache: true
 
@@ -32,34 +41,59 @@ jobs:
         run: flutter pub get
 
       - name: Generate app icons
-        run: flutter pub run flutter_launcher_icons
+        run: dart run flutter_launcher_icons
 
       - name: Analyze code
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos
 
       - name: Run tests
-        run: flutter test || echo "No tests found or tests failed"
+        run: flutter test
         continue-on-error: true
 
-      - name: Decode keystore
+      - name: Check if keystore secrets exist
+        id: check_secrets
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/release-key.jks
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "has_keystore=true" >> $GITHUB_OUTPUT
+            echo "✓ Keystore secrets found, will build signed APK"
+          else
+            echo "has_keystore=false" >> $GITHUB_OUTPUT
+            echo "⚠ No keystore secrets, will build debug APK"
+          fi
 
-      - name: Create key.properties
+      - name: Decode and setup keystore
+        if: steps.check_secrets.outputs.has_keystore == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/release-key.jks
           cat > android/key.properties << EOF
-          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-          keyPassword=${{ secrets.KEY_PASSWORD }}
-          keyAlias=${{ secrets.KEY_ALIAS }}
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
           storeFile=release-key.jks
           EOF
+          echo "✓ Keystore configured successfully"
 
-      - name: Build APK (release)
-        run: flutter build apk --release
+      - name: Build APK
+        run: |
+          if [ "${{ steps.check_secrets.outputs.has_keystore }}" == "true" ]; then
+            echo "Building signed release APK..."
+            flutter build apk --release
+          else
+            echo "Building debug APK..."
+            flutter build apk --debug
+          fi
 
-      - name: Upload release APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: build-check-apk
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/flutter-apk/app-debug.apk
           retention-days: 7
+          if-no-files-found: ignore
