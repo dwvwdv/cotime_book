@@ -87,15 +87,17 @@ class RoomNotifier extends StateNotifier<RoomState> {
     }
   }
 
-  Future<void> refreshMembers() async {
+  Future<void> refreshMembers({List<Map<String, dynamic>>? presenceUsers}) async {
     final room = state.currentRoom;
     if (room == null) return;
     try {
       final members = await _roomService.getRoomMembers(room.id);
       state = state.copyWith(members: members);
-    } catch (e) {
-      // Silently fail, presence will keep UI updated
-    }
+      // Re-apply online status after DB fetch (DB has no isOnline column)
+      if (presenceUsers != null && presenceUsers.isNotEmpty) {
+        updateMembersFromPresence(presenceUsers);
+      }
+    } catch (_) {}
   }
 
   void updateMembersFromPresence(List<Map<String, dynamic>> onlineUsers) {
@@ -113,6 +115,36 @@ class RoomNotifier extends StateNotifier<RoomState> {
       );
     }).toList();
     state = state.copyWith(members: updatedMembers);
+  }
+
+  /// Called on all clients (including receiver) when book_shared broadcast arrives.
+  void onBookSharedReceived({
+    required String bookTitle,
+    required String bookHash,
+  }) {
+    final room = state.currentRoom;
+    if (room == null) return;
+    state = state.copyWith(
+      currentRoom: room.copyWith(
+        currentBookTitle: bookTitle,
+        currentBookHash: bookHash,
+      ),
+    );
+  }
+
+  /// Update DB has_book status for the current user (receiver side).
+  Future<void> updateReceiverBookStatus() async {
+    final room = state.currentRoom;
+    final userId = SupabaseService.currentUserId;
+    if (room == null || userId == null) return;
+    try {
+      await _roomService.updateMemberBookStatus(
+        roomId: room.id,
+        userId: userId,
+        hasBook: true,
+      );
+      await refreshMembers();
+    } catch (_) {}
   }
 
   Future<void> updateBookShared({

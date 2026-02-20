@@ -160,7 +160,8 @@ class BookNotifier extends StateNotifier<BookState> {
     if (bookFile != null) {
       state = state.copyWith(bookFile: bookFile);
 
-      // Update presence
+      // Update DB member status and presence
+      await ref.read(roomProvider.notifier).updateReceiverBookStatus();
       await ref.read(presenceProvider.notifier).updateHasBook(true);
     }
   }

@@ -119,7 +119,7 @@ class TransferProgressWidget extends StatelessWidget {
       case TransferStatus.accepting:
         return 'Accepting...';
       case TransferStatus.transferring:
-        return 'Receiving book...';
+        return transferState.isSending ? 'Sending book...' : 'Receiving book...';
       case TransferStatus.completed:
         return 'Transfer complete';
       case TransferStatus.failed:

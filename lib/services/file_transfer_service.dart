@@ -54,6 +54,7 @@ class FileTransferService {
       transferredBytes: 0,
       totalChunks: totalChunks,
       receivedChunks: 0,
+      isSending: true,
     ));
 
     for (int i = 0; i < totalChunks; i++) {

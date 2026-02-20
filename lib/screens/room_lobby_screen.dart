@@ -23,6 +23,7 @@ class RoomLobbyScreen extends ConsumerStatefulWidget {
 
 class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
   StreamSubscription? _transferSub;
+  StreamSubscription? _bookSharedSub;
   TransferState _transferState = const TransferState.idle();
 
   @override
@@ -61,11 +62,15 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       }
     });
 
-    // Listen for book_shared events
-    realtimeService.broadcastStream('book_shared').listen((payload) {
+    // Listen for book_shared events (store subscription so it can be cancelled)
+    _bookSharedSub = realtimeService.broadcastStream('book_shared').listen((payload) {
       final bookHash = payload['file_hash'] as String?;
+      final bookTitle = payload['title'] as String?;
       if (bookHash != null) {
-        ref.read(roomProvider.notifier).refreshMembers();
+        ref.read(roomProvider.notifier).onBookSharedReceived(
+              bookTitle: bookTitle ?? 'Unknown',
+              bookHash: bookHash,
+            );
       }
     });
 
@@ -79,6 +84,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
   @override
   void dispose() {
     _transferSub?.cancel();
+    _bookSharedSub?.cancel();
     super.dispose();
   }
 
@@ -89,6 +95,18 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     final bookState = ref.watch(bookProvider);
     final authState = ref.watch(authProvider);
     final room = roomState.currentRoom;
+
+    // Keep member online/hasBook status in sync with presence on every update
+    ref.listen<PresenceState>(presenceProvider, (previous, next) {
+      final notifier = ref.read(roomProvider.notifier);
+      // Always apply latest online status immediately
+      notifier.updateMembersFromPresence(next.onlineUsers);
+      // When someone joins/leaves, fetch from DB for full member data,
+      // then re-apply presence overlay (DB has no isOnline column)
+      if ((previous?.onlineCount ?? 0) != next.onlineCount) {
+        notifier.refreshMembers(presenceUsers: next.onlineUsers);
+      }
+    });
 
     if (room == null) {
       return const Scaffold(
@@ -259,9 +277,15 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
   }
 
   Future<void> _leaveRoom() async {
-    await ref.read(presenceProvider.notifier).leaveRoom();
-    await ref.read(roomProvider.notifier).leaveRoom();
-    ref.read(bookProvider.notifier).reset();
+    try {
+      await ref.read(presenceProvider.notifier).leaveRoom();
+    } catch (_) {}
+    try {
+      await ref.read(roomProvider.notifier).leaveRoom();
+    } catch (_) {}
+    try {
+      ref.read(bookProvider.notifier).reset();
+    } catch (_) {}
     if (mounted) {
       context.goNamed('home');
     }
