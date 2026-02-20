@@ -8,6 +8,7 @@ class TransferState {
   final int totalChunks;
   final int receivedChunks;
   final String? errorMessage;
+  final bool isSending;
 
   const TransferState({
     this.status = TransferStatus.idle,
@@ -17,6 +18,7 @@ class TransferState {
     this.totalChunks = 0,
     this.receivedChunks = 0,
     this.errorMessage,
+    this.isSending = false,
   });
 
   const TransferState.idle()
@@ -26,7 +28,8 @@ class TransferState {
         transferredBytes = 0,
         totalChunks = 0,
         receivedChunks = 0,
-        errorMessage = null;
+        errorMessage = null,
+        isSending = false;
 
   double get progress => totalBytes > 0 ? transferredBytes / totalBytes : 0;
 
@@ -43,6 +46,7 @@ class TransferState {
     int? totalChunks,
     int? receivedChunks,
     String? errorMessage,
+    bool? isSending,
   }) {
     return TransferState(
       status: status ?? this.status,
@@ -52,6 +56,7 @@ class TransferState {
       totalChunks: totalChunks ?? this.totalChunks,
       receivedChunks: receivedChunks ?? this.receivedChunks,
       errorMessage: errorMessage ?? this.errorMessage,
+      isSending: isSending ?? this.isSending,
     );
   }
 }

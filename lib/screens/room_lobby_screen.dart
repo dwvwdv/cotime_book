@@ -23,6 +23,7 @@ class RoomLobbyScreen extends ConsumerStatefulWidget {
 
 class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
   StreamSubscription? _transferSub;
+  StreamSubscription? _bookSharedSub;
   TransferState _transferState = const TransferState.idle();
 
   @override
@@ -61,8 +62,8 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       }
     });
 
-    // Listen for book_shared events
-    realtimeService.broadcastStream('book_shared').listen((payload) {
+    // Listen for book_shared events (store subscription so it can be cancelled)
+    _bookSharedSub = realtimeService.broadcastStream('book_shared').listen((payload) {
       final bookHash = payload['file_hash'] as String?;
       final bookTitle = payload['title'] as String?;
       if (bookHash != null) {
@@ -83,6 +84,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
   @override
   void dispose() {
     _transferSub?.cancel();
+    _bookSharedSub?.cancel();
     super.dispose();
   }
 
