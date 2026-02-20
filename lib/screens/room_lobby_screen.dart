@@ -23,6 +23,7 @@ class RoomLobbyScreen extends ConsumerStatefulWidget {
 
 class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
   StreamSubscription? _transferSub;
+  StreamSubscription? _presenceSub;
   TransferState _transferState = const TransferState.idle();
 
   @override
@@ -69,6 +70,12 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       }
     });
 
+    // Listen for presence changes to update member list
+    _presenceSub = realtimeService.presenceStream.listen((event) {
+      final onlineUsers = realtimeService.getOnlineUsers();
+      ref.read(roomProvider.notifier).updateMembersFromPresence(onlineUsers);
+    });
+
     // Check if room already has a book
     final room = ref.read(roomProvider).currentRoom;
     if (room?.currentBookHash != null) {
@@ -79,6 +86,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
   @override
   void dispose() {
     _transferSub?.cancel();
+    _presenceSub?.cancel();
     super.dispose();
   }
 
@@ -259,11 +267,16 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
   }
 
   Future<void> _leaveRoom() async {
-    await ref.read(presenceProvider.notifier).leaveRoom();
-    await ref.read(roomProvider.notifier).leaveRoom();
+    // Reset book provider first to avoid state issues
     ref.read(bookProvider.notifier).reset();
+    // Leave room services
+    await Future.wait([
+      ref.read(presenceProvider.notifier).leaveRoom(),
+      ref.read(roomProvider.notifier).leaveRoom(),
+    ]);
+    // Navigate after all cleanup is done
     if (mounted) {
-      context.goNamed('home');
+      context.go('/', replace: true);
     }
   }
 }

@@ -138,6 +138,10 @@ class FileTransferService {
         status: TransferStatus.failed,
         errorMessage: 'Error receiving chunk: $e',
       ));
+      // Reset receiving state on error
+      _receivedChunks.clear();
+      _pendingBookHash = null;
+      _expectedTotalChunks = 0;
     }
   }
 
@@ -171,14 +175,17 @@ class FileTransferService {
       // Clean up
       _receivedChunks.clear();
       _pendingBookHash = null;
+      _expectedTotalChunks = 0;
     } catch (e) {
       debugPrint('Error assembling book: $e');
       _updateState(_state.copyWith(
         status: TransferStatus.failed,
         errorMessage: e.toString(),
       ));
+      // Clean up on failure too
       _receivedChunks.clear();
       _pendingBookHash = null;
+      _expectedTotalChunks = 0;
     }
   }
 
