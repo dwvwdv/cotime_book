@@ -276,7 +276,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     ]);
     // Navigate after all cleanup is done
     if (mounted) {
-      context.go('/', replace: true);
+      context.go('/');
     }
   }
 }
