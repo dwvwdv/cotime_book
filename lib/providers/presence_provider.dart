@@ -46,6 +46,11 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
   final RealtimeService _realtimeService;
   StreamSubscription? _subscription;
 
+  // Store current user's info so updateHasBook can re-track correctly
+  String? _currentUserId;
+  String? _currentNickname;
+  int _currentAvatarColorIndex = 0;
+
   PresenceNotifier(this._realtimeService) : super(const PresenceState());
 
   void joinRoom({
@@ -55,6 +60,10 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
     required int avatarColorIndex,
     bool hasBook = false,
   }) {
+    _currentUserId = userId;
+    _currentNickname = nickname;
+    _currentAvatarColorIndex = avatarColorIndex;
+
     _realtimeService.joinRoom(
       roomCode: roomCode,
       userId: userId,
@@ -76,25 +85,21 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
   }
 
   Future<void> updateHasBook(bool hasBook) async {
-    // Re-track with updated has_book status
-    final users = _realtimeService.getOnlineUsers();
-    final currentUser = users.firstWhere(
-      (u) => true, // will use existing presence data
-      orElse: () => {},
+    if (_currentUserId == null) return;
+    await _realtimeService.updatePresence(
+      userId: _currentUserId!,
+      nickname: _currentNickname ?? '',
+      avatarColorIndex: _currentAvatarColorIndex,
+      hasBook: hasBook,
     );
-    if (currentUser.isNotEmpty) {
-      await _realtimeService.updatePresence(
-        userId: currentUser['user_id'] as String? ?? '',
-        nickname: currentUser['nickname'] as String? ?? '',
-        avatarColorIndex: currentUser['avatar_color'] as int? ?? 0,
-        hasBook: hasBook,
-      );
-    }
   }
 
   Future<void> leaveRoom() async {
     _subscription?.cancel();
     _subscription = null;
+    _currentUserId = null;
+    _currentNickname = null;
+    _currentAvatarColorIndex = 0;
     await _realtimeService.leaveRoom();
     state = const PresenceState();
   }

@@ -115,6 +115,36 @@ class RoomNotifier extends StateNotifier<RoomState> {
     state = state.copyWith(members: updatedMembers);
   }
 
+  /// Called on all clients (including receiver) when book_shared broadcast arrives.
+  void onBookSharedReceived({
+    required String bookTitle,
+    required String bookHash,
+  }) {
+    final room = state.currentRoom;
+    if (room == null) return;
+    state = state.copyWith(
+      currentRoom: room.copyWith(
+        currentBookTitle: bookTitle,
+        currentBookHash: bookHash,
+      ),
+    );
+  }
+
+  /// Update DB has_book status for the current user (receiver side).
+  Future<void> updateReceiverBookStatus() async {
+    final room = state.currentRoom;
+    final userId = SupabaseService.currentUserId;
+    if (room == null || userId == null) return;
+    try {
+      await _roomService.updateMemberBookStatus(
+        roomId: room.id,
+        userId: userId,
+        hasBook: true,
+      );
+      await refreshMembers();
+    } catch (_) {}
+  }
+
   Future<void> updateBookShared({
     required String bookTitle,
     required String bookHash,

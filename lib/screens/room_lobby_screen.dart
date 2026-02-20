@@ -64,8 +64,12 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     // Listen for book_shared events
     realtimeService.broadcastStream('book_shared').listen((payload) {
       final bookHash = payload['file_hash'] as String?;
+      final bookTitle = payload['title'] as String?;
       if (bookHash != null) {
-        ref.read(roomProvider.notifier).refreshMembers();
+        ref.read(roomProvider.notifier).onBookSharedReceived(
+              bookTitle: bookTitle ?? 'Unknown',
+              bookHash: bookHash,
+            );
       }
     });
 
@@ -89,6 +93,13 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     final bookState = ref.watch(bookProvider);
     final authState = ref.watch(authProvider);
     final room = roomState.currentRoom;
+
+    // Refresh member list from DB whenever presence online count changes
+    ref.listen<PresenceState>(presenceProvider, (previous, next) {
+      if ((previous?.onlineCount ?? 0) != next.onlineCount) {
+        ref.read(roomProvider.notifier).refreshMembers();
+      }
+    });
 
     if (room == null) {
       return const Scaffold(
@@ -259,9 +270,15 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
   }
 
   Future<void> _leaveRoom() async {
-    await ref.read(presenceProvider.notifier).leaveRoom();
-    await ref.read(roomProvider.notifier).leaveRoom();
-    ref.read(bookProvider.notifier).reset();
+    try {
+      await ref.read(presenceProvider.notifier).leaveRoom();
+    } catch (_) {}
+    try {
+      await ref.read(roomProvider.notifier).leaveRoom();
+    } catch (_) {}
+    try {
+      ref.read(bookProvider.notifier).reset();
+    } catch (_) {}
     if (mounted) {
       context.goNamed('home');
     }
