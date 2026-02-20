@@ -87,15 +87,17 @@ class RoomNotifier extends StateNotifier<RoomState> {
     }
   }
 
-  Future<void> refreshMembers() async {
+  Future<void> refreshMembers({List<Map<String, dynamic>>? presenceUsers}) async {
     final room = state.currentRoom;
     if (room == null) return;
     try {
       final members = await _roomService.getRoomMembers(room.id);
       state = state.copyWith(members: members);
-    } catch (e) {
-      // Silently fail, presence will keep UI updated
-    }
+      // Re-apply online status after DB fetch (DB has no isOnline column)
+      if (presenceUsers != null && presenceUsers.isNotEmpty) {
+        updateMembersFromPresence(presenceUsers);
+      }
+    } catch (_) {}
   }
 
   void updateMembersFromPresence(List<Map<String, dynamic>> onlineUsers) {

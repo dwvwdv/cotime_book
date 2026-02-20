@@ -96,10 +96,15 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     final authState = ref.watch(authProvider);
     final room = roomState.currentRoom;
 
-    // Refresh member list from DB whenever presence online count changes
+    // Keep member online/hasBook status in sync with presence on every update
     ref.listen<PresenceState>(presenceProvider, (previous, next) {
+      final notifier = ref.read(roomProvider.notifier);
+      // Always apply latest online status immediately
+      notifier.updateMembersFromPresence(next.onlineUsers);
+      // When someone joins/leaves, fetch from DB for full member data,
+      // then re-apply presence overlay (DB has no isOnline column)
       if ((previous?.onlineCount ?? 0) != next.onlineCount) {
-        ref.read(roomProvider.notifier).refreshMembers();
+        notifier.refreshMembers(presenceUsers: next.onlineUsers);
       }
     });
 
