@@ -116,6 +116,10 @@ supabase db reset      # 重放 migrations
 supabase test db       # pgTAP
 ```
 
+正式庫的 migration 版本號要跟 `supabase/migrations/` 的檔名一致。用 Supabase MCP 套用時，
+頂層 `DROP` 與含 `delete` / `update` 的函式定義會被 MCP 自己的確認攔下、逾時且不執行
+（與 Claude Code 權限無關，見 issue #R）——這類 migration 改用 `supabase db push` 或 SQL Editor。
+
 CI（`.github/workflows/build-check.yml`）跑的是 Flutter 3.32.4：
 先 pgTAP，再 `flutter analyze` + `flutter test`，最後建 arm64 APK。
 **送 PR 前 `flutter analyze` 與 `flutter test` 必須是乾淨的。**

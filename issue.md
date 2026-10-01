@@ -482,7 +482,12 @@
 
 ### [x] #R 已關閉的房間無法重新啟用
 
-- **檔案**：`supabase/migrations/20261001142734_record_room_participants.sql`、`20261001144100_available_room_codes.sql`（已套用到正式庫）、`20261001150000_reopen_closed_rooms.sql`（`join_room`，尚未套用——**新版 APK 要等它套用後才能發佈**，否則點已關閉的房間會被當成已刪除而從清單移除）
+- **檔案**：`supabase/migrations/20261001142734_record_room_participants.sql`、
+  `20261001144100_available_room_codes.sql`、`20261001150000_reopen_closed_rooms.sql`
+- **正式庫狀態（2026-10-01）**：三個 migration 都已套用。三個函式與 repo 一致
+  （`join_room` 只差貼進 SQL Editor 時多出的縮排）；權限只有 `authenticated` / `service_role`。
+  已在正式庫用 rollback 的 transaction 驗證：前任 host 能重開已關閉的房間、陌生人得到 `P0002`、
+  `available_room_codes` 對陌生人回空陣列。新版 APK 可以發佈。
 - **症狀**：大家離開（或 24 小時沒活動）後房間就關了；從「Recent rooms」點回去只會開一個新房號，
   要重新把房號傳給所有人，書與上次的位置也都沒了——即使關閉的房間列還在資料庫裡保留 30 天。
 - **原因**：`join_room` 把任何非 active 的房間都當成不存在。
@@ -497,9 +502,17 @@
   - 兩個前成員同時重啟會在房間列的 `FOR UPDATE` 上序列化，第二個看到的是已開啟的房間、正常加入。
 - **`available_room_codes(p_codes text[])`**：給最近房間清單用，回傳呼叫者進過、且尚未被清除的房號
   （開著或關閉都算）；一次最多 50 個；對沒進過的房間一律不回答，不能拿來批次探測房號。
-- **限制**：migration 只能回填「目前的成員」與「每個房間最後的 host」。在這之前就已關閉的房間，
-  只有最後的 host 能重新啟用；同理，在這之前就離開、但仍有別人在讀的房間，
-  `available_room_codes` 不認得這個人，會從他的最近清單消失（重新用房號加入一次就會被記錄）。
+- **限制**：「誰進過哪個房間」從 2026-10-01 套用 `record_room_participants` 才開始記錄，
+  之前的歷史只補得回「當時還在房內的人」與「每個房間最後的 host」。所以在那之前就離開的人，
+  資料庫不認得他進過那個房間：不能重開它，它也不會出現在他的最近清單。
+  實際上幾乎遇不到——最近房間清單是新版 App 才有的，舊版沒記錄過任何房間；
+  新版之後進的每個房間都會同時被記到。
+- **套用時的坑**：Supabase MCP 會攔下它判定為破壞性的 SQL（任何頂層 `DROP`，以及
+  `join_room` 這種函式內同時有 `delete` / `update` 的定義），要求在 MCP 自己的確認視窗按同意，
+  60 秒沒按就逾時、而且完全不會送到資料庫。這跟 Claude Code 的工具權限是分開的。
+  所以 trigger 用 `create or replace trigger` 而不是 drop + create；`join_room` 是從 SQL Editor 套用，
+  歷史紀錄（`supabase_migrations.schema_migrations`）是事後補上的。
+  之後要改這類函式，直接用 `supabase db push` 或 SQL Editor，不要花時間重試 MCP。
 - **測試**：`supabase/tests/database/room_reopen.test.sql`（21 項：前成員重啟、陌生人被拒且不洩漏、
   書與位置保留、host 轉移、第二個前成員正常加入、租約過期的房間、建立者被記錄、清除時連帶刪除、
   `available_room_codes` 只對前成員回答、關閉的房間仍可用、被清除後不可用、上限 50）；
