@@ -1,4 +1,4 @@
-package com.cotime.cotime_book;
+package com.lazyrhythm.cotime_book;
 
 import io.flutter.embedding.android.FlutterActivity;
 
