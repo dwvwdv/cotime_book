@@ -50,12 +50,11 @@ void main() {
   testWidgets('confirmation progress ignores spoofed non-quorum ids',
       (tester) async {
     final request = PageTurnRequest(
-      sessionId: 'session-1',
       requestId: 'request-1',
       requestedByUserId: 'user-a',
       requestedByNickname: 'Alice',
       direction: PageTurnDirection.next,
-      fromCfi: 'epubcfi(/6/4)',
+      fromSeq: 3,
       requestedAt: DateTime.now(),
       confirmedUserIds: const {'user-a', 'outsider'},
       requiredUserIds: const {'user-a', 'user-b'},
@@ -81,12 +80,11 @@ void main() {
     // WebView resizes and epub.js re-paginates mid-turn, replacing this
     // reader's CFI with one no other reader has.
     PageTurnRequest request(Set<String> confirmed) => PageTurnRequest(
-      sessionId: 'session-1',
       requestId: 'request-1',
       requestedByUserId: 'user-a',
       requestedByNickname: 'Alice with a rather long nickname',
       direction: PageTurnDirection.next,
-      fromCfi: 'epubcfi(/6/4)',
+      fromSeq: 3,
       requestedAt: DateTime.now(),
       confirmedUserIds: confirmed,
       requiredUserIds: const {'user-a', 'user-b', 'user-c', 'user-d'},
@@ -148,12 +146,11 @@ void main() {
           syncState: PageSyncState(
             status: SyncStatus.confirming,
             currentRequest: PageTurnRequest(
-              sessionId: 'session-1',
               requestId: 'request-1',
               requestedByUserId: 'user-a',
               requestedByNickname: 'Alice',
               direction: PageTurnDirection.next,
-              fromCfi: 'epubcfi(/6/4)',
+              fromSeq: 3,
               requestedAt: DateTime.now(),
               confirmedUserIds: const {'user-a'},
               requiredUserIds: const {'user-a', 'user-b'},

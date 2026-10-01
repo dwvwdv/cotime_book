@@ -12,32 +12,129 @@ PageTurnDirection? pageTurnDirectionFromWire(Object? value) {
   };
 }
 
+/// The page the whole room is on.
+///
+/// Readers agree on ([epoch], [seq]); [cfi] is only where to display it. A CFI
+/// is computed from the local pagination — screen size, font size, a resize —
+/// so two readers on the same page routinely hold different strings for it.
+/// The previous protocol compared those strings for equality and therefore
+/// rejected nearly every turn between two different devices.
+///
+/// [seq] counts commits, but only within one stretch of reading: a reader who
+/// opens the book when nobody else is reading starts again from the database
+/// at seq 0. [epoch] tells those stretches apart. It is minted (a wall-clock
+/// timestamp) by the first commit of a stretch that started at epoch 0, so a
+/// reader coming back from sleep with a high seq from an *older* stretch can
+/// never drag the room back to its stale page.
+class SharedPosition {
+  final int epoch;
+  final int seq;
+
+  /// Empty means "the start of the book": a room that has never turned a page
+  /// has no CFI yet.
+  final String cfi;
+
+  const SharedPosition({this.epoch = 0, required this.seq, required this.cfi});
+
+  const SharedPosition.start() : epoch = 0, seq = 0, cfi = '';
+
+  /// Total order used to converge. Two commits for the same (epoch, seq) can
+  /// only come from a race between overlapping quorums; picking the larger CFI
+  /// is arbitrary, but every client picks the same one.
+  bool isNewerThan(SharedPosition other) {
+    if (epoch != other.epoch) return epoch > other.epoch;
+    if (seq != other.seq) return seq > other.seq;
+    return cfi.compareTo(other.cfi) > 0;
+  }
+
+  /// Whether this page comes after the page ([fromEpoch], [fromSeq]) a request
+  /// was made from — i.e. the request is stale.
+  bool isPastPage(int fromEpoch, int fromSeq) {
+    if (epoch != fromEpoch) return epoch > fromEpoch;
+    return seq > fromSeq;
+  }
+
+  /// The page one commit after ([fromEpoch], [fromSeq]).
+  static SharedPosition committed({
+    required int fromEpoch,
+    required int fromSeq,
+    required String cfi,
+    required int Function() mintEpoch,
+  }) {
+    return SharedPosition(
+      epoch: fromEpoch == 0 ? mintEpoch() : fromEpoch,
+      seq: fromSeq + 1,
+      cfi: cfi,
+    );
+  }
+
+  /// Reads the position a reader advertises in its Presence meta.
+  static SharedPosition? fromPresence(Map<String, dynamic> user) {
+    final epoch = user['page_epoch'] ?? 0;
+    final seq = user['page_seq'];
+    final cfi = user['page_cfi'];
+    if (epoch is! int ||
+        epoch < 0 ||
+        seq is! int ||
+        seq < 0 ||
+        cfi is! String) {
+      return null;
+    }
+    return SharedPosition(epoch: epoch, seq: seq, cfi: cfi);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is SharedPosition &&
+      other.epoch == epoch &&
+      other.seq == seq &&
+      other.cfi == cfi;
+
+  @override
+  int get hashCode => Object.hash(epoch, seq, cfi);
+
+  @override
+  String toString() => 'SharedPosition($epoch:$seq, $cfi)';
+}
+
 enum SyncStatus {
+  /// Nothing in flight.
   idle,
+
+  /// This reader asked to turn and is collecting answers.
   requesting,
+
+  /// Someone else asked; this reader has not answered yet.
   confirming,
+
+  /// This reader agreed and is waiting for the rest.
   waiting,
+
+  /// Everyone agreed; the requester is moving its page.
   turning,
 }
 
 class PageTurnRequest {
-  final String sessionId;
   final String requestId;
   final String requestedByUserId;
   final String requestedByNickname;
   final PageTurnDirection direction;
-  final String fromCfi;
+
+  /// The shared page the turn starts from. A request from an older page is
+  /// stale by definition.
+  final int fromEpoch;
+  final int fromSeq;
   final DateTime requestedAt;
   final Set<String> confirmedUserIds;
   final Set<String> requiredUserIds;
 
   const PageTurnRequest({
-    required this.sessionId,
     required this.requestId,
     required this.requestedByUserId,
     required this.requestedByNickname,
     required this.direction,
-    required this.fromCfi,
+    this.fromEpoch = 0,
+    required this.fromSeq,
     required this.requestedAt,
     required this.confirmedUserIds,
     required this.requiredUserIds,
@@ -57,17 +154,22 @@ class PageTurnRequest {
       ? 0
       : validConfirmationCount / requiredUserIds.length;
 
+  /// Concurrent requests are resolved by id, not arrival order, so every
+  /// client that sees both picks the same one.
+  bool winsOver(PageTurnRequest other) =>
+      requestId.compareTo(other.requestId) < 0;
+
   PageTurnRequest copyWith({
     Set<String>? confirmedUserIds,
     Set<String>? requiredUserIds,
   }) {
     return PageTurnRequest(
-      sessionId: sessionId,
       requestId: requestId,
       requestedByUserId: requestedByUserId,
       requestedByNickname: requestedByNickname,
       direction: direction,
-      fromCfi: fromCfi,
+      fromEpoch: fromEpoch,
+      fromSeq: fromSeq,
       requestedAt: requestedAt,
       confirmedUserIds: confirmedUserIds ?? this.confirmedUserIds,
       requiredUserIds: requiredUserIds ?? this.requiredUserIds,
@@ -76,12 +178,12 @@ class PageTurnRequest {
 
   Map<String, dynamic> toJson() {
     return {
-      'session_id': sessionId,
       'request_id': requestId,
       'user_id': requestedByUserId,
       'nickname': requestedByNickname,
       'direction': pageTurnDirectionToWire(direction),
-      'from_cfi': fromCfi,
+      'from_epoch': fromEpoch,
+      'from_seq': fromSeq,
       'requested_at': requestedAt.toUtc().toIso8601String(),
       'required_users': requiredUserIds.toList()..sort(),
     };
@@ -93,22 +195,22 @@ class PageTurnRequest {
       throw const FormatException('Invalid page turn direction');
     }
 
-    final sessionId = json['session_id'];
     final requestId = json['request_id'];
     final requestedByUserId = json['user_id'];
-    final fromCfi = json['from_cfi'];
+    final fromEpoch = json['from_epoch'];
+    final fromSeq = json['from_seq'];
     final rawRequestedAt = json['requested_at'];
     final requestedAt = rawRequestedAt is String
         ? DateTime.tryParse(rawRequestedAt)
         : null;
-    if (sessionId is! String ||
-        sessionId.isEmpty ||
-        requestId is! String ||
+    if (requestId is! String ||
         requestId.isEmpty ||
         requestedByUserId is! String ||
         requestedByUserId.isEmpty ||
-        fromCfi is! String ||
-        fromCfi.isEmpty ||
+        fromEpoch is! int ||
+        fromEpoch < 0 ||
+        fromSeq is! int ||
+        fromSeq < 0 ||
         requestedAt == null) {
       throw const FormatException('Invalid page turn request');
     }
@@ -125,14 +227,14 @@ class PageTurnRequest {
     }
 
     return PageTurnRequest(
-      sessionId: sessionId,
       requestId: requestId,
       requestedByUserId: requestedByUserId,
       requestedByNickname: json['nickname'] is String
           ? json['nickname'] as String
           : 'Unknown',
       direction: direction,
-      fromCfi: fromCfi,
+      fromEpoch: fromEpoch,
+      fromSeq: fromSeq,
       requestedAt: requestedAt,
       confirmedUserIds: {requestedByUserId},
       requiredUserIds: requiredUserIds,
@@ -140,44 +242,13 @@ class PageTurnRequest {
   }
 }
 
+/// Handed to the requester's reader once everyone agreed: move the viewer one
+/// page and report where it landed through `completeTurn`.
 class PageTurnCommand {
   final String requestId;
   final PageTurnDirection direction;
-  final String fromCfi;
-  final bool isRequester;
 
-  const PageTurnCommand({
-    required this.requestId,
-    required this.direction,
-    required this.fromCfi,
-    required this.isRequester,
-  });
-}
-
-class PagePositionCommit {
-  final String requestId;
-  final String requestedByUserId;
-  final PageTurnDirection direction;
-  final String fromCfi;
-  final String targetCfi;
-
-  const PagePositionCommit({
-    required this.requestId,
-    required this.requestedByUserId,
-    required this.direction,
-    required this.fromCfi,
-    required this.targetCfi,
-  });
-
-  Map<String, dynamic> toJson() {
-    return {
-      'request_id': requestId,
-      'requested_by_user_id': requestedByUserId,
-      'direction': pageTurnDirectionToWire(direction),
-      'from_cfi': fromCfi,
-      'target_cfi': targetCfi,
-    };
-  }
+  const PageTurnCommand({required this.requestId, required this.direction});
 }
 
 class PageSyncState {
@@ -192,17 +263,16 @@ class PageSyncState {
   });
 
   const PageSyncState.idle()
-      : status = SyncStatus.idle,
-        currentRequest = null,
-        errorMessage = null;
+    : status = SyncStatus.idle,
+      currentRequest = null,
+      errorMessage = null;
 
   const PageSyncState.error(String message)
-      : status = SyncStatus.idle,
-        currentRequest = null,
-        errorMessage = message;
+    : status = SyncStatus.idle,
+      currentRequest = null,
+      errorMessage = message;
 
-  int get validConfirmationCount =>
-      currentRequest?.validConfirmationCount ?? 0;
+  int get validConfirmationCount => currentRequest?.validConfirmationCount ?? 0;
 
   PageSyncState copyWith({
     SyncStatus? status,
@@ -213,8 +283,9 @@ class PageSyncState {
   }) {
     return PageSyncState(
       status: status ?? this.status,
-      currentRequest:
-          clearCurrentRequest ? null : currentRequest ?? this.currentRequest,
+      currentRequest: clearCurrentRequest
+          ? null
+          : currentRequest ?? this.currentRequest,
       errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
     );
   }

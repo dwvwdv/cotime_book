@@ -13,12 +13,18 @@ import '../providers/page_sync_provider.dart';
 import '../providers/presence_provider.dart';
 import '../providers/reading_preferences_provider.dart';
 import '../providers/room_provider.dart';
-import '../services/room_service.dart';
 import '../widgets/page_turn_input.dart';
 import '../widgets/paper.dart';
 import '../widgets/reader_members_sheet.dart';
 import '../widgets/sync_status_bar.dart';
 
+/// The book, kept on the room's shared page.
+///
+/// The viewer never decides where the room is. [PageSyncService] owns the
+/// shared position; this screen only (a) displays it, and (b) when this reader
+/// is the one turning, moves one page and reports where it landed. Everything
+/// the viewer reports on its own — a re-layout after a resize, a font change —
+/// is local and never leaves this device.
 class ReaderScreen extends ConsumerStatefulWidget {
   final String roomCode;
 
@@ -29,479 +35,319 @@ class ReaderScreen extends ConsumerStatefulWidget {
 }
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen> {
-  /// Caps the authoritative-position recovery poll so a room whose revision
-  /// never advances cannot leave the reader stuck behind its blocking overlay.
-  static const _maxPositionRecoveryAttempts = 10;
+  /// A display that never reports back must not leave the reader unable to
+  /// turn forever.
+  static const _displayTimeout = Duration(seconds: 8);
 
-  EpubController? _epubController;
-  String? _currentCfi;
-  bool _isReaderReady = false;
-  bool _isStoppingPageSync = false;
-  PageTurnCommand? _queuedTurnCommand;
-  PageTurnCommand? _awaitingTurnRelocation;
-  String? _awaitingTurnRoomId;
-  String? _queuedTargetCfi;
-  String? _displayingTargetCfi;
-  bool _recoveringAuthoritativePosition = false;
-  bool _pendingAuthoritativeCfiSync = false;
-  bool _authoritativeCfiSyncInFlight = false;
-  Timer? _authoritativeRetryTimer;
-  int _positionRecoveryGeneration = 0;
-  Future<void> _cfiWriteChain = Future<void>.value();
-
-  // Track key so we can rebuild the viewer when theme changes.
+  final EpubController _epubController = EpubController();
   int _viewerKey = 0;
+
+  /// Where the current viewer instance opens. Fixed per instance.
+  String? _viewerInitialCfi;
+
+  /// The shared position is known and the viewer can be created.
+  bool _positionKnown = false;
+
+  /// Chapters loaded for the current viewer instance.
+  bool _viewerLoaded = false;
+
+  /// Last page start the viewer reported. Null until it has displayed once.
+  String? _lastLocalCfi;
+
+  /// `display(cfi)` calls that have not relocated yet. A count, not a flag:
+  /// two commits can arrive while the first display is still rendering, and
+  /// the first relocation must not open the gate for the second.
+  int _displaysInFlight = 0;
+  String? _displayingCfi;
+  Timer? _displayTimer;
+
+  bool get _isDisplaying => _displaysInFlight > 0;
+
+  /// A position that arrived before the viewer could show it.
+  String? _queuedCfi;
+
+  /// This reader's own turn: the page it left, and which request it was.
+  _PendingTurn? _pendingTurn;
+
+  /// After an abandoned turn the viewer may still move late; if it does, put
+  /// it back on the room's page.
+  String? _snapBackFrom;
+
+  bool _leaving = false;
+
+  PageSyncNotifier get _pageSync => ref.read(pageSyncProvider.notifier);
 
   @override
   void initState() {
     super.initState();
-    _epubController = EpubController();
-    // Seed from cached room state immediately so the first build has a CFI.
-    // A fresh DB fetch happens inside _initReader(); if the CFI differs the
-    // viewer is rebuilt via _viewerKey.
-    _currentCfi = ref.read(roomProvider).currentRoom?.currentCfi;
     WidgetsBinding.instance.addPostFrameCallback((_) => _initReader());
   }
 
   Future<void> _initReader() async {
     final authState = ref.read(authProvider);
-    final realtimeService = ref.read(realtimeServiceProvider);
-
-    if (!authState.isAuthenticated) return;
-    final roomState = ref.read(roomProvider);
-    final readingSessionId = roomState.readingSessionId;
-    final participantUserIds = roomState.readingParticipantUserIds;
-    if (readingSessionId == null ||
-        participantUserIds.isEmpty ||
-        !participantUserIds.contains(authState.userId)) {
-      if (mounted) {
-        context.goNamed(
-          'lobby',
-          pathParameters: {'roomCode': widget.roomCode},
-        );
-      }
+    if (!authState.isAuthenticated || authState.userId == null) {
+      _returnToLobby();
       return;
     }
 
-    // Entering the route means "reading", but the client must remain outside
-    // the page-turn quorum until the EPUB controller has loaded its chapters.
     final presence = ref.read(presenceProvider.notifier);
-    await presence.updateReaderReady(false);
-    if (!mounted || _isStoppingPageSync) return;
-    await presence.updateIsReading(true);
-    if (!mounted || _isStoppingPageSync) return;
+    try {
+      // In the reader, but not in anyone's quorum until the book has loaded.
+      await presence.updateReaderReady(false);
+      await presence.updateIsReading(true);
+    } catch (_) {
+      // Re-sent with the next Presence update once the channel is back.
+    }
+    if (!mounted || _leaving) return;
 
-    final pageSync = ref.read(pageSyncProvider.notifier);
-    pageSync.onPageTurn = _handlePageTurn;
-    pageSync.onPositionCommit = _handlePositionCommit;
-    pageSync.onPositionRecovery = _handlePositionRecovery;
+    // The database is where an empty room left off. Presence, read inside
+    // initialize(), moves that forward to whoever is already further along.
+    final room =
+        await ref.read(roomProvider.notifier).refreshRoomAndGet() ??
+        ref.read(roomProvider).currentRoom;
+    if (!mounted || _leaving) return;
+
+    final pageSync = _pageSync;
+    pageSync.onExecuteTurn = _handleExecuteTurn;
+    pageSync.onPositionChanged = _handlePositionChanged;
+    pageSync.onTurnAbandoned = _handleTurnAbandoned;
     await pageSync.initialize(
-      realtimeService: realtimeService,
+      realtimeService: ref.read(realtimeServiceProvider),
       currentUserId: authState.userId!,
       currentNickname: authState.nickname,
-      readingSessionId: readingSessionId,
-      expectedParticipantUserIds: participantUserIds,
-      initialCfi: _currentCfi,
+      initialPosition: SharedPosition(seq: 0, cfi: room?.currentCfi ?? ''),
+      publishPosition: presence.updateReadingPosition,
     );
-    if (!mounted || _isStoppingPageSync) return;
+    if (!mounted || _leaving) return;
 
-    // Fetch the latest room CFI from DB (in case other users advanced the page
-    // while this user was away).  If it differs from cached, force viewer reload.
-    await ref.read(roomProvider.notifier).refreshRoom();
-    if (!mounted || _isStoppingPageSync) return;
-    final freshRoom = ref.read(roomProvider).currentRoom;
-    final freshCfi = freshRoom?.currentCfi;
-    if (freshCfi != null && freshCfi != _currentCfi && mounted) {
-      _adoptAuthoritativeCfi(freshCfi);
-    }
-    // Deriving readiness here is what keeps a deferred authoritative sync from
-    // being undone: _adoptAuthoritativeCfi may have just marked this reader
-    // unready, and this used to overwrite that with a bare _isReaderReady.
+    final position = pageSync.position ?? const SharedPosition.start();
+    setState(() {
+      _viewerInitialCfi = position.cfi.isEmpty ? null : position.cfi;
+      // The viewer is created on the position, so nothing is queued for it.
+      _queuedCfi = null;
+      _positionKnown = true;
+    });
     _publishReadiness();
   }
 
   @override
   void dispose() {
-    _isStoppingPageSync = true;
-    ++_positionRecoveryGeneration;
-    _authoritativeRetryTimer?.cancel();
-    _authoritativeRetryTimer = null;
-    final pageSync = ref.read(pageSyncProvider.notifier);
-    pageSync.updateReaderContext(isReady: false, currentCfi: _currentCfi);
-    unawaited(() async {
-      try {
-        await pageSync.leaveReadingSession();
-      } catch (_) {
-        // Route disposal cannot surface an unhandled Realtime send failure.
-      } finally {
-        await pageSync.stop();
-      }
-    }());
-    final presence = ref.read(presenceProvider.notifier);
-    unawaited(() async {
-      // Preserve track ordering during route disposal so a slower
-      // reader_ready=false update cannot overwrite the final lobby state.
-      await presence.updateReaderReady(false);
-      await presence.updateIsReading(false);
-    }());
-    _epubController = null;
+    _displayTimer?.cancel();
+    if (!_leaving) {
+      // The route went away without _leaveReader (the room was revoked, say).
+      _leaving = true;
+      final pageSync = _pageSync;
+      final presence = ref.read(presenceProvider.notifier);
+      unawaited(() async {
+        try {
+          await pageSync.stop();
+          await presence.updateReaderReady(false);
+          await presence.updateIsReading(false);
+        } catch (_) {
+          // Route disposal cannot surface a Realtime failure.
+        }
+      }());
+    }
     super.dispose();
   }
 
-  void _handlePageTurn(PageTurnCommand command) {
-    if (!mounted || _isStoppingPageSync) return;
-    if (!_isReaderReady || _epubController == null) {
-      _queuedTurnCommand = command;
-      return;
-    }
-    _executePageTurn(command);
-  }
+  /// Can this reader start or carry out a turn right now?
+  bool get _viewerReadyForTurns =>
+      !_leaving &&
+      _viewerLoaded &&
+      _lastLocalCfi != null &&
+      !_isDisplaying &&
+      _pendingTurn == null;
 
-  void _executePageTurn(PageTurnCommand command) {
-    final controller = _epubController;
-    if (controller == null || !_isReaderReady) {
-      _queuedTurnCommand = command;
-      return;
-    }
-
-    _queuedTurnCommand = null;
-    _awaitingTurnRelocation = command;
-    _awaitingTurnRoomId = ref.read(roomProvider).currentRoom?.id;
-    if (command.direction == PageTurnDirection.next) {
-      controller.next();
-    } else {
-      controller.prev();
-    }
-  }
-
-  void _handlePositionCommit(PagePositionCommit commit) {
-    if (!mounted || _isStoppingPageSync) return;
-    _queuedTurnCommand = null;
-    _awaitingTurnRelocation = null;
-    _awaitingTurnRoomId = null;
-    ref.read(bookProvider.notifier).updateCfi(commit.targetCfi);
-
-    if (!_isReaderReady || _epubController == null) {
-      _queuedTargetCfi = commit.targetCfi;
-      return;
-    }
-    _displayCommittedPosition(commit.targetCfi);
-  }
-
-  void _handlePositionRecovery(
-    String targetCfi,
-    bool positionWasCommitted,
-  ) {
-    if (!mounted || _isStoppingPageSync) return;
-    _queuedTurnCommand = null;
-    _awaitingTurnRelocation = null;
-    _awaitingTurnRoomId = null;
-    _displayingTargetCfi = null;
-
-    if (!positionWasCommitted) {
-      final roomId = ref.read(roomProvider).currentRoom?.id;
-      if (roomId != null) {
-        final recoveryGeneration = ++_positionRecoveryGeneration;
-        setState(() => _recoveringAuthoritativePosition = true);
-        _publishReadiness();
-        unawaited(
-          _recoverAuthoritativePosition(
-            fallbackCfi: targetCfi,
-            roomId: roomId,
-            recoveryGeneration: recoveryGeneration,
-          ),
-        );
-        return;
-      }
-    }
-
-    ref.read(bookProvider.notifier).updateCfi(targetCfi);
-
-    if (!_isReaderReady || _epubController == null) {
-      _queuedTargetCfi = targetCfi;
-      return;
-    }
-    _displayCommittedPosition(targetCfi);
-  }
-
-  Future<void> _recoverAuthoritativePosition({
-    required String fallbackCfi,
-    required String roomId,
-    required int recoveryGeneration,
-  }) async {
-    String? authoritativeCfi;
-    final roomNotifier = ref.read(roomProvider.notifier);
-
-    // Bounded: a refresh that keeps returning the same revision would
-    // otherwise spin forever with the reader frozen and no way out, because
-    // the overlay that blocks gestures is only cleared after this loop.
-    for (var attempt = 0; attempt < _maxPositionRecoveryAttempts; attempt++) {
-      if (!mounted ||
-          _isStoppingPageSync ||
-          recoveryGeneration != _positionRecoveryGeneration ||
-          ref.read(roomProvider).currentRoom?.id != roomId) {
-        break;
-      }
-      final cachedCfi = ref.read(roomProvider).currentRoom?.currentCfi;
-      // The requester already received the authoritative row from its
-      // successful write even when the following Realtime commit failed.
-      if (cachedCfi != null && cachedCfi != fallbackCfi) {
-        authoritativeCfi = cachedCfi;
-        break;
-      }
-
-      final refreshedRoom = await roomNotifier.refreshRoomAndGet();
-      if (refreshedRoom != null) {
-        authoritativeCfi = refreshedRoom.currentCfi ?? fallbackCfi;
-        break;
-      }
-      if (attempt + 1 < _maxPositionRecoveryAttempts) {
-        await Future<void>.delayed(const Duration(seconds: 2));
-      }
-    }
-
-    if (!mounted ||
-        _isStoppingPageSync ||
-        recoveryGeneration != _positionRecoveryGeneration ||
-        ref.read(roomProvider).currentRoom?.id != roomId) {
-      return;
-    }
-
-    if (authoritativeCfi == null) {
-      // The write may well have committed before the response was lost, so
-      // fallbackCfi is the pre-turn page and might already be wrong. Release
-      // the overlay — the reader must not stay frozen, and they need to be
-      // able to leave — but stay out of the quorum: a turn taken from an
-      // unconfirmed position revision-retries over whatever the database
-      // actually holds. Keep asking until a snapshot answers.
-      setState(() => _recoveringAuthoritativePosition = false);
-      _setPendingAuthoritativeSync(true);
-      _scheduleAuthoritativePositionRetry();
-      return;
-    }
-
-    final targetCfi = authoritativeCfi;
-    ref.read(bookProvider.notifier).updateCfi(targetCfi);
-    setState(() => _recoveringAuthoritativePosition = false);
-    // This recovery *is* an authoritative read, so it satisfies a sync that was
-    // deferred earlier. Leaving that flag set left this reader permanently
-    // unready — blocking the whole room's quorum — because the page-sync error
-    // transition happened while recovery was still running, so the listener
-    // skipped it and nothing else would schedule another read.
-    //
-    // Cleared after the display starts, never before: while _displayingTargetCfi
-    // is set the derived readiness is false, so this cannot publish a ready at
-    // the pre-recovery page. onRelocated reopens the gate.
-    if (_currentCfi != targetCfi) {
-      _displayCommittedPosition(targetCfi);
-      _setPendingAuthoritativeSync(false);
-      return;
-    }
-
-    _setPendingAuthoritativeSync(false);
-    _publishReadiness(currentCfi: targetCfi);
-  }
-
-  /// True only when this reader's position is known to match the room's.
-  ///
-  /// While an authoritative read is outstanding the displayed page is a guess,
-  /// and a turn taken from a guess revision-retries over whatever the database
-  /// actually holds. Everything that advertises readiness goes through here.
-  bool get _canAdvertiseReady =>
-      !_pendingAuthoritativeCfiSync && !_recoveringAuthoritativePosition;
-
-  /// Whether this reader may take part in a page turn right now.
-  ///
-  /// Derived from state in one place rather than decided at each call site.
-  /// Readiness used to be pushed imperatively from nine different places, and
-  /// every one of them had to remember the full set of conditions; each bug
-  /// found here was another site that had forgotten one. Call sites now change
-  /// state and call [_publishReadiness] — they never compute the value.
-  bool get _isReadyForTurns =>
-      _isReaderReady &&
-      !_isStoppingPageSync &&
-      _displayingTargetCfi == null &&
-      _canAdvertiseReady;
-
-  /// Tells the sync service and the rest of the room what this reader can do.
-  ///
-  /// Both must agree: the service decides which requests this client accepts,
-  /// Presence decides whether the others put it in their quorum. Publishing
-  /// only one of them is what lets a client reject the turns it authorized.
-  void _publishReadiness({String? currentCfi}) {
-    final isReady = _isReadyForTurns;
-    ref
-        .read(pageSyncProvider.notifier)
-        .updateReaderContext(
-          isReady: isReady,
-          currentCfi: currentCfi ?? _currentCfi,
-        );
+  /// Tells the sync service what this viewer can do, and the room whether this
+  /// reader can be asked to confirm.
+  void _publishReadiness() {
+    if (!mounted) return;
+    _pageSync.setViewerReady(_viewerReadyForTurns);
+    final isLoaded = !_leaving && _viewerLoaded && _lastLocalCfi != null;
     unawaited(
       ref
           .read(presenceProvider.notifier)
-          .updateReaderReady(isReady)
+          .updateReaderReady(isLoaded)
           .catchError((Object _) {
-            // The cached Presence intent remains authoritative locally and is
-            // retried by the connection lifecycle after transport recovery.
+            // Re-sent with the next Presence update.
           }),
     );
   }
 
-  void _setPendingAuthoritativeSync(bool isPending) {
-    if (_pendingAuthoritativeCfiSync == isPending) return;
-    _pendingAuthoritativeCfiSync = isPending;
-    if (mounted) setState(() {});
-    _publishReadiness();
-  }
+  // ---------------------------------------------------------------------------
+  // Shared position → viewer
 
-  void _scheduleAuthoritativePositionRetry() {
-    _authoritativeRetryTimer?.cancel();
-    _authoritativeRetryTimer = Timer(const Duration(seconds: 5), () {
-      if (!mounted || _isStoppingPageSync || !_pendingAuthoritativeCfiSync) {
-        return;
-      }
-      unawaited(_syncAuthoritativePosition());
-    });
-  }
-
-  void _displayCommittedPosition(String targetCfi) {
-    _queuedTargetCfi = null;
-    if (_currentCfi == targetCfi) {
-      unawaited(
-        ref.read(pageSyncProvider.notifier).acknowledgePagePosition(targetCfi),
-      );
+  void _handlePositionChanged(SharedPosition position) {
+    if (!mounted || _leaving) return;
+    // A position that voids our turn arrives after onTurnAbandoned, which
+    // already cleared it. One that does not (a tie-break on the page the turn
+    // started from) is overtaken by the turn landing: displaying it now would
+    // swallow the turn's relocation and orphan the turn.
+    if (_pendingTurn != null) return;
+    if (!_positionKnown || !_viewerLoaded) {
+      _queuedCfi = position.cfi;
       return;
     }
-    _displayingTargetCfi = targetCfi;
+    _display(position.cfi);
+  }
+
+  void _display(String cfi) {
+    _queuedCfi = null;
+    if (cfi.isEmpty || (_isDisplaying && _displayingCfi == cfi)) return;
+    _displayingCfi = cfi;
+    _displayTimer?.cancel();
+    _displayTimer = Timer(_displayTimeout, () {
+      if (!mounted || !_isDisplaying) return;
+      _finishDisplays();
+    });
+    setState(() => _displaysInFlight++);
     _publishReadiness();
-    _epubController?.display(cfi: targetCfi);
-  }
-
-  /// Moves the viewer onto the database's position.
-  ///
-  /// A refused rebuild leaves the viewer on the old page, so keeping the fresh
-  /// CFI would make this client advertise a page it is not on. Dropping it
-  /// outright is no better: nothing else re-reads the room, so a later page
-  /// turn would write a position derived from the stale one over the newer
-  /// database value. The retry is therefore deferred until the request that
-  /// blocked the rebuild settles.
-  /// Returns whether the viewer actually started rebuilding.
-  bool _adoptAuthoritativeCfi(String freshCfi) {
-    final previousCfi = _currentCfi;
-    _currentCfi = freshCfi;
-    if (_rebuildViewer()) return true;
-    _currentCfi = previousCfi;
-    _setPendingAuthoritativeSync(true);
-    return false;
-  }
-
-  Future<void> _syncAuthoritativePosition() async {
-    if (_authoritativeCfiSyncInFlight) return;
-    _authoritativeCfiSyncInFlight = true;
     try {
-      // Re-read rather than replaying the CFI captured earlier: the request
-      // that blocked the rebuild may itself have advanced the room.
-      //
-      // Only an authoritative read may move the viewer. refreshRoom() absorbs
-      // network errors, and the cached room is not updated by a *follower*
-      // completing a turn — only the requester writes it — so falling back to
-      // the cache here would rebuild the viewer at a page older than the one
-      // this reader has already displayed.
-      final room = await ref.read(roomProvider.notifier).refreshRoomAndGet();
-      if (!mounted || _isStoppingPageSync) return;
-      if (room == null) {
-        _setPendingAuthoritativeSync(true);
-        _scheduleAuthoritativePositionRetry();
-        return;
-      }
-      final freshCfi = room.currentCfi;
-      if (freshCfi == null || freshCfi == _currentCfi) {
-        // Confirmed on the page already displayed: rejoin the quorum now.
-        _setPendingAuthoritativeSync(false);
-        return;
-      }
-      // Rebuild first, then open the gate. Clearing it first would publish
-      // readiness for the *old* viewer, and Presence updates are serialized —
-      // peers could start a turn on that before the rebuild's not-ready
-      // arrives. onChaptersLoaded reopens it once the new page is displayed.
-      if (_adoptAuthoritativeCfi(freshCfi)) {
-        _setPendingAuthoritativeSync(false);
-      }
-    } finally {
-      _authoritativeCfiSyncInFlight = false;
+      _epubController.display(cfi: cfi);
+    } catch (_) {
+      _finishDisplays();
     }
   }
 
-  bool get _canRebuildViewer =>
-      !_isStoppingPageSync &&
-      ref.read(pageSyncProvider).currentRequest == null;
-
-  /// Returns false when a rebuild is refused, leaving the viewer untouched.
-  bool _rebuildViewer() {
-    if (!_canRebuildViewer) return false;
-    _isReaderReady = false;
+  void _finishDisplays() {
+    _displayTimer?.cancel();
+    _displayingCfi = null;
+    setState(() => _displaysInFlight = 0);
     _publishReadiness();
-    setState(() => _viewerKey++);
+  }
+
+  // ---------------------------------------------------------------------------
+  // This reader's own turn
+
+  void _handleExecuteTurn(PageTurnCommand command) {
+    if (!mounted || !_viewerReadyForTurns) {
+      // Not "start or end of the book": the viewer was busy, and every reader
+      // is shown this reason.
+      _pageSync.abandonTurn(command.requestId, reason: 'requester_busy');
+      return;
+    }
+    _snapBackFrom = null;
+    _pendingTurn = _PendingTurn(
+      requestId: command.requestId,
+      fromLocalCfi: _lastLocalCfi,
+    );
+    _publishReadiness();
+    try {
+      if (command.direction == PageTurnDirection.next) {
+        _epubController.next();
+      } else {
+        _epubController.prev();
+      }
+    } catch (_) {
+      _pendingTurn = null;
+      _pageSync.abandonTurn(command.requestId);
+    }
+  }
+
+  void _handleTurnAbandoned(String requestId) {
+    final turn = _pendingTurn;
+    if (turn == null || turn.requestId != requestId) return;
+    _pendingTurn = null;
+    if (!mounted || _leaving) return;
+    if (_lastLocalCfi != turn.fromLocalCfi) {
+      // It moved after all: back to the room's page.
+      final position = _pageSync.position;
+      if (position != null) _display(position.cfi);
+    } else {
+      _snapBackFrom = turn.fromLocalCfi;
+    }
+    _publishReadiness();
+  }
+
+  void _onRelocated(EpubLocation location) {
+    if (!mounted || _leaving) return;
+    final cfi = location.startCfi;
+    _lastLocalCfi = cfi;
+
+    final turn = _pendingTurn;
+    if (turn != null) {
+      // A re-layout of the page being left is not the turn landing.
+      if (cfi == turn.fromLocalCfi) return;
+      _pendingTurn = null;
+      final position = _pageSync.completeTurn(turn.requestId, cfi);
+      if (position != null) {
+        unawaited(
+          ref.read(roomProvider.notifier).saveReadingPosition(position.cfi),
+        );
+      }
+      _publishReadiness();
+      return;
+    }
+
+    if (_isDisplaying) {
+      if (_displaysInFlight > 1) {
+        setState(() => _displaysInFlight--);
+      } else {
+        _finishDisplays();
+      }
+      return;
+    }
+
+    final snapBackFrom = _snapBackFrom;
+    if (snapBackFrom != null) {
+      _snapBackFrom = null;
+      final position = _pageSync.position;
+      if (cfi != snapBackFrom && position != null) {
+        _display(position.cfi);
+        return;
+      }
+    }
+    if (_flushQueuedPosition()) return;
+    _publishReadiness();
+  }
+
+  void _onChaptersLoaded() {
+    if (!mounted || _leaving) return;
+    setState(() => _viewerLoaded = true);
+    if (_flushQueuedPosition()) return;
+    _publishReadiness();
+  }
+
+  /// Shows a position that arrived while the viewer was still loading. Waits
+  /// for both "chapters loaded" and the first relocation, whichever is last:
+  /// the order between them is up to the WebView.
+  bool _flushQueuedPosition() {
+    final queued = _queuedCfi;
+    if (queued == null || !_viewerLoaded || _lastLocalCfi == null) {
+      return false;
+    }
+    _display(queued);
     return true;
   }
 
-  Future<void> _commitRequesterPosition(
-    PageTurnCommand command,
-    String targetCfi,
-    String roomId,
-  ) async {
-    if (!command.isRequester || _isStoppingPageSync) return;
-    // The requester is the sole database writer. Do not publish the Realtime
-    // commit until its CFI is durable; followers therefore never advance to a
-    // position that a later join cannot load from the database.
-    final roomNotifier = ref.read(roomProvider.notifier);
-    _cfiWriteChain = _cfiWriteChain.then((_) async {
-      while (mounted &&
-          !_isStoppingPageSync &&
-          ref.read(pageSyncProvider.notifier).isRequestActive(command.requestId)) {
-        try {
-          final pageSync = ref.read(pageSyncProvider.notifier);
-          if (!await pageSync.beginPositionPersistence(command.requestId)) {
-            return;
-          }
-          await roomNotifier.updateCfiForRoom(roomId: roomId, cfi: targetCfi);
-          if (!mounted ||
-              _isStoppingPageSync ||
-              !ref
-                  .read(pageSyncProvider.notifier)
-                  .isRequestActive(command.requestId)) {
-            return;
-          }
-          final committed = await pageSync.commitPagePosition(targetCfi);
-          if (committed) {
-            await pageSync.acknowledgePagePosition(targetCfi);
-            return;
-          }
-          await Future<void>.delayed(const Duration(seconds: 2));
-        } on RoomSessionChangedException {
-          if (!mounted ||
-              _isStoppingPageSync ||
-              ref.read(roomProvider).currentRoom?.id != roomId ||
-              !ref
-                  .read(pageSyncProvider.notifier)
-                  .isRequestActive(command.requestId)) {
-            return;
-          }
-          await roomNotifier.refreshRoom();
-          await Future<void>.delayed(const Duration(seconds: 2));
-        } catch (error) {
-          ref
-              .read(pageSyncProvider.notifier)
-              .reportPositionPersistenceFailure(
-                requestId: command.requestId,
-                error: error,
-              );
-          await Future<void>.delayed(const Duration(seconds: 2));
-        }
-      }
+  bool get _canRebuildViewer =>
+      !_leaving &&
+      _pendingTurn == null &&
+      ref.read(pageSyncProvider).currentRequest == null;
+
+  /// Reloads the viewer on the shared page (theme and type size are only read
+  /// when it loads). Returns false when a turn is in flight.
+  bool _rebuildViewer() {
+    if (!_canRebuildViewer) return false;
+    final position = _pageSync.position ?? const SharedPosition.start();
+    _displayTimer?.cancel();
+    setState(() {
+      _viewerKey++;
+      _viewerInitialCfi = position.cfi.isEmpty ? null : position.cfi;
+      _viewerLoaded = false;
+      _lastLocalCfi = null;
+      _displaysInFlight = 0;
+      _displayingCfi = null;
+      _queuedCfi = null;
+      _snapBackFrom = null;
     });
-    await _cfiWriteChain;
+    _publishReadiness();
+    return true;
   }
+
+  // ---------------------------------------------------------------------------
+  // UI
 
   @override
   Widget build(BuildContext context) {
@@ -510,27 +356,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final bookState = ref.watch(bookProvider);
     final prefs = ref.watch(readingPreferencesProvider);
 
-    ref.listen<PageSyncState>(pageSyncProvider, (previous, next) {
-      if (!_pendingAuthoritativeCfiSync ||
-          next.currentRequest != null ||
-          _isStoppingPageSync ||
-          _recoveringAuthoritativePosition) {
-        return;
-      }
-      // The gate stays shut until _syncAuthoritativePosition has a snapshot in
-      // hand. Clearing it here would re-enable the controls for the duration of
-      // the read, and a turn started in that window writes from the very CFI
-      // the read exists to verify. Re-entry is held off by the in-flight flag.
-      unawaited(_syncAuthoritativePosition());
-    });
-
-    if (bookState.bookFile == null) {
+    if (bookState.bookFile == null || !_positionKnown) {
       // Without a way back this state is a dead end: the reader route has no
       // navigation stack to pop, so hardware back leaves the app instead.
+      final hasBook = bookState.bookFile != null;
       return PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, _) {
-          if (!didPop) _returnToLobby();
+          if (!didPop) _leaveReader();
         },
         child: Scaffold(
           appBar: AppBar(title: const Text('Reader')),
@@ -538,10 +371,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('No book loaded'),
+                // Words, not a spinner: e-ink.
+                Text(
+                  hasBook ? 'Opening the book...' : 'No book loaded',
+                  style: AppTheme.title,
+                ),
                 const SizedBox(height: 16),
                 ElevatedButton(
-                  onPressed: _returnToLobby,
+                  onPressed: _leaveReader,
                   child: const Text('Back to Lobby'),
                 ),
               ],
@@ -572,14 +409,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 SyncStatusBar(
                   syncState: syncState,
                   onlineUsers: presenceState.onlineUsers,
+                  isConnected: !presenceState.isReconnecting,
                   ink: prefs.textColor,
                   paper: prefs.backgroundColor,
-                  onConfirm: () => unawaited(
-                    ref.read(pageSyncProvider.notifier).confirmPageTurn(),
-                  ),
-                  onDecline: () => unawaited(
-                    ref.read(pageSyncProvider.notifier).declinePageTurn(),
-                  ),
+                  onConfirm: () => unawaited(_pageSync.confirmPageTurn()),
+                  onDecline: () => unawaited(_pageSync.declinePageTurn()),
                 ),
 
                 // EPUB reader with gesture overlay
@@ -591,70 +425,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                         absorbing: true,
                         child: EpubViewer(
                           key: ValueKey(_viewerKey),
-                          epubController: _epubController!,
+                          epubController: _epubController,
                           epubSource: EpubSource.fromFile(bookState.bookFile!),
                           displaySettings: prefs.displaySettings,
-                          initialCfi: _currentCfi,
-                          onChaptersLoaded: (chapters) {
-                            if (!mounted || _isStoppingPageSync) return;
-                            setState(() => _isReaderReady = true);
-                            // A viewer reload does not confirm the position, so
-                            // loading a new viewer — a theme change, say — must
-                            // not put this client back in the quorum while a
-                            // recovery is still pending. _publishReadiness knows.
-                            _publishReadiness();
-
-                            final targetCfi = _queuedTargetCfi;
-                            if (targetCfi != null) {
-                              _displayCommittedPosition(targetCfi);
-                              return;
-                            }
-                            final queuedTurn = _queuedTurnCommand;
-                            if (queuedTurn != null) _executePageTurn(queuedTurn);
-                          },
-                          onRelocated: (location) {
-                            if (!mounted || _isStoppingPageSync) return;
-                            final committedTarget = _displayingTargetCfi;
-                            final relocatedCfi =
-                                committedTarget ?? location.startCfi;
-                            _currentCfi = relocatedCfi;
-                            if (committedTarget != null) {
-                              setState(() => _displayingTargetCfi = null);
-                            }
-                            ref
-                                .read(bookProvider.notifier)
-                                .updateCfi(relocatedCfi);
-                            _publishReadiness(currentCfi: relocatedCfi);
-
-                            if (committedTarget != null) {
-                              unawaited(
-                                ref
-                                    .read(pageSyncProvider.notifier)
-                                    .acknowledgePagePosition(relocatedCfi),
-                              );
-                            }
-
-                            final command = _awaitingTurnRelocation;
-                            final roomId = _awaitingTurnRoomId;
-                            if (command != null) {
-                              _awaitingTurnRelocation = null;
-                              _awaitingTurnRoomId = null;
-                              if (roomId != null) {
-                                unawaited(
-                                  _commitRequesterPosition(
-                                    command,
-                                    relocatedCfi,
-                                    roomId,
-                                  ),
-                                );
-                              }
-                            }
-                          },
+                          initialCfi: _viewerInitialCfi,
+                          onChaptersLoaded: (_) => _onChaptersLoaded(),
+                          onRelocated: _onRelocated,
                         ),
                       ),
 
                       // Layer 2: Gesture interceptor overlay
-                      if (_isReaderReady)
+                      if (_viewerLoaded)
                         Positioned.fill(
                           child: LayoutBuilder(
                             builder: (context, constraints) => GestureDetector(
@@ -699,9 +480,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// Whether this reader may start a page turn of its own right now.
   bool _canRequestTurn(PageSyncState syncState) =>
       syncState.status == SyncStatus.idle &&
-      _isReaderReady &&
-      _canAdvertiseReady &&
-      _displayingTargetCfi == null;
+      syncState.currentRequest == null &&
+      _viewerReadyForTurns;
 
   /// One entry point for taps, swipes and keys.
   ///
@@ -710,20 +490,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// thumb and the Turn button is not. Turning the other way does nothing —
   /// declining stays an explicit choice.
   void _requestTurnFromInput(PageTurnDirection direction) {
-    if (!mounted || _isStoppingPageSync) return;
+    if (!mounted || _leaving) return;
     final syncState = ref.read(pageSyncProvider);
-    final pageSync = ref.read(pageSyncProvider.notifier);
     final request = syncState.currentRequest;
     if (syncState.status == SyncStatus.confirming && request != null) {
       if (request.direction == direction) {
-        unawaited(pageSync.confirmPageTurn());
+        unawaited(_pageSync.confirmPageTurn());
       }
       return;
     }
     if (!_canRequestTurn(syncState)) return;
-    unawaited(
-      pageSync.requestPageTurn(direction: direction, fromCfi: _currentCfi),
-    );
+    unawaited(_pageSync.requestPageTurn(direction: direction));
   }
 
   KeyEventResult _handleKeyEvent(KeyEvent event) {
@@ -769,14 +546,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
         color: paper,
-        border: Border(top: BorderSide(color: ink, width: AppTheme.ruleWidth)),
+        border: Border(
+          top: BorderSide(color: ink, width: AppTheme.ruleWidth),
+        ),
       ),
       child: Row(
         children: [
           IconButton(
             style: iconStyle,
             icon: const Icon(Icons.arrow_back),
-            onPressed: syncState.currentRequest == null ? _leaveReader : null,
+            onPressed: _leaving ? null : _leaveReader,
             tooltip: 'Leave reading',
           ),
           const Spacer(),
@@ -800,11 +579,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             style: iconStyle,
             icon: const Icon(Icons.text_fields),
             onPressed:
-                syncState.status == SyncStatus.idle &&
-                    syncState.currentRequest == null &&
-                    _isReaderReady &&
-                    _canAdvertiseReady &&
-                    !_isStoppingPageSync
+                syncState.currentRequest == null && _viewerLoaded && !_leaving
                 ? _showReadingSettings
                 : null,
             tooltip: 'Reading settings',
@@ -952,22 +727,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
+  /// Back to the lobby. Never blocked: a request this reader owns is
+  /// withdrawn, and the others stop waiting for one it was asked about as soon
+  /// as Presence shows it left.
   Future<void> _leaveReader() async {
-    // Feature 3: Mark this user as no longer reading.
-    if (_isStoppingPageSync) return;
-    if (ref.read(pageSyncProvider).currentRequest != null) {
-      _showSyncError('Wait for the current synchronized page turn to finish.');
-      return;
-    }
-    _isStoppingPageSync = true;
-    final pageSync = ref.read(pageSyncProvider.notifier);
-    pageSync.updateReaderContext(isReady: false, currentCfi: _currentCfi);
+    if (_leaving) return;
+    setState(() => _leaving = true);
+    _displayTimer?.cancel();
+    final pageSync = _pageSync;
     final presence = ref.read(presenceProvider.notifier);
-    try {
-      await pageSync.leaveReadingSession();
-    } catch (_) {
-      // Presence state still marks this reader as leaving below.
-    }
     try {
       await pageSync.stop();
     } catch (_) {
@@ -977,22 +745,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       await presence.updateReaderReady(false);
       await presence.updateIsReading(false);
     } catch (_) {
-      // Presence reconciliation/room cleanup handles disconnected exits.
+      // Presence reconciliation handles disconnected exits.
     }
-    if (mounted) {
-      context.goNamed('lobby', pathParameters: {'roomCode': widget.roomCode});
-    }
+    _returnToLobby();
   }
 
   void _returnToLobby() {
     if (!mounted) return;
     context.goNamed('lobby', pathParameters: {'roomCode': widget.roomCode});
   }
+}
 
-  void _showSyncError(String message) {
-    if (!mounted) return;
-    showPaperMessage(context, message);
-  }
+class _PendingTurn {
+  final String requestId;
+  final String? fromLocalCfi;
+
+  const _PendingTurn({required this.requestId, required this.fromLocalCfi});
 }
 
 /// A miniature page in the theme picker.

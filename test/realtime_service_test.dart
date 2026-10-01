@@ -22,15 +22,138 @@ void main() {
     await service.close();
   });
 
+  group('a broken room channel', () {
+    late List<_FakeRoomChannel> built;
+    late RealtimeService realtime;
+    late List<RealtimeConnectionStatus> statuses;
+
+    setUp(() {
+      built = [];
+      statuses = [];
+      realtime = RealtimeService(
+        channelFactory: (name, key) {
+          final channel = _FakeRoomChannel(name, key);
+          built.add(channel);
+          return channel;
+        },
+        recoveryDelay: const Duration(milliseconds: 20),
+        silentSubscribeTimeout: const Duration(milliseconds: 60),
+      );
+      realtime.connectionStream.listen((e) => statuses.add(e.status));
+    });
+
+    tearDown(() => realtime.close());
+
+    Future<void> joinAndSubscribe() async {
+      await realtime.joinRoom(
+        roomCode: 'ABC234',
+        userId: 'alice',
+        nickname: 'Alice',
+        avatarColorIndex: 1,
+        hasBook: true,
+        bookHash: 'book',
+        isReading: true,
+      );
+      built.last.emitStatus(RealtimeSubscribeStatus.subscribed);
+      await Future<void>.delayed(Duration.zero);
+      expect(realtime.isConnected, isTrue);
+    }
+
+    test('is rebuilt when the server or library closes it', () async {
+      // Regression: a closed channel is never rejoined by the library, so the
+      // room stayed at "0 readers ready" until the app was restarted.
+      await joinAndSubscribe();
+      built.first.emitStatus(RealtimeSubscribeStatus.closed);
+      await Future<void>.delayed(Duration.zero);
+      expect(realtime.isConnected, isFalse);
+      expect(statuses.last, RealtimeConnectionStatus.reconnecting);
+
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(built, hasLength(2));
+      built.last.emitStatus(RealtimeSubscribeStatus.subscribed);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(realtime.isConnected, isTrue);
+      // The new channel announces this reader again, page and all.
+      expect(built.last.tracked.last['is_reading'], isTrue);
+    });
+
+    test('keeps the socket when replacing a channel', () async {
+      // Regression: removing the last channel started an unawaited socket
+      // disconnect that cancelled the reconnect the replacement needed, so
+      // it reported "unable to subscribe" forever.
+      await joinAndSubscribe();
+      built.first.emitStatus(RealtimeSubscribeStatus.channelError);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+
+      expect(built.first.releasedSocket, [false]);
+      await realtime.leaveRoom();
+      expect(built.last.releasedSocket, [true]);
+    });
+
+    test('is left alone when the library recovers it in time', () async {
+      await joinAndSubscribe();
+      built.first.emitStatus(RealtimeSubscribeStatus.channelError);
+      built.first.emitStatus(RealtimeSubscribeStatus.subscribed);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+
+      expect(built, hasLength(1));
+      expect(realtime.isConnected, isTrue);
+    });
+
+    test('keeps retrying until a rebuild sticks', () async {
+      await joinAndSubscribe();
+      built.first.emitStatus(RealtimeSubscribeStatus.closed);
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(built, hasLength(2));
+      built.last.emitStatus(RealtimeSubscribeStatus.timedOut);
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+
+      expect(built.length, greaterThanOrEqualTo(3));
+      built.last.emitStatus(RealtimeSubscribeStatus.subscribed);
+      await Future<void>.delayed(Duration.zero);
+      expect(realtime.isConnected, isTrue);
+    });
+
+    test('a subscription that never answers is rebuilt', () async {
+      await realtime.joinRoom(
+        roomCode: 'ABC234',
+        userId: 'alice',
+        nickname: 'Alice',
+        avatarColorIndex: 1,
+        hasBook: false,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(built.length, greaterThanOrEqualTo(2));
+    });
+
+    test('is not rebuilt after the room is left', () async {
+      await joinAndSubscribe();
+      built.first.emitStatus(RealtimeSubscribeStatus.closed);
+      await realtime.leaveRoom();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(built, hasLength(1));
+    });
+
+    test('an app resume checks a channel that is down', () async {
+      await joinAndSubscribe();
+      built.first.emitStatus(RealtimeSubscribeStatus.timedOut);
+      realtime.checkConnection(delay: Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(built, hasLength(2));
+    });
+  });
+
   test('room event registry includes lifecycle and commit events', () {
     expect(
       RealtimeService.roomEvents,
       containsAll([
-        'page_position_commit',
-        'page_position_persisting',
-        'page_position_ack',
-        'page_turn_complete',
-        'reading_session_leave',
+        'page_turn_request',
+        'page_turn_vote',
+        'page_turn_commit',
+        'page_turn_cancel',
+        'book_chunk',
+        'transfer_request',
         'membership_changed',
         'room_closed',
       ]),
@@ -263,7 +386,12 @@ class _FakeRoomChannel implements RoomRealtimeChannel {
   List<Map<String, dynamic>> presencePayloads() => presences;
 
   @override
-  Future<void> remove() async => removeCount++;
+  Future<void> remove({bool releaseSocket = true}) async {
+    removeCount++;
+    releasedSocket.add(releaseSocket);
+  }
+
+  final releasedSocket = <bool>[];
 
   void emitStatus(RealtimeSubscribeStatus status, [Object? error]) {
     _status?.call(status, error);

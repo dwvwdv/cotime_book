@@ -1,4 +1,14 @@
-enum TransferStatus { idle, offering, accepting, transferring, completed, failed }
+enum TransferStatus {
+  idle,
+
+  /// This device needs the room's book and has not received any of it yet.
+  waiting,
+
+  /// Chunks are moving (in either direction; see [TransferState.isSending]).
+  transferring,
+
+  completed,
+}
 
 class TransferState {
   final TransferStatus status;
@@ -7,7 +17,10 @@ class TransferState {
   final int transferredBytes;
   final int totalChunks;
   final int receivedChunks;
-  final String? errorMessage;
+
+  /// What the transfer is doing right now, in words ("Asking Alice for the
+  /// book..."). Never a terminal error: every receive keeps retrying.
+  final String? message;
   final bool isSending;
 
   const TransferState({
@@ -17,26 +30,26 @@ class TransferState {
     this.transferredBytes = 0,
     this.totalChunks = 0,
     this.receivedChunks = 0,
-    this.errorMessage,
+    this.message,
     this.isSending = false,
   });
 
   const TransferState.idle()
-      : status = TransferStatus.idle,
-        bookHash = null,
-        totalBytes = 0,
-        transferredBytes = 0,
-        totalChunks = 0,
-        receivedChunks = 0,
-        errorMessage = null,
-        isSending = false;
+    : status = TransferStatus.idle,
+      bookHash = null,
+      totalBytes = 0,
+      transferredBytes = 0,
+      totalChunks = 0,
+      receivedChunks = 0,
+      message = null,
+      isSending = false;
 
   double get progress => totalBytes > 0 ? transferredBytes / totalBytes : 0;
 
   bool get isActive =>
-      status == TransferStatus.transferring ||
-      status == TransferStatus.offering ||
-      status == TransferStatus.accepting;
+      status == TransferStatus.waiting || status == TransferStatus.transferring;
+
+  bool get isReceiving => isActive && !isSending;
 
   TransferState copyWith({
     TransferStatus? status,
@@ -45,7 +58,8 @@ class TransferState {
     int? transferredBytes,
     int? totalChunks,
     int? receivedChunks,
-    String? errorMessage,
+    String? message,
+    bool clearMessage = false,
     bool? isSending,
   }) {
     return TransferState(
@@ -55,7 +69,7 @@ class TransferState {
       transferredBytes: transferredBytes ?? this.transferredBytes,
       totalChunks: totalChunks ?? this.totalChunks,
       receivedChunks: receivedChunks ?? this.receivedChunks,
-      errorMessage: errorMessage ?? this.errorMessage,
+      message: clearMessage ? null : message ?? this.message,
       isSending: isSending ?? this.isSending,
     );
   }

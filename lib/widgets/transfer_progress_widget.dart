@@ -19,11 +19,13 @@ class TransferProgressWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!transferState.isActive && transferState.status != TransferStatus.completed) {
+    if (transferState.status == TransferStatus.idle) {
       return const SizedBox.shrink();
     }
 
     final filled = (transferState.progress.clamp(0.0, 1.0) * segments).floor();
+    final showProgress = transferState.status == TransferStatus.transferring;
+    final detail = _detailText;
 
     return Container(
       width: double.infinity,
@@ -51,7 +53,7 @@ class TransferProgressWidget extends StatelessWidget {
                   ),
                 ),
               ),
-              if (transferState.isActive)
+              if (showProgress)
                 Text(
                   '${filled * segments}%',
                   style: const TextStyle(
@@ -62,7 +64,7 @@ class TransferProgressWidget extends StatelessWidget {
                 ),
             ],
           ),
-          if (transferState.isActive) ...[
+          if (showProgress) ...[
             const SizedBox(height: 12),
             Row(
               children: [
@@ -81,25 +83,10 @@ class TransferProgressWidget extends StatelessWidget {
               ],
             ),
           ],
-          if (transferState.status == TransferStatus.completed)
-            const Padding(
-              padding: EdgeInsets.only(top: 6),
-              child: Text(
-                'Book received successfully!',
-                style: AppTheme.caption,
-              ),
-            ),
-          if (transferState.status == TransferStatus.failed &&
-              transferState.errorMessage != null)
+          if (detail != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                transferState.errorMessage!,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: AppTheme.ink,
-                ),
-              ),
+              child: Text(detail, style: AppTheme.caption),
             ),
         ],
       ),
@@ -112,9 +99,8 @@ class TransferProgressWidget extends StatelessWidget {
         return transferState.isSending ? Icons.upload : Icons.download;
       case TransferStatus.completed:
         return Icons.check_circle_outline;
-      case TransferStatus.failed:
-        return Icons.error_outline;
-      default:
+      case TransferStatus.waiting:
+      case TransferStatus.idle:
         return Icons.hourglass_top;
     }
   }
@@ -122,17 +108,26 @@ class TransferProgressWidget extends StatelessWidget {
   String get _statusText {
     switch (transferState.status) {
       case TransferStatus.idle:
-        return 'Idle';
-      case TransferStatus.offering:
-        return 'Offering...';
-      case TransferStatus.accepting:
-        return 'Accepting...';
+        return '';
+      case TransferStatus.waiting:
+        return 'Waiting for the book';
       case TransferStatus.transferring:
         return transferState.isSending ? 'Sending book...' : 'Receiving book...';
       case TransferStatus.completed:
-        return 'Transfer complete';
-      case TransferStatus.failed:
-        return 'Transfer failed';
+        return transferState.isSending ? 'Book sent' : 'Book received';
     }
+  }
+
+  /// The second line. A receive never fails for good — it keeps asking — so
+  /// this says what it is doing rather than reporting an error.
+  String? get _detailText {
+    final message = transferState.message;
+    if (message != null) return message;
+    if (transferState.status == TransferStatus.completed) {
+      return transferState.isSending
+          ? 'Anyone who missed part of it will ask for the rest.'
+          : 'Ready to read.';
+    }
+    return null;
   }
 }

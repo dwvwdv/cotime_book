@@ -25,14 +25,12 @@ class BookState {
   final File? bookFile;
   final bool isLoading;
   final String? error;
-  final String? currentCfi;
 
   const BookState({
     this.currentBook,
     this.bookFile,
     this.isLoading = false,
     this.error,
-    this.currentCfi,
   });
 
   bool get hasBook => bookFile != null;
@@ -42,14 +40,12 @@ class BookState {
     File? bookFile,
     bool? isLoading,
     String? error,
-    String? currentCfi,
   }) {
     return BookState(
       currentBook: currentBook ?? this.currentBook,
       bookFile: bookFile ?? this.bookFile,
       isLoading: isLoading ?? this.isLoading,
       error: error,
-      currentCfi: currentCfi ?? this.currentCfi,
     );
   }
 }
@@ -110,14 +106,14 @@ class BookNotifier extends StateNotifier<BookState> {
     _transferUserId = currentUserId;
     _transferRoomCode = roomCode;
     _transferService = FileTransferService(
-      realtimeService: realtimeService,
-      storageService: _storageService,
+      transport: RealtimeBookTransferTransport(realtimeService),
+      store: _storageService,
       currentUserId: currentUserId,
     );
     _transferService!.initialize();
     final loadedBookHash = _loadedBookHash;
     if (loadedBookHash != null && state.bookFile != null) {
-      _transferService!.markBookAvailable(loadedBookHash);
+      _transferService!.holdBook(loadedBookHash);
     } else if (_expectedBookHash != null) {
       _transferService!.expectBook(_expectedBookHash!);
     }
@@ -128,6 +124,7 @@ class BookNotifier extends StateNotifier<BookState> {
       transferState,
     ) {
       if (transferState.status == TransferStatus.completed &&
+          !transferState.isSending &&
           transferState.bookHash != null) {
         unawaited(
           _onBookReceived(
@@ -147,10 +144,9 @@ class BookNotifier extends StateNotifier<BookState> {
 
   Future<void> pickAndShareBook() async {
     final generation = _sessionGeneration;
-    if (_transferService?.currentState.isActive ?? false) {
-      state = state.copyWith(error: 'A book transfer is already in progress.');
-      return;
-    }
+    // Receiving (or serving) a book never blocks sharing a different one: the
+    // new hash simply replaces what the transfer is working on. Refusing here
+    // is what used to strand a room behind a stalled transfer.
     state = state.copyWith(isLoading: true, error: null);
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -204,7 +200,7 @@ class BookNotifier extends StateNotifier<BookState> {
       );
       _loadedBookHash = hash;
       _expectedBookHash = hash;
-      _transferService?.markBookAvailable(hash);
+      _transferService?.holdBook(hash, bytes: bytes);
 
       // Update room with book info
       await ref
@@ -224,8 +220,8 @@ class BookNotifier extends StateNotifier<BookState> {
       );
       if (!_isCurrent(generation)) return;
 
-      // Start sending to other members
-      await _transferService?.sendBook(fileBytes: bytes, bookHash: hash);
+      // Push to everyone now; anyone who misses part of it asks for the rest.
+      await _transferService?.shareBook(fileBytes: bytes, bookHash: hash);
     } catch (e) {
       if (_isCurrent(generation)) {
         state = state.copyWith(isLoading: false, error: e.toString());
@@ -238,8 +234,12 @@ class BookNotifier extends StateNotifier<BookState> {
     int generation,
     int transferGeneration,
   ) async {
+    // A receive that finishes after the room moved on to another book must not
+    // replace it.
+    if (bookHash != _expectedBookHash) return;
     final bookFile = await _storageService.getBookFile(bookHash);
     if (bookFile != null &&
+        bookHash == _expectedBookHash &&
         _isCurrent(generation) &&
         transferGeneration == _transferGeneration) {
       state = state.copyWith(bookFile: bookFile, isLoading: false);
@@ -266,7 +266,7 @@ class BookNotifier extends StateNotifier<BookState> {
       state = state.copyWith(bookFile: file, isLoading: false);
       _loadedBookHash = bookHash;
       _expectedBookHash = bookHash;
-      _transferService?.markBookAvailable(bookHash);
+      _transferService?.holdBook(bookHash);
       await ref.read(roomProvider.notifier).updateReceiverBookStatus();
       if (!_isCurrent(generation)) return;
       await ref
@@ -285,7 +285,7 @@ class BookNotifier extends StateNotifier<BookState> {
     final generation = _sessionGeneration;
     _expectedBookHash = bookHash;
     if (hasBook(bookHash)) {
-      _transferService?.markBookAvailable(bookHash);
+      _transferService?.holdBook(bookHash);
       await ref
           .read(presenceProvider.notifier)
           .updateHasBook(true, bookHash: bookHash);
@@ -294,12 +294,10 @@ class BookNotifier extends StateNotifier<BookState> {
     if (!_isCurrent(generation)) return;
     _transferService?.expectBook(bookHash);
     _loadedBookHash = null;
-    state = const BookState(isLoading: true);
+    // Not isLoading: that flag means "picking a file" and disables Share.
+    // Receiving shows through the transfer state instead.
+    state = const BookState();
     await ref.read(presenceProvider.notifier).updateHasBook(false);
-  }
-
-  void updateCfi(String cfi) {
-    state = state.copyWith(currentCfi: cfi);
   }
 
   FileTransferService? get transferService => _transferService;

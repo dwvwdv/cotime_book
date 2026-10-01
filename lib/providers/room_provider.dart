@@ -27,16 +27,12 @@ class RoomState {
   final List<RoomMember> members;
   final bool isLoading;
   final String? error;
-  final String? readingSessionId;
-  final Set<String> readingParticipantUserIds;
 
   const RoomState({
     this.currentRoom,
     this.members = const [],
     this.isLoading = false,
     this.error,
-    this.readingSessionId,
-    this.readingParticipantUserIds = const {},
   });
 
   bool get isInRoom => currentRoom != null;
@@ -51,26 +47,22 @@ class RoomState {
     List<RoomMember>? members,
     bool? isLoading,
     String? error,
-    String? readingSessionId,
-    Set<String>? readingParticipantUserIds,
-    bool clearReadingSession = false,
   }) {
     return RoomState(
       currentRoom: currentRoom ?? this.currentRoom,
       members: members ?? this.members,
       isLoading: isLoading ?? this.isLoading,
       error: error,
-      readingSessionId:
-          clearReadingSession ? null : readingSessionId ?? this.readingSessionId,
-      readingParticipantUserIds: clearReadingSession
-          ? const {}
-          : readingParticipantUserIds ?? this.readingParticipantUserIds,
     );
   }
 }
 
 class RoomNotifier extends StateNotifier<RoomState> {
   static const heartbeatInterval = Duration(minutes: 5);
+  static const leaveRetryDelay = Duration(milliseconds: 800);
+
+  String? _pendingSaveCfi;
+  Future<void>? _saveLoop;
 
   final RoomService _roomService;
   final Future<void> Function()? _onSessionRevoked;
@@ -89,24 +81,6 @@ class RoomNotifier extends StateNotifier<RoomState> {
   }) : _onSessionRevoked = onSessionRevoked,
        super(const RoomState());
 
-  void beginReadingSession({
-    required String sessionId,
-    required Set<String> participantUserIds,
-  }) {
-    final currentUserId = SupabaseService.currentUserId;
-    if (sessionId.isEmpty ||
-        participantUserIds.isEmpty ||
-        (currentUserId != null &&
-            !participantUserIds.contains(currentUserId))) {
-      throw ArgumentError('Invalid reading session roster');
-    }
-    state = state.copyWith(
-      readingSessionId: sessionId,
-      readingParticipantUserIds: Set.unmodifiable(participantUserIds),
-      error: null,
-    );
-  }
-
   Future<Room?> createRoom(String nickname) async {
     final operationGeneration = ++_roomSessionGeneration;
     _resetMemberTracking();
@@ -119,7 +93,6 @@ class RoomNotifier extends StateNotifier<RoomState> {
         currentRoom: room,
         members: members,
         isLoading: false,
-        clearReadingSession: true,
       );
       _startHeartbeat(room.id);
       return room;
@@ -146,7 +119,6 @@ class RoomNotifier extends StateNotifier<RoomState> {
         currentRoom: room,
         members: members,
         isLoading: false,
-        clearReadingSession: true,
       );
       _startHeartbeat(room.id);
       return room;
@@ -401,7 +373,6 @@ class RoomNotifier extends StateNotifier<RoomState> {
       throw RoomSessionChangedException(roomId);
     }
     final roomSessionGeneration = _roomSessionGeneration;
-    final readingSessionId = state.readingSessionId;
     final originRoom = state.currentRoom!;
 
     var writeOrigin = originRoom;
@@ -416,8 +387,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
         break;
       } on RoomRevisionConflictException catch (error) {
         if (_roomSessionGeneration != roomSessionGeneration ||
-            state.currentRoom?.id != roomId ||
-            state.readingSessionId != readingSessionId) {
+            state.currentRoom?.id != roomId) {
           throw RoomSessionChangedException(roomId);
         }
         _applyRoomUpdate(
@@ -436,8 +406,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
       throw StateError('Room position update did not complete');
     }
     if (_roomSessionGeneration != roomSessionGeneration ||
-        state.currentRoom?.id != roomId ||
-        state.readingSessionId != readingSessionId) {
+        state.currentRoom?.id != roomId) {
       throw RoomSessionChangedException(roomId);
     }
     _applyRoomUpdate(
@@ -446,6 +415,37 @@ class RoomNotifier extends StateNotifier<RoomState> {
       roomSessionGeneration: roomSessionGeneration,
       clearError: true,
     );
+  }
+
+  /// Persists the room's page for whoever opens the book next.
+  ///
+  /// Best effort by design: live readers converge through Presence, so a
+  /// failed write must never hold up or undo a page turn. A revoked membership
+  /// still tears the session down inside [updateCfiForRoom].
+  ///
+  /// Saves are serialized and coalesced to the latest page. Two overlapping
+  /// writes used to race: the newer one committed first, and the older one's
+  /// revision-conflict retry then wrote the older page over it.
+  Future<void> saveReadingPosition(String cfi) {
+    if (state.currentRoom == null || cfi.isEmpty) return Future.value();
+    _pendingSaveCfi = cfi;
+    return _saveLoop ??= _drainPositionSaves().whenComplete(
+      () => _saveLoop = null,
+    );
+  }
+
+  Future<void> _drainPositionSaves() async {
+    while (true) {
+      final cfi = _pendingSaveCfi;
+      final room = state.currentRoom;
+      _pendingSaveCfi = null;
+      if (cfi == null || room == null) return;
+      try {
+        await updateCfiForRoom(roomId: room.id, cfi: cfi);
+      } catch (_) {
+        // Best effort; the next save (or live Presence) supersedes it.
+      }
+    }
   }
 
   Future<void> heartbeat() async {
@@ -549,7 +549,15 @@ class RoomNotifier extends StateNotifier<RoomState> {
     _heartbeatTimer = null;
     state = state.copyWith(isLoading: true, error: null);
     try {
-      await _roomService.leaveRoom(roomId: room.id);
+      try {
+        await _roomService.leaveRoom(roomId: room.id);
+      } catch (_) {
+        // A failed leave leaves this member in everyone else's list until the
+        // server evicts them half an hour later. One retry covers a dropped
+        // request; leaving is idempotent, so a lost response is harmless.
+        await Future<void>.delayed(leaveRetryDelay);
+        await _roomService.leaveRoom(roomId: room.id);
+      }
     } finally {
       if (_roomSessionGeneration == leavingGeneration) {
         state = const RoomState();

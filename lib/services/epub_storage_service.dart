@@ -3,7 +3,9 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 
-class EpubStorageService {
+import 'file_transfer_service.dart';
+
+class EpubStorageService implements BookBytesStore {
   Future<Directory> get _booksDir async {
     final appDir = await getApplicationDocumentsDirectory();
     final booksDir = Directory('${appDir.path}/books');
@@ -13,6 +15,7 @@ class EpubStorageService {
     return booksDir;
   }
 
+  @override
   Future<File> saveBook(String hash, Uint8List bytes) async {
     final dir = await _booksDir;
     final file = File('${dir.path}/$hash.epub');
@@ -27,6 +30,12 @@ class EpubStorageService {
       return file;
     }
     return null;
+  }
+
+  @override
+  Future<Uint8List?> readBook(String hash) async {
+    final file = await getBookFile(hash);
+    return file?.readAsBytes();
   }
 
   Future<bool> hasBook(String hash) async {

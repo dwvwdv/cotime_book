@@ -36,7 +36,10 @@ abstract interface class RoomRealtimeChannel {
   Future<void> untrack();
   Future<void> sendBroadcast(String event, Map<String, dynamic> payload);
   List<Map<String, dynamic>> presencePayloads();
-  Future<void> remove();
+
+  /// Leaves the channel. [releaseSocket] also closes the shared WebSocket
+  /// when nothing else uses it; a channel being replaced must keep it.
+  Future<void> remove({bool releaseSocket = true});
 }
 
 typedef RoomRealtimeChannelFactory =
@@ -101,7 +104,15 @@ class _SupabaseRoomRealtimeChannel implements RoomRealtimeChannel {
 
   @override
   Future<void> sendBroadcast(String event, Map<String, dynamic> payload) async {
-    await _channel.sendBroadcastMessage(event: event, payload: payload);
+    final response = await _channel.sendBroadcastMessage(
+      event: event,
+      payload: payload,
+    );
+    // Not an exception in the library: a failed REST fallback (the socket is
+    // down) only shows up here, and callers retry on a throw.
+    if (response != ChannelResponse.ok) {
+      throw StateError('Broadcast "$event" was not delivered ($response)');
+    }
   }
 
   @override
@@ -113,26 +124,34 @@ class _SupabaseRoomRealtimeChannel implements RoomRealtimeChannel {
   }
 
   @override
-  Future<void> remove() async {
-    await _client.removeChannel(_channel);
+  Future<void> remove({bool releaseSocket = true}) async {
+    // Not removeChannel(): when this is the last channel it starts a socket
+    // disconnect without awaiting it. A channel created right after then
+    // finds the socket "disconnecting", skips connecting, and the finished
+    // disconnect cancels the reconnect timer — the new channel's join is
+    // never sent and it reports "unable to subscribe" forever.
+    await _channel.unsubscribe().timeout(
+      _leaveTimeout,
+      onTimeout: () => 'timed out',
+    );
+    final realtime = _client.realtime;
+    if (releaseSocket && realtime.getChannels().isEmpty) {
+      await realtime.disconnect();
+    }
   }
+
+  static const _leaveTimeout = Duration(seconds: 3);
 }
 
 class RealtimeService {
   static const roomEvents = <String>[
     'page_turn_request',
-    'page_turn_confirm',
-    'page_turn_execute',
+    'page_turn_vote',
+    'page_turn_commit',
     'page_turn_cancel',
-    'page_position_persisting',
-    'page_position_commit',
-    'page_position_ack',
-    'page_turn_complete',
-    'reading_session_leave',
     'book_shared',
     'book_chunk',
     'transfer_request',
-    'transfer_accept',
     'start_reading',
     'membership_changed',
     'room_closed',
@@ -151,6 +170,13 @@ class RealtimeService {
   bool _isClosed = false;
   Future<void>? _closeFuture;
 
+  final Future<void> Function()? _beforeReconnect;
+  final Duration _recoveryDelay;
+  final Duration _maxRecoveryDelay;
+  final Duration _silentSubscribeTimeout;
+  Timer? _recoveryTimer;
+  int _recoveryAttempts = 0;
+
   final _presenceController =
       StreamController<Map<String, dynamic>>.broadcast();
   final _connectionController =
@@ -158,14 +184,46 @@ class RealtimeService {
   final _broadcastControllers =
       <String, StreamController<Map<String, dynamic>>>{};
 
-  RealtimeService({RoomRealtimeChannelFactory? channelFactory})
-    : _channelFactory =
-          channelFactory ??
-          ((channelName, presenceKey) => _SupabaseRoomRealtimeChannel(
-            SupabaseService.client,
-            channelName,
-            presenceKey,
-          ));
+  /// How long a broken channel gets to recover on its own before it is
+  /// replaced. Doubles per failed attempt up to [maxRecoveryDelay].
+  static const defaultRecoveryDelay = Duration(seconds: 4);
+  static const defaultMaxRecoveryDelay = Duration(seconds: 30);
+
+  /// A subscription that has reported nothing at all by now is rebuilt. Longer
+  /// than the library's own 10s join timeout, which reports as trouble first.
+  static const defaultSilentSubscribeTimeout = Duration(seconds: 15);
+
+  RealtimeService({
+    RoomRealtimeChannelFactory? channelFactory,
+    Future<void> Function()? beforeReconnect,
+    Duration recoveryDelay = defaultRecoveryDelay,
+    Duration maxRecoveryDelay = defaultMaxRecoveryDelay,
+    Duration silentSubscribeTimeout = defaultSilentSubscribeTimeout,
+  }) : _channelFactory =
+           channelFactory ??
+           ((channelName, presenceKey) => _SupabaseRoomRealtimeChannel(
+             SupabaseService.client,
+             channelName,
+             presenceKey,
+           )),
+       _beforeReconnect =
+           beforeReconnect ??
+           (channelFactory == null ? _refreshRealtimeAuth : null),
+       _recoveryDelay = recoveryDelay,
+       _maxRecoveryDelay = maxRecoveryDelay,
+       _silentSubscribeTimeout = silentSubscribeTimeout;
+
+  /// A channel rebuilt with an expired token is refused, so make sure the
+  /// socket carries a current one first.
+  static Future<void> _refreshRealtimeAuth() async {
+    final client = SupabaseService.client;
+    final session = client.auth.currentSession;
+    if (session != null && session.isExpired) {
+      await client.auth.refreshSession();
+    }
+    final token = client.auth.currentSession?.accessToken;
+    if (token != null) await client.realtime.setAuth(token);
+  }
 
   bool get isConnected =>
       _connectionStatus == RealtimeConnectionStatus.connected;
@@ -193,6 +251,9 @@ class RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    int? pageEpoch,
+    int? pageSeq,
+    String? pageCfi,
   }) {
     final normalizedCode = roomCode.trim().toUpperCase();
     final normalizedTopicId = _normalizeTopicId(roomTopicId);
@@ -204,6 +265,9 @@ class RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
+      pageEpoch: pageEpoch,
+      pageSeq: pageSeq,
+      pageCfi: pageCfi,
     );
 
     return _serialize(() async {
@@ -226,87 +290,173 @@ class RealtimeService {
       }
 
       await _leaveRoomInternal(emitDisconnected: _channel != null);
-
-      final channelName = AppConstants.roomChannelName(
-        normalizedTopicId ?? normalizedCode,
+      _recoveryAttempts = 0;
+      _openChannel(
+        roomCode: normalizedCode,
+        topicId: normalizedTopicId,
+        userId: userId,
+        payload: payload,
+        initialStatus: RealtimeConnectionStatus.connecting,
       );
-      final generation = ++_generation;
-      final channel = _channelFactory(channelName, userId);
-      _channel = channel;
-      _roomCode = normalizedCode;
-      _roomTopicId = normalizedTopicId;
-      _userId = userId;
-      _presencePayload = payload;
-      _emitConnection(RealtimeConnectionStatus.connecting);
+    });
+  }
 
-      channel.onPresenceSync(() {
-        if (!_isCurrent(channel, generation)) return;
-        _presenceController.add({
-          'event': 'sync',
-          'state': mergePresenceUsers(channel.presencePayloads()),
-          'generation': generation,
-        });
-      });
+  /// Creates and subscribes the room channel. Shared by the first join and by
+  /// every rebuild after the connection broke.
+  void _openChannel({
+    required String roomCode,
+    required String? topicId,
+    required String userId,
+    required Map<String, dynamic> payload,
+    required RealtimeConnectionStatus initialStatus,
+  }) {
+    final channelName = AppConstants.roomChannelName(topicId ?? roomCode);
+    final generation = ++_generation;
+    final channel = _channelFactory(channelName, userId);
+    _channel = channel;
+    _roomCode = roomCode;
+    _roomTopicId = topicId;
+    _userId = userId;
+    _presencePayload = payload;
+    _emitConnection(initialStatus);
 
-      channel.onPresenceJoin((presenceEvent) {
-        if (!_isCurrent(channel, generation)) return;
-        _presenceController.add({
-          'event': 'join',
-          'payload': presenceEvent,
-          'generation': generation,
-        });
-      });
-
-      channel.onPresenceLeave((presenceEvent) {
-        if (!_isCurrent(channel, generation)) return;
-        _presenceController.add({
-          'event': 'leave',
-          'payload': presenceEvent,
-          'generation': generation,
-        });
-      });
-
-      for (final event in roomEvents) {
-        channel.onBroadcast(event, (payload) {
-          if (!_isCurrent(channel, generation)) return;
-          _broadcastControllers[event]?.add(payload);
-        });
-      }
-
-      channel.subscribe((status, error) async {
-        if (!_isCurrent(channel, generation)) return;
-        if (status == RealtimeSubscribeStatus.subscribed) {
-          try {
-            await _trackCurrentPresence(channel, generation);
-            if (_isCurrent(channel, generation)) {
-              _emitConnection(RealtimeConnectionStatus.connected);
-              debugPrint('Joined room channel: $channelName');
-            }
-          } catch (trackError) {
-            if (_isCurrent(channel, generation)) {
-              _emitConnection(
-                RealtimeConnectionStatus.error,
-                error: trackError,
-              );
-            }
-          }
-          return;
-        }
-        if (status == RealtimeSubscribeStatus.closed) {
-          if (_channel != null) {
-            _emitConnection(RealtimeConnectionStatus.disconnected);
-          }
-          return;
-        }
-        if (status == RealtimeSubscribeStatus.channelError ||
-            status == RealtimeSubscribeStatus.timedOut) {
-          _emitConnection(
-            RealtimeConnectionStatus.error,
-            error: error ?? 'Unable to subscribe to room channel',
-          );
-        }
+    channel.onPresenceSync(() {
+      if (!_isCurrent(channel, generation)) return;
+      _presenceController.add({
+        'event': 'sync',
+        'state': mergePresenceUsers(channel.presencePayloads()),
+        'generation': generation,
       });
     });
+
+    channel.onPresenceJoin((presenceEvent) {
+      if (!_isCurrent(channel, generation)) return;
+      _presenceController.add({
+        'event': 'join',
+        'payload': presenceEvent,
+        'generation': generation,
+      });
+    });
+
+    channel.onPresenceLeave((presenceEvent) {
+      if (!_isCurrent(channel, generation)) return;
+      _presenceController.add({
+        'event': 'leave',
+        'payload': presenceEvent,
+        'generation': generation,
+      });
+    });
+
+    for (final event in roomEvents) {
+      channel.onBroadcast(event, (payload) {
+        if (!_isCurrent(channel, generation)) return;
+        _broadcastControllers[event]?.add(payload);
+      });
+    }
+
+    channel.subscribe((status, error) async {
+      if (!_isCurrent(channel, generation)) return;
+      if (status == RealtimeSubscribeStatus.subscribed) {
+        try {
+          await _trackCurrentPresence(channel, generation);
+          if (_isCurrent(channel, generation)) {
+            _recoveryTimer?.cancel();
+            _recoveryTimer = null;
+            _recoveryAttempts = 0;
+            _emitConnection(RealtimeConnectionStatus.connected);
+            debugPrint('Joined room channel: $channelName');
+          }
+        } catch (trackError) {
+          if (_isCurrent(channel, generation)) {
+            _channelInTrouble(generation, trackError);
+          }
+        }
+        return;
+      }
+      // Our own leave bumps the generation before it unsubscribes, so a
+      // close that reaches here came from the server or the library — e.g.
+      // a rejoin that unsubscribed its own channel. The library never
+      // rejoins a closed channel; only a rebuild brings it back.
+      if (status == RealtimeSubscribeStatus.closed ||
+          status == RealtimeSubscribeStatus.channelError ||
+          status == RealtimeSubscribeStatus.timedOut) {
+        _channelInTrouble(generation, error ?? status.name);
+      }
+    });
+
+    // A subscription that never answers at all is trouble too.
+    _scheduleRecovery(generation, delay: _silentSubscribeTimeout);
+  }
+
+  /// The channel stopped working. The library retries an errored channel on
+  /// its own, so give it a moment; if it is still down then, rebuild it.
+  void _channelInTrouble(int generation, Object? reason) {
+    debugPrint('Room channel trouble: $reason');
+    _emitConnection(RealtimeConnectionStatus.reconnecting);
+    _scheduleRecovery(generation);
+  }
+
+  void _scheduleRecovery(int generation, {Duration? delay}) {
+    if (_isClosed || _channel == null || generation != _generation) return;
+    _recoveryTimer?.cancel();
+    var backoff =
+        delay ?? _recoveryDelay * (1 << _recoveryAttempts.clamp(0, 4));
+    if (backoff > _maxRecoveryDelay) backoff = _maxRecoveryDelay;
+    _recoveryTimer = Timer(backoff, () {
+      _recoveryTimer = null;
+      unawaited(_recover(generation));
+    });
+  }
+
+  Future<void> _recover(int generation) {
+    return _serialize(() async {
+      final roomCode = _roomCode;
+      final userId = _userId;
+      final payload = _presencePayload;
+      if (_isClosed ||
+          _channel == null ||
+          generation != _generation ||
+          isConnected ||
+          roomCode == null ||
+          userId == null ||
+          payload == null) {
+        return;
+      }
+      final topicId = _roomTopicId;
+      _recoveryAttempts++;
+      debugPrint('Rebuilding room channel (attempt $_recoveryAttempts)');
+      try {
+        await _beforeReconnect?.call();
+      } catch (error) {
+        debugPrint('Refreshing realtime auth failed: $error');
+      }
+      try {
+        // Untracking a dead channel only waits out a timeout; leaving the
+        // channel removes its presence on the server anyway.
+        await _leaveRoomInternal(
+          emitDisconnected: false,
+          untrack: false,
+          releaseSocket: false,
+        );
+      } catch (error) {
+        debugPrint('Dropping the broken room channel failed: $error');
+      }
+      if (_isClosed) return;
+      _openChannel(
+        roomCode: roomCode,
+        topicId: topicId,
+        userId: userId,
+        payload: payload,
+        initialStatus: RealtimeConnectionStatus.reconnecting,
+      );
+    });
+  }
+
+  /// Asks for a health check soon, e.g. when the app comes back to the
+  /// foreground: the socket may have been closed while it was asleep.
+  void checkConnection({Duration delay = const Duration(seconds: 2)}) {
+    if (_channel == null || isConnected) return;
+    _scheduleRecovery(_generation, delay: delay);
   }
 
   Future<void> broadcast({
@@ -328,6 +478,9 @@ class RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    int? pageEpoch,
+    int? pageSeq,
+    String? pageCfi,
   }) {
     final payload = _buildPresencePayload(
       userId: userId,
@@ -337,6 +490,9 @@ class RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
+      pageEpoch: pageEpoch,
+      pageSeq: pageSeq,
+      pageCfi: pageCfi,
     );
 
     return _serialize(() async {
@@ -390,7 +546,13 @@ class RealtimeService {
     unawaited(close());
   }
 
-  Future<void> _leaveRoomInternal({required bool emitDisconnected}) async {
+  Future<void> _leaveRoomInternal({
+    required bool emitDisconnected,
+    bool untrack = true,
+    bool releaseSocket = true,
+  }) async {
+    _recoveryTimer?.cancel();
+    _recoveryTimer = null;
     final channel = _channel;
     if (channel == null) {
       _roomCode = null;
@@ -411,15 +573,17 @@ class RealtimeService {
     _presencePayload = null;
 
     Object? untrackError;
-    try {
-      await channel.untrack();
-    } catch (error) {
-      untrackError = error;
+    if (untrack) {
+      try {
+        await channel.untrack();
+      } catch (error) {
+        untrackError = error;
+      }
     }
 
     Object? removeError;
     try {
-      await channel.remove();
+      await channel.remove(releaseSocket: releaseSocket);
     } catch (error) {
       removeError = error;
     } finally {
@@ -458,6 +622,9 @@ class RealtimeService {
     required String? bookHash,
     required bool isReading,
     required bool readerReady,
+    required int? pageEpoch,
+    required int? pageSeq,
+    required String? pageCfi,
   }) {
     return {
       'user_id': userId,
@@ -467,6 +634,12 @@ class RealtimeService {
       'book_hash': hasBook ? bookHash : null,
       'is_reading': isReading,
       'reader_ready': readerReady,
+      // Only a reader holds a shared position; see PageSyncService.
+      if (isReading && pageSeq != null && pageCfi != null) ...{
+        'page_epoch': pageEpoch ?? 0,
+        'page_seq': pageSeq,
+        'page_cfi': pageCfi,
+      },
     };
   }
 

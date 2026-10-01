@@ -7,384 +7,617 @@ import 'package:flutter/foundation.dart';
 
 import '../config/app_constants.dart';
 import '../models/transfer_state.dart';
-import 'epub_storage_service.dart';
+import 'presence_merge.dart';
 import 'realtime_service.dart';
 
-class FileTransferService {
-  static const receiveTimeout = Duration(seconds: 30);
+/// The Realtime surface the transfer needs. Injectable for tests.
+abstract interface class BookTransferTransport {
+  Stream<Map<String, dynamic>> broadcastStream(String event);
 
+  Stream<Map<String, dynamic>> get presenceStream;
+
+  List<Map<String, dynamic>> getOnlineUsers();
+
+  Future<void> broadcast({
+    required String event,
+    required Map<String, dynamic> payload,
+  });
+}
+
+class RealtimeBookTransferTransport implements BookTransferTransport {
   final RealtimeService _realtimeService;
-  final EpubStorageService _storageService;
+
+  const RealtimeBookTransferTransport(this._realtimeService);
+
+  @override
+  Stream<Map<String, dynamic>> broadcastStream(String event) =>
+      _realtimeService.broadcastStream(event);
+
+  @override
+  Stream<Map<String, dynamic>> get presenceStream =>
+      _realtimeService.presenceStream;
+
+  @override
+  List<Map<String, dynamic>> getOnlineUsers() =>
+      _realtimeService.getOnlineUsers();
+
+  @override
+  Future<void> broadcast({
+    required String event,
+    required Map<String, dynamic> payload,
+  }) => _realtimeService.broadcast(event: event, payload: payload);
+}
+
+/// Where received books are kept, and where a holder reads one to serve it.
+abstract interface class BookBytesStore {
+  Future<void> saveBook(String hash, Uint8List bytes);
+
+  Future<Uint8List?> readBook(String hash);
+}
+
+/// Moves the room's EPUB between devices over Realtime broadcast.
+///
+/// Broadcast is fire-and-forget: packets are dropped under rate limits, and
+/// anyone who is not subscribed at that moment never sees them. The previous
+/// design pushed the file once and hoped. One lost chunk, a member who joined
+/// after the share, or a phone that slept through it, and the receiver sat on
+/// "Receiving book..." forever with the Share button disabled.
+///
+/// Here the **receiver drives**:
+///
+/// * Anyone who holds the book (its hash is in their Presence) can serve it.
+/// * A receiver that is missing chunks asks one holder for exactly those
+///   chunks, and asks again — rotating holders — whenever progress stalls.
+///   Nothing is terminal: a stalled, damaged or abandoned transfer simply
+///   becomes the next request.
+/// * A holder serves requests from one send queue, so several receivers asking
+///   at once share the same broadcast instead of multiplying it.
+/// * The initial share is still pushed to everyone; it is just the fast path.
+class FileTransferService {
+  static const chunkEvent = 'book_chunk';
+  static const requestEvent = 'transfer_request';
+
+  static const defaultFirstRequestDelay = Duration(seconds: 2);
+  static const defaultStallTimeout = Duration(seconds: 6);
+
+  final BookTransferTransport _transport;
+  final BookBytesStore _store;
   final String _currentUserId;
+  final Duration _chunkDelay;
+  final Duration _firstRequestDelay;
+  final Duration _stallTimeout;
 
   final _stateController = StreamController<TransferState>.broadcast();
   final List<StreamSubscription<Map<String, dynamic>>> _subscriptions = [];
   TransferState _state = const TransferState.idle();
-
-  final Map<int, Uint8List> _receivedChunks = {};
-  String? _pendingSenderId;
-  String? _pendingBookHash;
-  int _expectedTotalChunks = 0;
-  int _expectedTotalBytes = 0;
-  Timer? _receiveTimer;
   bool _initialized = false;
-  int? _assemblingGeneration;
-  String? _expectedBookHash;
-  String? _availableBookHash;
-  int _receiveGeneration = 0;
   bool _disposed = false;
   Future<void>? _disposeFuture;
 
+  // Receiving -----------------------------------------------------------------
+  String? _wantedHash;
+  final Map<int, Uint8List> _receivedChunks = {};
+  int _expectedTotalChunks = 0;
+  int _expectedTotalBytes = 0;
+  int _receivedBytes = 0;
+  int _requestAttempt = 0;
+  bool _assembling = false;
+  bool _waitingForHolder = false;
+  Timer? _repairTimer;
+
+  /// Bumped whenever the wanted book changes, so an assembly or a timer from
+  /// the previous one cannot land on the new one.
+  int _receiveGeneration = 0;
+
+  // Holding -------------------------------------------------------------------
+  String? _heldHash;
+  Uint8List? _heldBytes;
+  final _sendQueue = <int>{};
+  int _sendTotalChunks = 0;
+  int _sentInBatch = 0;
+  int _batchSize = 0;
+
+  /// Cleared in the same synchronous step that sees the queue empty, so an
+  /// enqueue can never land between "loop finished" and "loop marked idle".
+  bool _sending = false;
+  Completer<void>? _sendDone;
+
   FileTransferService({
-    required RealtimeService realtimeService,
-    required EpubStorageService storageService,
+    required BookTransferTransport transport,
+    required BookBytesStore store,
     required String currentUserId,
-  }) : _realtimeService = realtimeService,
-       _storageService = storageService,
-       _currentUserId = currentUserId;
+    Duration chunkDelay = AppConstants.chunkDelay,
+    Duration firstRequestDelay = defaultFirstRequestDelay,
+    Duration stallTimeout = defaultStallTimeout,
+  }) : _transport = transport,
+       _store = store,
+       _currentUserId = currentUserId,
+       _chunkDelay = chunkDelay,
+       _firstRequestDelay = firstRequestDelay,
+       _stallTimeout = stallTimeout;
 
   Stream<TransferState> get stateStream => _stateController.stream;
   TransferState get currentState => _state;
   int get subscriptionCount => _subscriptions.length;
-  String? get expectedBookHash => _expectedBookHash;
+  String? get wantedBookHash => _wantedHash;
+  String? get heldBookHash => _heldHash;
 
   void initialize() {
     if (_initialized || _disposed) return;
     _initialized = true;
-    _subscriptions.add(
-      _realtimeService.broadcastStream('book_chunk').listen(_onBookChunk),
-    );
+    _subscriptions.addAll([
+      _transport.broadcastStream(chunkEvent).listen(_onChunk),
+      _transport.broadcastStream(requestEvent).listen(_onTransferRequest),
+      _transport.presenceStream.listen(_onPresence),
+    ]);
   }
 
-  /// Bind incoming chunks to the book announced by the room. Delayed packets
-  /// from a previous share must not claim the receiver and block the new book.
-  void expectBook(String bookHash) {
+  // ---------------------------------------------------------------------------
+  // Public API
+
+  /// This device has [bookHash] and can serve it. [bytes] saves a disk read
+  /// when the caller already has them.
+  void holdBook(String bookHash, {Uint8List? bytes}) {
     if (_disposed) return;
-    final normalizedHash = bookHash.toLowerCase();
-    if (!_isSha256(normalizedHash)) throw ArgumentError('Invalid book hash');
-    if (_expectedBookHash == normalizedHash &&
-        _availableBookHash != normalizedHash) {
-      return;
+    final hash = _normalizeHash(bookHash);
+    if (_heldHash != hash) {
+      _heldHash = hash;
+      _heldBytes = null;
+      _sendQueue.clear();
+      _sentInBatch = 0;
+      _batchSize = 0;
     }
-
-    ++_receiveGeneration;
-    _expectedBookHash = normalizedHash;
-    _availableBookHash = null;
-    _assemblingGeneration = null;
-    _clearReceiveBuffer();
-    if (!_state.isSending) _updateState(const TransferState.idle());
+    if (bytes != null) _heldBytes = bytes;
+    // Holding a book means it is the room's book now. A receive of anything
+    // else must stop here: left running, it would finish later and replace
+    // the book this device just shared.
+    if (_wantedHash != null) {
+      _stopReceiving();
+      if (!_state.isSending) _updateState(const TransferState.idle());
+    }
   }
 
-  void markBookAvailable(String bookHash) {
-    if (_disposed) return;
-    final normalizedHash = bookHash.toLowerCase();
-    if (!_isSha256(normalizedHash)) throw ArgumentError('Invalid book hash');
-    ++_receiveGeneration;
-    _expectedBookHash = normalizedHash;
-    _availableBookHash = normalizedHash;
-    _assemblingGeneration = null;
-    _clearReceiveBuffer();
-    if (!_state.isSending) _updateState(const TransferState.idle());
-  }
-
-  Future<void> sendBook({
+  /// Shares a book this device just added: hold it and push it to the room.
+  /// Completes when the push has been handed to Realtime; receivers that miss
+  /// part of it ask for the rest.
+  Future<void> shareBook({
     required Uint8List fileBytes,
     required String bookHash,
   }) async {
     if (_disposed) throw StateError('FileTransferService is disposed');
-    if (_state.isActive) throw StateError('A file transfer is already active');
     if (fileBytes.isEmpty) throw ArgumentError('Book file is empty');
     if (fileBytes.length > AppConstants.maxFileSize) {
       throw ArgumentError(
         'Book exceeds the ${AppConstants.maxFileSize} byte limit',
       );
     }
-    if (!_isSha256(bookHash)) throw ArgumentError('Invalid book hash');
-
-    final actualHash = sha256.convert(fileBytes).toString();
-    if (actualHash != bookHash) {
+    final hash = _normalizeHash(bookHash);
+    if (sha256.convert(fileBytes).toString() != hash) {
       throw ArgumentError('Book hash does not match file contents');
     }
 
-    final totalChunks = (fileBytes.length / AppConstants.fileChunkSize).ceil();
+    holdBook(hash, bytes: fileBytes);
+    _enqueue(List.generate(_chunkCount(fileBytes.length), (index) => index));
+    await _sendDone?.future;
+  }
+
+  /// The room's book is [bookHash] and this device does not have it.
+  void expectBook(String bookHash) {
+    if (_disposed) return;
+    final hash = _normalizeHash(bookHash);
+    if (_heldHash == hash || _wantedHash == hash) return;
+
+    _stopReceiving();
+    _wantedHash = hash;
     _updateState(
       TransferState(
-        status: TransferStatus.transferring,
-        bookHash: bookHash,
-        totalBytes: fileBytes.length,
-        totalChunks: totalChunks,
-        isSending: true,
+        status: TransferStatus.waiting,
+        bookHash: hash,
+        message: 'Waiting for the book...',
       ),
     );
-
-    try {
-      for (var index = 0; index < totalChunks; index++) {
-        if (_disposed) throw StateError('File transfer was cancelled');
-        final start = index * AppConstants.fileChunkSize;
-        final candidateEnd = start + AppConstants.fileChunkSize;
-        final end = candidateEnd > fileBytes.length
-            ? fileBytes.length
-            : candidateEnd;
-        final chunk = fileBytes.sublist(start, end);
-
-        await _realtimeService.broadcast(
-          event: 'book_chunk',
-          payload: {
-            'sender_id': _currentUserId,
-            'book_hash': bookHash,
-            'chunk_index': index,
-            'total_chunks': totalChunks,
-            'total_bytes': fileBytes.length,
-            'data': base64Encode(chunk),
-          },
-        );
-
-        _updateState(
-          _state.copyWith(transferredBytes: end, receivedChunks: index + 1),
-        );
-        if (index + 1 < totalChunks) {
-          await Future<void>.delayed(AppConstants.chunkDelay);
-        }
-      }
-
-      _updateState(
-        _state.copyWith(status: TransferStatus.completed, isSending: false),
-      );
-      debugPrint('Book sent: $totalChunks chunks');
-    } catch (error) {
-      _updateState(
-        _state.copyWith(
-          status: TransferStatus.failed,
-          errorMessage: error.toString(),
-          isSending: false,
-        ),
-      );
-      rethrow;
-    }
+    // Give the sharer's push a moment before asking for anything.
+    _scheduleRepair(_firstRequestDelay);
   }
 
-  void _onBookChunk(Map<String, dynamic> payload) {
-    if (_disposed || _assemblingGeneration == _receiveGeneration) return;
-
-    try {
-      final senderId = payload['sender_id'];
-      final bookHash = payload['book_hash'];
-      final chunkIndex = payload['chunk_index'];
-      final totalChunks = payload['total_chunks'];
-      final totalBytes = payload['total_bytes'];
-      final encodedData = payload['data'];
-
-      if (senderId is! String ||
-          senderId.isEmpty ||
-          senderId == _currentUserId) {
-        return;
-      }
-      if (bookHash is! String || !_isSha256(bookHash)) {
-        throw const FormatException('Invalid book hash');
-      }
-      final normalizedBookHash = bookHash.toLowerCase();
-      if ((_expectedBookHash != null &&
-              normalizedBookHash != _expectedBookHash) ||
-          normalizedBookHash == _availableBookHash) {
-        return;
-      }
-      if (chunkIndex is! int ||
-          totalChunks is! int ||
-          totalBytes is! int ||
-          encodedData is! String) {
-        throw const FormatException('Invalid chunk field types');
-      }
-      if (totalBytes <= 0 || totalBytes > AppConstants.maxFileSize) {
-        throw const FormatException('Invalid total file size');
-      }
-      const maxEncodedChunkLength = ((AppConstants.fileChunkSize + 2) ~/ 3) * 4;
-      if (encodedData.length > maxEncodedChunkLength) {
-        throw const FormatException('Encoded chunk exceeds size limit');
-      }
-
-      final calculatedChunks = (totalBytes / AppConstants.fileChunkSize).ceil();
-      if (totalChunks <= 0 ||
-          totalChunks != calculatedChunks ||
-          chunkIndex < 0 ||
-          chunkIndex >= totalChunks) {
-        throw const FormatException('Invalid chunk index or count');
-      }
-
-      if (_pendingBookHash != null &&
-          (_pendingBookHash != normalizedBookHash ||
-              _pendingSenderId != senderId)) {
-        // Do not clear an in-flight transfer because an unrelated sender sent
-        // a chunk to the room.
-        return;
-      }
-
-      final chunkBytes = base64Decode(encodedData);
-      final expectedLength = chunkIndex == totalChunks - 1
-          ? totalBytes - (chunkIndex * AppConstants.fileChunkSize)
-          : AppConstants.fileChunkSize;
-      if (chunkBytes.length != expectedLength ||
-          chunkBytes.length > AppConstants.fileChunkSize) {
-        throw const FormatException('Invalid chunk size');
-      }
-
-      if (_pendingBookHash == null) {
-        _beginReceive(
-          senderId: senderId,
-          bookHash: normalizedBookHash,
-          totalChunks: totalChunks,
-          totalBytes: totalBytes,
-        );
-      } else if (_expectedTotalChunks != totalChunks ||
-          _expectedTotalBytes != totalBytes) {
-        throw const FormatException('Transfer metadata changed mid-stream');
-      }
-
-      final existingChunk = _receivedChunks[chunkIndex];
-      if (existingChunk != null && !listEquals(existingChunk, chunkBytes)) {
-        throw const FormatException('Conflicting duplicate chunk');
-      }
-      final isNewChunk = existingChunk == null;
-      if (isNewChunk) _receivedChunks[chunkIndex] = chunkBytes;
-      final receivedBytes = _receivedChunks.values.fold<int>(
-        0,
-        (sum, chunk) => sum + chunk.length,
-      );
-      _updateState(
-        _state.copyWith(
-          transferredBytes: receivedBytes,
-          receivedChunks: _receivedChunks.length,
-        ),
-      );
-      // A duplicate packet is not forward progress and must not keep a stalled
-      // transfer alive indefinitely.
-      if (isNewChunk) _restartReceiveTimeout();
-
-      if (_receivedChunks.length == _expectedTotalChunks) {
-        _assemblingGeneration = _receiveGeneration;
-        _receiveTimer?.cancel();
-        unawaited(
-          _assembleAndSave(normalizedBookHash, _receiveGeneration),
-        );
-      }
-    } on FormatException catch (error) {
-      debugPrint('Rejected book chunk: $error');
-      final belongsToCurrentTransfer =
-          _pendingBookHash != null &&
-          payload['sender_id'] == _pendingSenderId &&
-          payload['book_hash'] is String &&
-          (payload['book_hash'] as String).toLowerCase() == _pendingBookHash;
-      // A malformed unrelated packet must not destroy a valid in-flight
-      // transfer, but invalid data from its established sender must fail it.
-      if (_pendingBookHash == null || belongsToCurrentTransfer) {
-        _failReceive(error.message);
-      }
-    }
-  }
-
-  void _beginReceive({
-    required String senderId,
-    required String bookHash,
-    required int totalChunks,
-    required int totalBytes,
-  }) {
-    _clearReceiveBuffer();
-    _expectedBookHash ??= bookHash;
-    _pendingSenderId = senderId;
-    _pendingBookHash = bookHash;
-    _expectedTotalChunks = totalChunks;
-    _expectedTotalBytes = totalBytes;
-    _updateState(
-      TransferState(
-        status: TransferStatus.transferring,
-        bookHash: bookHash,
-        totalBytes: totalBytes,
-        totalChunks: totalChunks,
-      ),
-    );
-  }
-
-  Future<void> _assembleAndSave(
-    String expectedHash,
-    int receiveGeneration,
-  ) async {
-    try {
-      final builder = BytesBuilder(copy: false);
-      for (var index = 0; index < _expectedTotalChunks; index++) {
-        final chunk = _receivedChunks[index];
-        if (chunk == null) throw FormatException('Missing chunk $index');
-        builder.add(chunk);
-      }
-
-      final fullBytes = builder.takeBytes();
-      if (fullBytes.length != _expectedTotalBytes) {
-        throw const FormatException('Assembled file size mismatch');
-      }
-      final hash = sha256.convert(fullBytes).toString();
-      if (hash != expectedHash) {
-        throw const FormatException('Assembled file hash mismatch');
-      }
-
-      await _storageService.saveBook(expectedHash, fullBytes);
-      if (_disposed ||
-          receiveGeneration != _receiveGeneration ||
-          _expectedBookHash != expectedHash) {
-        return;
-      }
-      _availableBookHash = expectedHash;
-      _updateState(_state.copyWith(status: TransferStatus.completed));
-      debugPrint('Book received and saved: $expectedHash');
-      _clearReceiveBuffer();
-    } catch (error) {
-      if (receiveGeneration == _receiveGeneration) {
-        _failReceive(error.toString());
-      }
-    } finally {
-      if (_assemblingGeneration == receiveGeneration) {
-        _assemblingGeneration = null;
-      }
-    }
-  }
-
-  void _restartReceiveTimeout() {
-    _receiveTimer?.cancel();
-    _receiveTimer = Timer(receiveTimeout, () {
-      _failReceive('Book transfer timed out');
-    });
-  }
-
-  void _failReceive(String message) {
-    _clearReceiveBuffer();
-    _updateState(
-      _state.copyWith(status: TransferStatus.failed, errorMessage: message),
-    );
-  }
-
+  /// Leaves the room: forget everything.
   void reset() {
-    ++_receiveGeneration;
-    _expectedBookHash = null;
-    _availableBookHash = null;
-    _clearReceiveBuffer();
-    _assemblingGeneration = null;
+    _stopReceiving();
+    _heldHash = null;
+    _heldBytes = null;
+    _sendQueue.clear();
     _updateState(const TransferState.idle());
   }
 
-  void _clearReceiveBuffer() {
-    _receiveTimer?.cancel();
-    _receiveTimer = null;
+  // ---------------------------------------------------------------------------
+  // Receiving
+
+  void _onChunk(Map<String, dynamic> payload) {
+    final wanted = _wantedHash;
+    if (_disposed || wanted == null || _assembling) return;
+
+    final senderId = payload['sender_id'];
+    final bookHash = payload['book_hash'];
+    final chunkIndex = payload['chunk_index'];
+    final totalChunks = payload['total_chunks'];
+    final totalBytes = payload['total_bytes'];
+    final encodedData = payload['data'];
+    if (senderId is! String ||
+        senderId == _currentUserId ||
+        bookHash is! String ||
+        bookHash.toLowerCase() != wanted ||
+        chunkIndex is! int ||
+        totalChunks is! int ||
+        totalBytes is! int ||
+        encodedData is! String) {
+      return;
+    }
+    if (totalBytes <= 0 ||
+        totalBytes > AppConstants.maxFileSize ||
+        totalChunks != _chunkCount(totalBytes) ||
+        chunkIndex < 0 ||
+        chunkIndex >= totalChunks) {
+      return;
+    }
+    const maxEncodedChunkLength = ((AppConstants.fileChunkSize + 2) ~/ 3) * 4;
+    if (encodedData.length > maxEncodedChunkLength) return;
+    // Every holder slices the same file the same way. A chunk that disagrees
+    // about the shape cannot belong to this book; the hash check at the end
+    // catches anything subtler.
+    if (_expectedTotalChunks != 0 &&
+        (_expectedTotalChunks != totalChunks ||
+            _expectedTotalBytes != totalBytes)) {
+      return;
+    }
+    if (_receivedChunks.containsKey(chunkIndex)) return;
+
+    final Uint8List chunkBytes;
+    try {
+      chunkBytes = base64Decode(encodedData);
+    } on FormatException {
+      return;
+    }
+    final expectedLength = chunkIndex == totalChunks - 1
+        ? totalBytes - chunkIndex * AppConstants.fileChunkSize
+        : AppConstants.fileChunkSize;
+    if (chunkBytes.length != expectedLength) return;
+
+    _expectedTotalChunks = totalChunks;
+    _expectedTotalBytes = totalBytes;
+    _receivedChunks[chunkIndex] = chunkBytes;
+    _receivedBytes += chunkBytes.length;
+    _waitingForHolder = false;
+    _updateState(
+      TransferState(
+        status: TransferStatus.transferring,
+        bookHash: wanted,
+        totalBytes: totalBytes,
+        transferredBytes: _receivedBytes,
+        totalChunks: totalChunks,
+        receivedChunks: _receivedChunks.length,
+      ),
+    );
+
+    if (_receivedChunks.length == _expectedTotalChunks) {
+      _repairTimer?.cancel();
+      _assembling = true;
+      unawaited(_assembleAndSave(wanted, _receiveGeneration));
+      return;
+    }
+    // Progress pushes the next repair back; only a real stall asks again.
+    _scheduleRepair(_stallTimeout);
+  }
+
+  Future<void> _assembleAndSave(String hash, int generation) async {
+    try {
+      final builder = BytesBuilder(copy: false);
+      for (var index = 0; index < _expectedTotalChunks; index++) {
+        builder.add(_receivedChunks[index]!);
+      }
+      final bytes = builder.takeBytes();
+      if (bytes.length != _expectedTotalBytes ||
+          sha256.convert(bytes).toString() != hash) {
+        throw const FormatException('The book arrived damaged');
+      }
+      await _store.saveBook(hash, bytes);
+      if (_disposed || generation != _receiveGeneration) return;
+
+      _stopReceiving();
+      _heldHash = hash;
+      _heldBytes = bytes;
+      _updateState(
+        TransferState(
+          status: TransferStatus.completed,
+          bookHash: hash,
+          totalBytes: bytes.length,
+          transferredBytes: bytes.length,
+          totalChunks: _chunkCount(bytes.length),
+          receivedChunks: _chunkCount(bytes.length),
+        ),
+      );
+      debugPrint('Book received and saved: $hash');
+    } catch (error) {
+      if (_disposed || generation != _receiveGeneration) return;
+      debugPrint('Book assembly failed, asking again: $error');
+      // Start over from nothing rather than stopping: a corrupt chunk cannot
+      // be identified, but a clean copy can always be asked for.
+      _assembling = false;
+      _clearChunks();
+      _updateState(
+        TransferState(
+          status: TransferStatus.waiting,
+          bookHash: hash,
+          message: 'The book arrived damaged. Asking again...',
+        ),
+      );
+      _scheduleRepair(Duration.zero);
+    }
+  }
+
+  void _scheduleRepair(Duration delay) {
+    _repairTimer?.cancel();
+    final generation = _receiveGeneration;
+    _repairTimer = Timer(delay, () {
+      if (_disposed || generation != _receiveGeneration) return;
+      unawaited(_requestMissing());
+    });
+  }
+
+  Future<void> _requestMissing() async {
+    final wanted = _wantedHash;
+    if (_disposed || wanted == null || _assembling) return;
+    final generation = _receiveGeneration;
+
+    final holders = _holdersOf(wanted);
+    if (holders.isEmpty) {
+      _waitingForHolder = true;
+      _updateState(
+        _receivingState(
+          wanted,
+          message: 'Waiting for someone with the book to come online...',
+        ),
+      );
+      // Presence wakes this early when a holder appears.
+      _scheduleRepair(_stallTimeout);
+      return;
+    }
+    _waitingForHolder = false;
+
+    // Rotate so one unresponsive holder cannot stall the transfer.
+    final holder = holders[_requestAttempt % holders.length];
+    _requestAttempt++;
+    final missing = _expectedTotalChunks == 0
+        ? null
+        : [
+            for (var index = 0; index < _expectedTotalChunks; index++)
+              if (!_receivedChunks.containsKey(index)) index,
+          ];
+    _updateState(
+      _receivingState(
+        wanted,
+        message: _receivedChunks.isEmpty
+            ? 'Asking ${_nickname(holder)} for the book...'
+            : null,
+      ),
+    );
+
+    try {
+      await _transport.broadcast(
+        event: requestEvent,
+        payload: {
+          'requester_id': _currentUserId,
+          'sender_id': holder['user_id'],
+          'book_hash': wanted,
+          'missing': missing,
+        },
+      );
+    } catch (error) {
+      debugPrint('Book request failed, retrying: $error');
+    }
+    if (_disposed || generation != _receiveGeneration) return;
+    // Back off a little on repeated stalls, but never stop asking.
+    final backoff = _requestAttempt > 3 ? 3 : _requestAttempt;
+    _scheduleRepair(_stallTimeout * backoff);
+  }
+
+  void _onPresence(Map<String, dynamic> _) {
+    final wanted = _wantedHash;
+    if (_disposed || wanted == null || !_waitingForHolder) return;
+    if (_holdersOf(wanted).isNotEmpty) _scheduleRepair(Duration.zero);
+  }
+
+  List<Map<String, dynamic>> _holdersOf(String hash) {
+    final holders = _transport.getOnlineUsers().where((user) {
+      final userId = user['user_id'];
+      return userId is String &&
+          userId != _currentUserId &&
+          presenceHoldsBook(user, hash);
+    }).toList();
+    // Every receiver starts from the same holder, so their requests collapse
+    // into one send queue on that holder.
+    holders.sort(
+      (a, b) => (a['user_id'] as String).compareTo(b['user_id'] as String),
+    );
+    return holders;
+  }
+
+  TransferState _receivingState(String hash, {String? message}) {
+    return TransferState(
+      status: _receivedChunks.isEmpty
+          ? TransferStatus.waiting
+          : TransferStatus.transferring,
+      bookHash: hash,
+      totalBytes: _expectedTotalBytes,
+      transferredBytes: _receivedBytes,
+      totalChunks: _expectedTotalChunks,
+      receivedChunks: _receivedChunks.length,
+      message: message,
+    );
+  }
+
+  void _stopReceiving() {
+    ++_receiveGeneration;
+    _repairTimer?.cancel();
+    _repairTimer = null;
+    _wantedHash = null;
+    _assembling = false;
+    _waitingForHolder = false;
+    _requestAttempt = 0;
+    _clearChunks();
+  }
+
+  void _clearChunks() {
     _receivedChunks.clear();
-    _pendingSenderId = null;
-    _pendingBookHash = null;
     _expectedTotalChunks = 0;
     _expectedTotalBytes = 0;
+    _receivedBytes = 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Holding
+
+  void _onTransferRequest(Map<String, dynamic> payload) {
+    final held = _heldHash;
+    if (_disposed || held == null) return;
+    if (payload['sender_id'] != _currentUserId ||
+        payload['requester_id'] == _currentUserId ||
+        payload['book_hash'] is! String ||
+        (payload['book_hash'] as String).toLowerCase() != held) {
+      return;
+    }
+    final missing = payload['missing'];
+    unawaited(_serve(held, missing is List ? missing : null));
+  }
+
+  Future<void> _serve(String hash, List<dynamic>? missing) async {
+    final bytes = await _loadHeldBytes(hash);
+    if (bytes == null || _disposed || _heldHash != hash) return;
+    final total = _chunkCount(bytes.length);
+    _enqueue(
+      missing == null
+          ? List.generate(total, (index) => index)
+          : missing.whereType<int>().where((i) => i >= 0 && i < total),
+    );
+  }
+
+  Future<Uint8List?> _loadHeldBytes(String hash) async {
+    final cached = _heldBytes;
+    if (cached != null) return cached;
+    try {
+      final bytes = await _store.readBook(hash);
+      if (bytes != null && _heldHash == hash) _heldBytes = bytes;
+      return bytes;
+    } catch (error) {
+      debugPrint('Unable to read the held book: $error');
+      return null;
+    }
+  }
+
+  void _enqueue(Iterable<int> indices) {
+    final before = _sendQueue.length;
+    _sendQueue.addAll(indices);
+    _batchSize += _sendQueue.length - before;
+    if (_sending || _sendQueue.isEmpty) return;
+    _sending = true;
+    final done = _sendDone = Completer<void>();
+    unawaited(_runSendLoop().whenComplete(done.complete));
+  }
+
+  Future<void> _runSendLoop() async {
+    // Let the caller finish enqueueing before the first send.
+    await Future<void>.delayed(Duration.zero);
+    String? sentHash;
+    while (true) {
+      final hash = _heldHash;
+      final bytes = _heldBytes;
+      if (_disposed || _sendQueue.isEmpty || hash == null || bytes == null) {
+        _sending = false;
+        break;
+      }
+      sentHash = hash;
+      final index = _sendQueue.first;
+      _sendQueue.remove(index);
+      _sendTotalChunks = _chunkCount(bytes.length);
+
+      final start = index * AppConstants.fileChunkSize;
+      final end = (start + AppConstants.fileChunkSize).clamp(0, bytes.length);
+      try {
+        await _transport.broadcast(
+          event: chunkEvent,
+          payload: {
+            'sender_id': _currentUserId,
+            'book_hash': hash,
+            'chunk_index': index,
+            'total_chunks': _sendTotalChunks,
+            'total_bytes': bytes.length,
+            'data': base64Encode(bytes.sublist(start, end)),
+          },
+        );
+      } catch (error) {
+        // Whoever needed this chunk asks for it again.
+        debugPrint('Book chunk $index not sent: $error');
+      }
+      _sentInBatch++;
+      if (_sendQueue.isNotEmpty) {
+        _reportSending(hash);
+        await Future<void>.delayed(_chunkDelay);
+      }
+    }
+    _sentInBatch = 0;
+    _batchSize = 0;
+    // A receive in progress is what this reader cares about; serving others
+    // happens quietly underneath it.
+    if (!_disposed && sentHash != null && _wantedHash == null) {
+      _updateState(
+        TransferState(
+          status: TransferStatus.completed,
+          bookHash: sentHash,
+          isSending: true,
+        ),
+      );
+    }
+  }
+
+  void _reportSending(String hash) {
+    if (_disposed || _wantedHash != null || _batchSize == 0) return;
+    // Progress is counted in chunks: a batch can be any subset of the book.
+    _updateState(
+      TransferState(
+        status: TransferStatus.transferring,
+        bookHash: hash,
+        totalBytes: _batchSize,
+        transferredBytes: _sentInBatch.clamp(0, _batchSize),
+        totalChunks: _sendTotalChunks,
+        receivedChunks: _sentInBatch,
+        isSending: true,
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+
+  String _nickname(Map<String, dynamic> user) {
+    final nickname = user['nickname'];
+    return nickname is String && nickname.trim().isNotEmpty
+        ? nickname.trim()
+        : 'another reader';
+  }
+
+  int _chunkCount(int totalBytes) =>
+      (totalBytes / AppConstants.fileChunkSize).ceil();
+
+  String _normalizeHash(String hash) {
+    final normalized = hash.toLowerCase();
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(normalized)) {
+      throw ArgumentError('Invalid book hash');
+    }
+    return normalized;
   }
 
   void _updateState(TransferState newState) {
+    if (_disposed) return;
     _state = newState;
     if (!_stateController.isClosed) _stateController.add(newState);
-  }
-
-  bool _isSha256(String hash) {
-    return RegExp(r'^[a-fA-F0-9]{64}$').hasMatch(hash);
   }
 
   Future<void> dispose() {
@@ -392,9 +625,9 @@ class FileTransferService {
   }
 
   Future<void> _disposeInternal() async {
+    _stopReceiving();
     _disposed = true;
-    ++_receiveGeneration;
-    _clearReceiveBuffer();
+    _sendQueue.clear();
     await Future.wait<void>([
       for (final subscription in _subscriptions) subscription.cancel(),
     ]);

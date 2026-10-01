@@ -5,1231 +5,788 @@ import 'package:cotime_book/services/page_sync_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  const cfi = 'epubcfi(/6/4!/4/2/1:0)';
-
   group('PageSyncService', () {
-    test('fails closed until presence contains the current reader', () async {
-      final transport = FakePageSyncTransport();
-      final service = createService(transport, currentCfi: cfi);
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
+    test('readers on different screens keep turning pages together', () async {
+      // Regression: the old protocol required every reader's CFI string to be
+      // identical. Two different screens paginate differently, so their CFIs
+      // for the same page never matched and every turn was rejected — the
+      // room stayed on page one.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', layout: 'phone');
+      final bob = room.join('bob', 'Bob', layout: 'tablet');
+      addTearDown(room.dispose);
+      await flush();
 
-      final requested = await service.requestPageTurn(
-        direction: PageTurnDirection.next,
-        fromCfi: cfi,
-      );
-
-      expect(requested, isFalse);
-      expect(service.currentState.status, SyncStatus.idle);
-      expect(
-        service.currentState.errorMessage,
-        contains('presence to synchronize'),
-      );
-      expect(transport.sentEvents, isEmpty);
-    });
-
-    test(
-      'fails closed when a reading presence has no readiness field',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [
-            readyUser('user-a'),
-            {'user_id': 'legacy-reader', 'is_reading': true},
-          ];
-        final service = createService(transport, currentCfi: cfi);
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        final requested = await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        );
-
-        expect(requested, isFalse);
-        expect(service.currentState.errorMessage, contains('become ready'));
-      },
-    );
-
-    test('fails closed while any online reader is still loading', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [
-          readyUser('user-a'),
-          {'user_id': 'user-b', 'is_reading': true, 'reader_ready': false},
-        ];
-      final service = createService(transport, currentCfi: cfi);
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
-
-      final requested = await service.requestPageTurn(
-        direction: PageTurnDirection.next,
-        fromCfi: cfi,
-      );
-
-      expect(requested, isFalse);
-      expect(service.currentState.errorMessage, contains('become ready'));
-      expect(transport.sentEvents, isEmpty);
-    });
-
-    test(
-      'frozen roster keeps a transitioning lobby member pending',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [
-            readyUser('user-a'),
-            readyUser('user-a'),
-            readyUser('user-b'),
-            readyUser('user-b'),
-            {
-              'user_id': 'lobby-user',
-              'is_reading': false,
-              'reader_ready': true,
-            },
-          ];
-        final service = createService(transport, currentCfi: cfi);
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        final requested = await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        );
-
-        expect(requested, isFalse);
-        expect(service.currentState.status, SyncStatus.idle);
-        expect(service.currentState.errorMessage, contains('become ready'));
-        expect(transport.sentEvents, isEmpty);
-      },
-    );
-
-    test('explicit session leave removes a transitioning member', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [
-          readyUser('user-a'),
-          {'user_id': 'user-b', 'is_reading': false, 'reader_ready': false},
-        ];
-      final service = createService(transport, currentCfi: cfi);
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
-
-      expect(
-        await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        ),
-        isFalse,
-      );
-
-      transport.emit('reading_session_leave', {
-        'session_id': 'session-1',
-        'user_id': 'user-b',
-      });
-      await flushEvents();
-      expect(
-        await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        ),
-        isTrue,
-      );
-    });
-
-    test(
-      'self echo executes and commits a requester turn exactly once',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [readyUser('user-a')];
-        final service = createService(transport, currentCfi: cfi);
-        var turns = 0;
-        var commits = 0;
-        service.onPageTurn = (_) => turns++;
-        service.onPositionCommit = (_) => commits++;
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        );
-        await flushEvents();
-
-        expect(turns, 1);
-        expect(service.currentState.status, SyncStatus.turning);
-
-        final execute = transport.sentEvents.singleWhere(
-          (event) => event.event == 'page_turn_execute',
-        );
-        transport.emit('page_turn_execute', execute.payload);
-        await flushEvents();
-        expect(turns, 1);
-
-        const targetCfi = 'epubcfi(/6/6)';
-        service.updateReaderContext(isReady: true, currentCfi: targetCfi);
-        final committed = await service.commitPagePosition(targetCfi);
-        final acknowledged = await service.acknowledgePagePosition(targetCfi);
-        await flushEvents();
-
-        expect(committed, isTrue);
-        expect(acknowledged, isTrue);
-        expect(turns, 1);
-        expect(commits, 1);
-        expect(service.currentState.status, SyncStatus.idle);
-        expect(
-          transport.sentEvents.where(
-            (event) => event.event == 'page_turn_execute',
-          ),
-          hasLength(1),
-        );
-        expect(
-          transport.sentEvents.where(
-            (event) => event.event == 'page_position_ack',
-          ),
-          hasLength(1),
-        );
-        expect(
-          transport.sentEvents.where(
-            (event) => event.event == 'page_turn_complete',
-          ),
-          hasLength(1),
-        );
-
-        transport.emit('page_turn_execute', execute.payload);
-        await flushEvents();
-        expect(turns, 1);
-      },
-    );
-
-    test(
-      'ignores confirmations from users outside the required quorum',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-        final service = createService(transport, currentCfi: cfi);
-        var turns = 0;
-        service.onPageTurn = (_) => turns++;
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        );
-        final requestId = service.currentState.currentRequest!.requestId;
-
-        transport.emit('page_turn_confirm', {
-          'request_id': requestId,
-          'user_id': 'outsider',
-        });
-        await flushEvents();
-        expect(service.currentState.currentRequest!.confirmedUserIds, {
-          'user-a',
-        });
-        expect(turns, 0);
-
-        transport.emit('page_turn_confirm', {
-          'request_id': requestId,
-          'user_id': 'user-b',
-        });
-        await flushEvents();
-        expect(turns, 1);
-      },
-    );
-
-    test('validates executor identity and direction', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-      final service = createService(
-        transport,
-        userId: 'user-b',
-        nickname: 'Bob',
-        currentCfi: cfi,
-      );
-      var turns = 0;
-      var commits = 0;
-      service.onPageTurn = (_) => turns++;
-      service.onPositionCommit = (_) => commits++;
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
-
-      transport.emit(
-        'page_turn_request',
-        requestPayload(requestId: 'request-1', fromCfi: cfi),
-      );
-      await flushEvents();
-      expect(service.currentState.status, SyncStatus.confirming);
-
-      // Execute is invalid until this reader has explicitly confirmed.
-      transport.emit('page_turn_execute', {
-        'request_id': 'request-1',
-        'requested_by_user_id': 'user-a',
-        'direction': 'next',
-      });
-      await flushEvents();
-      expect(turns, 0);
-
-      await service.confirmPageTurn();
-      await flushEvents();
-
-      transport.emit('page_turn_execute', {
-        'request_id': 'request-1',
-        'requested_by_user_id': 'user-a',
-        'direction': 'previous',
-      });
-      transport.emit('page_turn_execute', {
-        'request_id': 'request-1',
-        'requested_by_user_id': 'not-the-requester',
-        'direction': 'next',
-      });
-      await flushEvents();
-      expect(turns, 0);
-
-      transport.emit('page_turn_execute', {
-        'request_id': 'request-1',
-        'requested_by_user_id': 'user-a',
-        'direction': 'next',
-      });
-      await flushEvents();
-      expect(turns, 1);
-
-      transport.emit('page_position_commit', {
-        'request_id': 'request-1',
-        'requested_by_user_id': 'user-a',
-        'direction': 'previous',
-        'from_cfi': cfi,
-        'target_cfi': 'epubcfi(/6/6)',
-      });
-      await flushEvents();
-      expect(commits, 0);
-      expect(service.currentState.status, SyncStatus.turning);
-
-      transport.emit('page_position_commit', {
-        'request_id': 'request-1',
-        'requested_by_user_id': 'user-a',
-        'direction': 'next',
-        'from_cfi': cfi,
-        'target_cfi': 'epubcfi(/6/6)',
-      });
-      await flushEvents();
-      expect(commits, 1);
-      expect(service.currentState.status, SyncStatus.turning);
-
-      const targetCfi = 'epubcfi(/6/6)';
-      service.updateReaderContext(isReady: true, currentCfi: targetCfi);
-      expect(await service.acknowledgePagePosition(targetCfi), isTrue);
-      transport.emit('page_turn_complete', {
-        'request_id': 'request-1',
-        'requested_by_user_id': 'user-a',
-        'completed_by_user_id': 'user-a',
-        'direction': 'next',
-        'from_cfi': cfi,
-        'target_cfi': targetCfi,
-      });
-      await flushEvents();
-      expect(service.currentState.status, SyncStatus.idle);
-    });
-
-    test(
-      'requester waits for every display ack and completes only once',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-        final service = createService(transport, currentCfi: cfi);
-        var turns = 0;
-        service.onPageTurn = (_) => turns++;
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        );
-        final requestId = service.currentState.currentRequest!.requestId;
-        transport.emit('page_turn_confirm', {
-          'request_id': requestId,
-          'user_id': 'user-b',
-        });
-        await flushEvents();
-        expect(turns, 1);
-
-        const targetCfi = 'epubcfi(/6/8)';
-        service.updateReaderContext(isReady: true, currentCfi: targetCfi);
-        expect(await service.commitPagePosition(targetCfi), isTrue);
-        expect(await service.acknowledgePagePosition(targetCfi), isTrue);
-        await flushEvents();
-
-        expect(service.currentState.status, SyncStatus.turning);
-        expect(
-          transport.sentEvents.where(
-            (event) => event.event == 'page_turn_complete',
-          ),
-          isEmpty,
-        );
-
-        transport.emit('page_position_ack', {
-          'request_id': requestId,
-          'user_id': 'user-b',
-          'target_cfi': targetCfi,
-        });
-        transport.emit('page_position_ack', {
-          'request_id': requestId,
-          'user_id': 'user-b',
-          'target_cfi': targetCfi,
-        });
-        await flushEvents();
-
-        expect(service.currentState.status, SyncStatus.idle);
-        expect(
-          transport.sentEvents.where(
-            (event) => event.event == 'page_turn_complete',
-          ),
-          hasLength(1),
-        );
-        transport.emit('page_turn_execute', {
-          'request_id': requestId,
-          'requested_by_user_id': 'user-a',
-          'direction': 'next',
-        });
-        await flushEvents();
-        expect(turns, 1);
-      },
-    );
-
-    test(
-      'requester completes when an unacked reader leaves after commit',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-        final service = createService(transport, currentCfi: cfi);
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        );
-        final requestId = service.currentState.currentRequest!.requestId;
-        transport.emit('page_turn_confirm', {
-          'request_id': requestId,
-          'user_id': 'user-b',
-        });
-        await flushEvents();
-
-        const targetCfi = 'epubcfi(/6/9)';
-        service.updateReaderContext(isReady: true, currentCfi: targetCfi);
-        expect(await service.commitPagePosition(targetCfi), isTrue);
-        expect(await service.acknowledgePagePosition(targetCfi), isTrue);
-        await flushEvents();
-        expect(service.currentState.status, SyncStatus.turning);
-
-        transport.onlineUsers = [readyUser('user-a')];
-        transport.emitPresence({'event': 'leave'});
-        await flushEvents();
-
-        expect(service.currentState.status, SyncStatus.idle);
-        expect(
-          transport.sentEvents.where(
-            (event) => event.event == 'page_turn_complete',
-          ),
-          hasLength(1),
-        );
-      },
-    );
-
-    test(
-      'reader reconnect rejoins the roster for later page turns',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-        final service = createService(transport, currentCfi: cfi);
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        );
-        final requestId = service.currentState.currentRequest!.requestId;
-        transport.emit('page_turn_confirm', {
-          'request_id': requestId,
-          'user_id': 'user-b',
-        });
-        await flushEvents();
-
-        const targetCfi = 'epubcfi(/6/13)';
-        service.updateReaderContext(isReady: true, currentCfi: targetCfi);
-        expect(await service.commitPagePosition(targetCfi), isTrue);
-        expect(await service.acknowledgePagePosition(targetCfi), isTrue);
-
-        transport.onlineUsers = [readyUser('user-a')];
-        transport.emitPresence({'event': 'leave'});
-        await flushEvents();
-        expect(service.currentState.status, SyncStatus.idle);
-
-        transport.onlineUsers = [
-          readyUser('user-a'),
-          {
-            'user_id': 'user-b',
-            'is_reading': true,
-            'reader_ready': false,
-          },
-        ];
-        transport.emitPresence({'event': 'sync'});
-        await flushEvents();
+      for (var turn = 1; turn <= 4; turn++) {
+        final requester = turn.isOdd ? alice : bob;
+        final follower = turn.isOdd ? bob : alice;
 
         expect(
-          await service.requestPageTurn(
+          await requester.service.requestPageTurn(
             direction: PageTurnDirection.next,
-            fromCfi: targetCfi,
           ),
-          isFalse,
+          isTrue,
+          reason: 'turn $turn request',
         );
-        expect(service.currentState.errorMessage, contains('become ready'));
-      },
-    );
+        await flush();
+        expect(follower.service.currentState.status, SyncStatus.confirming);
+        await follower.service.confirmPageTurn();
+        await flush();
 
-    test(
-      'ignores a delayed confirmation from a reader that became unready',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-        final service = createService(transport, currentCfi: cfi);
-        var turns = 0;
-        service.onPageTurn = (_) => turns++;
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        );
-        final requestId = service.currentState.currentRequest!.requestId;
-        transport.onlineUsers = [
-          readyUser('user-a'),
-          {'user_id': 'user-b', 'is_reading': true, 'reader_ready': false},
-        ];
-        transport.emit('page_turn_confirm', {
-          'request_id': requestId,
-          'user_id': 'user-b',
-        });
-        await flushEvents();
-
-        expect(turns, 0);
-        expect(service.currentState.currentRequest!.confirmedUserIds, {
-          'user-a',
-        });
-      },
-    );
-
-    test(
-      'execute timeout rolls the reader back and releases the lock',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [readyUser('user-a')];
-        final service = createService(
-          transport,
-          currentCfi: cfi,
-          requestTimeout: const Duration(milliseconds: 20),
-        );
-        final recoveries = <String>[];
-        final committedStates = <bool>[];
-        service.onPositionRecovery = (targetCfi, positionWasCommitted) {
-          recoveries.add(targetCfi);
-          committedStates.add(positionWasCommitted);
-        };
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        );
-        expect(service.currentState.status, SyncStatus.turning);
-
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        expect(service.currentState.status, SyncStatus.idle);
-        expect(service.currentState.currentRequest, isNull);
-        expect(service.currentState.errorMessage, contains('timed out'));
-        expect(recoveries, [cfi]);
-        expect(committedStates, [isFalse]);
-      },
-    );
-
-    test('database persistence pauses the ambiguous execute timeout', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-      final requester = createService(
-        transport,
-        currentCfi: cfi,
-        requestTimeout: const Duration(milliseconds: 20),
-      );
-      final follower = createService(
-        transport,
-        userId: 'user-b',
-        nickname: 'Bob',
-        currentCfi: cfi,
-        requestTimeout: const Duration(milliseconds: 20),
-      );
-      addTearDown(() async {
-        await requester.dispose();
-        await follower.dispose();
-        await transport.dispose();
-      });
-
-      await requester.requestPageTurn(
-        direction: PageTurnDirection.next,
-        fromCfi: cfi,
-      );
-      await flushEvents();
-      expect(await follower.confirmPageTurn(), isTrue);
-      await flushEvents();
-      final requestId = requester.currentState.currentRequest!.requestId;
-      expect(await requester.beginPositionPersistence(requestId), isTrue);
-      await flushEvents();
-
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(requester.currentState.status, SyncStatus.turning);
-      expect(follower.currentState.status, SyncStatus.turning);
-      expect(requester.currentState.currentRequest?.requestId, requestId);
-      expect(follower.currentState.currentRequest?.requestId, requestId);
-
-      requester.reportPositionPersistenceFailure(
-        requestId: requestId,
-        error: StateError('database unavailable'),
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      await flushEvents();
-      expect(requester.currentState.status, SyncStatus.idle);
-      expect(follower.currentState.status, SyncStatus.idle);
-      expect(requester.currentState.errorMessage, contains('timed out'));
+        expect(alice.service.position.seq, turn, reason: 'alice turn $turn');
+        expect(bob.service.position.seq, turn, reason: 'bob turn $turn');
+        expect(alice.service.position, bob.service.position);
+        expect(alice.service.currentState.status, SyncStatus.idle);
+        expect(bob.service.currentState.status, SyncStatus.idle);
+        expect(alice.service.currentState.errorMessage, isNull);
+        expect(bob.service.currentState.errorMessage, isNull);
+      }
+      // The follower was told to display each page the requester landed on.
+      expect(bob.displayed.length, 2);
+      expect(alice.displayed.length, 2);
     });
 
-    test('missing display ack times out at the committed CFI', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-      final service = createService(
-        transport,
-        currentCfi: cfi,
-        requestTimeout: const Duration(milliseconds: 20),
-      );
-      final recoveries = <String>[];
-      final committedStates = <bool>[];
-      service.onPositionRecovery = (targetCfi, positionWasCommitted) {
-        recoveries.add(targetCfi);
-        committedStates.add(positionWasCommitted);
-      };
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
+    test('a reader reading alone turns without asking anyone', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      room.join('carol', 'Carol', isReading: false); // still in the lobby
+      addTearDown(room.dispose);
+      await flush();
 
-      await service.requestPageTurn(
-        direction: PageTurnDirection.next,
-        fromCfi: cfi,
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isTrue,
       );
-      final requestId = service.currentState.currentRequest!.requestId;
-      transport.emit('page_turn_confirm', {
+      await flush();
+
+      expect(alice.service.position.seq, 1);
+      expect(
+        room.sent.where((e) => e.event == PageSyncService.requestEvent),
+        isEmpty,
+      );
+    });
+
+    test('someone in the lobby or still loading never blocks a turn', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob');
+      room.join('carol', 'Carol', isReading: false);
+      room.join('dave', 'Dave', readerReady: false);
+      addTearDown(room.dispose);
+      await flush();
+
+      await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+      await flush();
+      expect(alice.service.currentState.currentRequest!.requiredUserIds, {
+        'alice',
+        'bob',
+      });
+      await bob.service.confirmPageTurn();
+      await flush();
+
+      expect(alice.service.position.seq, 1);
+      expect(bob.service.position.seq, 1);
+    });
+
+    test(
+      'a reader who opens the book late lands on the room\'s page',
+      () async {
+        final room = FakeRoom();
+        final alice = room.join('alice', 'Alice');
+        addTearDown(room.dispose);
+        await flush();
+        for (var i = 0; i < 3; i++) {
+          await alice.service.requestPageTurn(
+            direction: PageTurnDirection.next,
+          );
+          await flush();
+        }
+        expect(alice.service.position.seq, 3);
+
+        // Bob starts from the database, which may be behind.
+        final bob = room.join(
+          'bob',
+          'Bob',
+          initialPosition: const SharedPosition(seq: 0, cfi: 'db-cfi'),
+        );
+        await flush();
+
+        expect(bob.service.position, alice.service.position);
+        expect(bob.displayed, [alice.service.position]);
+      },
+    );
+
+    test('a lost commit still reaches the follower through Presence', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      room.dropEvents.add(PageSyncService.commitEvent);
+      await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+      await flush();
+      await bob.service.confirmPageTurn();
+      await flush();
+
+      expect(alice.service.position.seq, 1);
+      expect(bob.service.position, alice.service.position);
+      expect(bob.service.currentState.status, SyncStatus.idle);
+    });
+
+    test('a lost vote is sent again when the requester nudges', () async {
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        nudgeInterval: const Duration(milliseconds: 20),
+      );
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+      await flush();
+      room.dropEvents.add(PageSyncService.voteEvent);
+      await bob.service.confirmPageTurn();
+      await flush();
+      expect(alice.service.position.seq, 0);
+
+      room.dropEvents.clear();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await flush();
+
+      expect(alice.service.position.seq, 1);
+      expect(bob.service.position.seq, 1);
+    });
+
+    test(
+      'a follower that missed the request picks it up from a nudge',
+      () async {
+        final room = FakeRoom();
+        final alice = room.join(
+          'alice',
+          'Alice',
+          nudgeInterval: const Duration(milliseconds: 20),
+        );
+        final bob = room.join('bob', 'Bob');
+        addTearDown(room.dispose);
+        await flush();
+
+        room.dropEvents.add(PageSyncService.requestEvent);
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+        await flush();
+        expect(bob.service.currentState.status, SyncStatus.idle);
+
+        room.dropEvents.clear();
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        await flush();
+        expect(bob.service.currentState.status, SyncStatus.confirming);
+      },
+    );
+
+    test('declining names the reader and releases everyone', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+      await flush();
+      await bob.service.declinePageTurn();
+      await flush();
+
+      expect(alice.service.currentState.status, SyncStatus.idle);
+      expect(alice.service.currentState.currentRequest, isNull);
+      expect(
+        alice.service.currentState.errorMessage,
+        'Bob asked to wait on this page',
+      );
+      expect(bob.service.currentState.status, SyncStatus.idle);
+      expect(alice.service.position.seq, 0);
+    });
+
+    test('a reader who leaves the book stops blocking the turn', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob');
+      room.join('carol', 'Carol');
+      addTearDown(room.dispose);
+      await flush();
+
+      await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+      await flush();
+      await bob.service.confirmPageTurn();
+      await flush();
+      expect(alice.service.position.seq, 0, reason: 'still waiting for Carol');
+
+      room.setPresence('carol', isReading: false);
+      await flush();
+
+      expect(alice.service.position.seq, 1);
+      expect(bob.service.position.seq, 1);
+    });
+
+    test('a requester who leaves releases the readers it asked', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+      await flush();
+      expect(bob.service.currentState.status, SyncStatus.confirming);
+
+      room.leave('alice');
+      await flush();
+
+      expect(bob.service.currentState.status, SyncStatus.idle);
+      expect(bob.service.currentState.errorMessage, 'Alice left the book');
+    });
+
+    test('a request whose requester went silent expires', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join(
+        'bob',
+        'Bob',
+        followerLiveness: const Duration(milliseconds: 40),
+      );
+      addTearDown(room.dispose);
+      await flush();
+
+      await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+      await flush();
+      // Alice's app freezes: Presence still shows her, but nothing more is
+      // sent.
+      await alice.service.dispose();
+      expect(bob.service.currentState.status, SyncStatus.confirming);
+
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(bob.service.currentState.status, SyncStatus.idle);
+      expect(bob.service.currentState.currentRequest, isNull);
+    });
+
+    test('two readers pressing next together turn exactly one page', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      await Future.wait([
+        alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        bob.service.requestPageTurn(direction: PageTurnDirection.next),
+      ]);
+      await flush();
+      await flush();
+
+      expect(alice.service.position.seq, 1);
+      expect(bob.service.position, alice.service.position);
+      expect(alice.service.currentState.status, SyncStatus.idle);
+      expect(bob.service.currentState.status, SyncStatus.idle);
+      expect(room.turnsExecuted, 1);
+    });
+
+    test('a request from a page the room has left is refused', () async {
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        initialPosition: const SharedPosition(seq: 4, cfi: 'p4'),
+      );
+      addTearDown(room.dispose);
+      await flush();
+
+      room.inject(PageSyncService.requestEvent, {
+        'request_id': 'old',
+        'user_id': 'bob',
+        'nickname': 'Bob',
+        'direction': 'next',
+        'from_epoch': 0,
+        'from_seq': 2,
+        'requested_at': DateTime.now().toUtc().toIso8601String(),
+        'required_users': ['alice', 'bob'],
+      });
+      await flush();
+
+      expect(alice.service.currentState.status, SyncStatus.idle);
+      final vote = room.sent.singleWhere(
+        (e) => e.event == PageSyncService.voteEvent,
+      );
+      expect(vote.payload['accept'], isFalse);
+      expect(vote.payload['reason'], 'out_of_sync');
+    });
+
+    test('a requester that is behind is told so in plain words', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+      room.dropEvents.add(PageSyncService.requestEvent);
+
+      await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+      final requestId = alice.service.currentState.currentRequest!.requestId;
+      room.inject(PageSyncService.voteEvent, {
         'request_id': requestId,
-        'user_id': 'user-b',
+        'user_id': 'bob',
+        'accept': false,
+        'reason': 'out_of_sync',
       });
-      await flushEvents();
+      await flush();
 
-      const targetCfi = 'epubcfi(/6/10)';
-      service.updateReaderContext(isReady: true, currentCfi: targetCfi);
-      expect(await service.commitPagePosition(targetCfi), isTrue);
-      await flushEvents();
-      expect(service.currentState.status, SyncStatus.turning);
-
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(service.currentState.status, SyncStatus.idle);
-      expect(service.currentState.errorMessage, contains('timed out'));
-      expect(recoveries, [targetCfi]);
-      expect(committedStates, [isTrue]);
+      expect(alice.service.currentState.status, SyncStatus.idle);
+      expect(alice.service.currentState.errorMessage, isNot(contains('_')));
       expect(
-        transport.sentEvents.where(
-          (event) => event.event == 'page_turn_complete',
-        ),
-        isEmpty,
+        alice.service.currentState.errorMessage,
+        contains('different pages'),
       );
     });
 
-    test('database persistence failure remains retryable before commit', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [readyUser('user-a')];
-      final service = createService(transport, currentCfi: cfi);
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
+    test('a turn that cannot move releases everyone', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', canTurn: false);
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
 
-      await service.requestPageTurn(
-        direction: PageTurnDirection.next,
-        fromCfi: cfi,
+      await alice.service.requestPageTurn(
+        direction: PageTurnDirection.previous,
       );
-      final requestId = service.currentState.currentRequest!.requestId;
-      const targetCfi = 'epubcfi(/6/11)';
-      service.updateReaderContext(isReady: true, currentCfi: targetCfi);
-      service.reportPositionPersistenceFailure(
-        requestId: requestId,
-        error: StateError('database unavailable'),
-      );
+      await flush();
+      await bob.service.confirmPageTurn();
+      await flush();
 
-      expect(service.currentState.status, SyncStatus.turning);
-      expect(service.currentState.currentRequest?.requestId, requestId);
-      expect(service.currentState.errorMessage, contains('retrying'));
-      expect(
-        transport.sentEvents.where(
-          (event) => event.event == 'page_position_commit',
-        ),
-        isEmpty,
-      );
-
-      expect(await service.commitPagePosition(targetCfi), isTrue);
-      expect(await service.acknowledgePagePosition(targetCfi), isTrue);
-      await flushEvents();
-      expect(service.currentState.status, SyncStatus.idle);
+      expect(alice.service.position.seq, 0);
+      expect(alice.service.currentState.status, SyncStatus.idle);
+      expect(alice.service.currentState.errorMessage, contains('did not move'));
+      expect(bob.service.currentState.status, SyncStatus.idle);
+      expect(bob.service.currentState.currentRequest, isNull);
     });
 
-    test(
-      'completion send failure keeps the committed CFI authoritative',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-        final service = createService(transport, currentCfi: cfi);
-        final recoveries = <String>[];
-        final committedStates = <bool>[];
-        service.onPositionRecovery = (targetCfi, positionWasCommitted) {
-          recoveries.add(targetCfi);
-          committedStates.add(positionWasCommitted);
-        };
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        );
-        final requestId = service.currentState.currentRequest!.requestId;
-        transport.emit('page_turn_confirm', {
-          'request_id': requestId,
-          'user_id': 'user-b',
-        });
-        await flushEvents();
-
-        const targetCfi = 'epubcfi(/6/12)';
-        service.updateReaderContext(isReady: true, currentCfi: targetCfi);
-        expect(await service.commitPagePosition(targetCfi), isTrue);
-        expect(await service.acknowledgePagePosition(targetCfi), isTrue);
-        await flushEvents();
-        transport.failingEvents.add('page_turn_complete');
-        transport.emit('page_position_ack', {
-          'request_id': requestId,
-          'user_id': 'user-b',
-          'target_cfi': targetCfi,
-        });
-        await flushEvents();
-
-        expect(service.currentState.status, SyncStatus.idle);
-        expect(service.currentState.errorMessage, contains('complete'));
-        expect(recoveries, [targetCfi]);
-        expect(committedStates, [isTrue]);
-      },
-    );
-
-    test('arbitrates a lower request id while already waiting', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-      final service = createService(
-        transport,
-        userId: 'user-b',
-        nickname: 'Bob',
-        currentCfi: cfi,
+    test('a turn the viewer never finishes times out', () async {
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        neverRelocates: true,
+        turnTimeout: const Duration(milliseconds: 30),
       );
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
+      addTearDown(room.dispose);
+      await flush();
 
-      transport.emit(
-        'page_turn_request',
-        requestPayload(requestId: 'z-request', fromCfi: cfi),
-      );
-      await flushEvents();
-      await service.confirmPageTurn();
-      expect(service.currentState.status, SyncStatus.waiting);
-
-      transport.emit(
-        'page_turn_request',
-        requestPayload(requestId: 'a-request', fromCfi: cfi),
-      );
-      await flushEvents();
-
-      expect(service.currentState.status, SyncStatus.confirming);
-      expect(service.currentState.currentRequest!.requestId, 'a-request');
-    });
-
-    test('network failure returns to idle with an actionable error', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [readyUser('user-a')]
-        ..failingEvents.add('page_turn_request');
-      final service = createService(transport, currentCfi: cfi);
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
-
-      final requested = await service.requestPageTurn(
-        direction: PageTurnDirection.next,
-        fromCfi: cfi,
-      );
-
-      expect(requested, isFalse);
-      expect(service.currentState.status, SyncStatus.idle);
-      expect(service.currentState.currentRequest, isNull);
-      expect(service.currentState.errorMessage, contains('network failure'));
-    });
-
-    test('execute failure returns idle but commit failure stays retryable', () async {
-      final executeTransport = FakePageSyncTransport()
-        ..onlineUsers = [readyUser('user-a')]
-        ..failingEvents.add('page_turn_execute');
-      final executeService = createService(executeTransport, currentCfi: cfi);
-      addTearDown(() async {
-        await executeService.dispose();
-        await executeTransport.dispose();
-      });
-
-      final executed = await executeService.requestPageTurn(
-        direction: PageTurnDirection.next,
-        fromCfi: cfi,
-      );
-      expect(executed, isFalse);
-      expect(executeService.currentState.status, SyncStatus.idle);
-      expect(executeService.currentState.errorMessage, contains('execute'));
-
-      final commitTransport = FakePageSyncTransport()
-        ..onlineUsers = [readyUser('user-a')];
-      final commitService = createService(commitTransport, currentCfi: cfi);
-      addTearDown(() async {
-        await commitService.dispose();
-        await commitTransport.dispose();
-      });
-      await commitService.requestPageTurn(
-        direction: PageTurnDirection.next,
-        fromCfi: cfi,
-      );
-      commitTransport.failingEvents.add('page_position_commit');
-
-      final committed = await commitService.commitPagePosition('epubcfi(/6/6)');
-      expect(committed, isFalse);
-      expect(commitService.currentState.status, SyncStatus.turning);
-      expect(commitService.currentState.currentRequest, isNotNull);
-      expect(commitService.currentState.errorMessage, contains('retrying'));
-
-      commitTransport.failingEvents.remove('page_position_commit');
-      expect(
-        await commitService.commitPagePosition('epubcfi(/6/6)'),
-        isTrue,
-      );
-    });
-
-    test('rejects a stale request and broadcasts cancellation', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-      final service = createService(
-        transport,
-        userId: 'user-b',
-        nickname: 'Bob',
-        currentCfi: cfi,
-      );
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
-
-      transport.emit(
-        'page_turn_request',
-        requestPayload(requestId: 'stale-request', fromCfi: 'epubcfi(/6/2)'),
-      );
-      await flushEvents();
-
-      expect(service.currentState.status, SyncStatus.idle);
-      expect(
-        transport.sentEvents.any(
-          (event) =>
-              event.event == 'page_turn_cancel' &&
-              event.payload['request_id'] == 'stale-request',
-        ),
-        isTrue,
-      );
-    });
-
-    test('rejects a request from another reading session', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-      final service = createService(
-        transport,
-        userId: 'user-b',
-        nickname: 'Bob',
-        currentCfi: cfi,
-      );
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
-
-      final payload = requestPayload(
-        requestId: 'other-session-request',
-        fromCfi: cfi,
-      )..['session_id'] = 'session-2';
-      transport.emit('page_turn_request', payload);
-      await flushEvents();
-
-      expect(service.currentState.currentRequest, isNull);
-      expect(
-        transport.sentEvents.any(
-          (event) =>
-              event.event == 'page_turn_cancel' &&
-              event.payload['request_id'] == 'other-session-request',
-        ),
-        isTrue,
-      );
-    });
-
-    test(
-      'rejects an expired request after a reader session restarts',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-        final service = createService(
-          transport,
-          userId: 'user-b',
-          nickname: 'Bob',
-          currentCfi: cfi,
-        );
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        transport.emit(
-          'page_turn_request',
-          requestPayload(
-            requestId: 'expired-request',
-            fromCfi: cfi,
-            requestedAt: DateTime.now().toUtc().subtract(
-              const Duration(minutes: 1),
-            ),
-          ),
-        );
-        await flushEvents();
-
-        expect(service.currentState.status, SyncStatus.idle);
-        expect(
-          transport.sentEvents.any(
-            (event) =>
-                event.event == 'page_turn_cancel' &&
-                event.payload['request_id'] == 'expired-request',
-          ),
-          isTrue,
-        );
-      },
-    );
-
-    test(
-      'presence sync cancels when a required reader becomes unready',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [readyUser('user-a'), readyUser('user-b')];
-        final service = createService(transport, currentCfi: cfi);
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        await service.requestPageTurn(
-          direction: PageTurnDirection.next,
-          fromCfi: cfi,
-        );
-        final requestId = service.currentState.currentRequest!.requestId;
-        transport.onlineUsers = [
-          readyUser('user-a'),
-          {'user_id': 'user-b', 'is_reading': true, 'reader_ready': false},
-        ];
-        transport.emitPresence({'event': 'sync'});
-        await flushEvents();
-
-        expect(service.currentState.status, SyncStatus.idle);
-        // The wire reason stays a protocol identifier; the reader sees prose.
-        expect(
-          service.currentState.errorMessage,
-          contains('a reader is not ready yet'),
-        );
-        expect(
-          transport.sentEvents.any(
-            (event) =>
-                event.event == 'page_turn_cancel' &&
-                event.payload['request_id'] == requestId &&
-                event.payload['reason'] == 'required_reader_not_ready',
-          ),
-          isTrue,
-        );
-      },
-    );
-
-    test(
-      'dispose is idempotent, removes listeners, and ignores later events',
-      () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [readyUser('user-a')];
-        final service = createService(transport, currentCfi: cfi);
-
-        await service.dispose();
-        await service.dispose();
-        transport.emit(
-          'page_turn_request',
-          requestPayload(
-            requestId: 'after-dispose',
-            fromCfi: cfi,
-            requiredUsers: const ['user-a'],
-          ),
-        );
-        await flushEvents();
-
-        expect(service.currentState.status, SyncStatus.idle);
-        await transport.dispose();
-      },
-    );
-
-    test('a transient failure clears itself instead of pinning the bar', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [
-          readyUser('user-a'),
-          {'user_id': 'user-b', 'nickname': 'Bob', 'is_reading': false},
-        ];
-      final service = createService(
-        transport,
-        currentCfi: cfi,
-        errorAutoClearDelay: const Duration(milliseconds: 20),
-      );
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
-
-      await service.requestPageTurn(
-        direction: PageTurnDirection.next,
-        fromCfi: cfi,
-      );
-      expect(service.currentState.errorMessage, isNotNull);
-
+      await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+      expect(alice.service.currentState.status, SyncStatus.turning);
       await Future<void>.delayed(const Duration(milliseconds: 60));
 
-      expect(service.currentState.errorMessage, isNull);
-      expect(service.currentState.status, SyncStatus.idle);
-    });
-
-    test('the quorum failure names the reader that is holding it up', () async {
-      final transport = FakePageSyncTransport()
-        ..onlineUsers = [
-          readyUser('user-a'),
-          {'user_id': 'user-b', 'nickname': 'Bob', 'is_reading': false},
-        ];
-      final service = createService(transport, currentCfi: cfi);
-      addTearDown(() async {
-        await service.dispose();
-        await transport.dispose();
-      });
-
-      await service.requestPageTurn(
-        direction: PageTurnDirection.next,
-        fromCfi: cfi,
-      );
-
-      expect(service.currentState.errorMessage, contains('Bob'));
-      expect(service.currentState.errorMessage, contains('become ready'));
+      expect(alice.service.currentState.status, SyncStatus.idle);
+      expect(alice.abandoned, hasLength(1));
     });
 
     test(
-      'a participant who never opened the reader stops blocking once offline',
+      'an unanswered request times out and names who it waited for',
       () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [
-            readyUser('user-a'),
-            // In the room, still in the lobby: never reported is_reading.
-            {'user_id': 'user-b', 'nickname': 'Bob', 'is_reading': false},
-          ];
-        final service = createService(transport, currentCfi: cfi);
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
-        });
-
-        expect(
-          await service.requestPageTurn(
-            direction: PageTurnDirection.next,
-            fromCfi: cfi,
-          ),
-          isFalse,
+        final room = FakeRoom();
+        final alice = room.join(
+          'alice',
+          'Alice',
+          requestTimeout: const Duration(milliseconds: 40),
         );
+        room.join('bob', 'Bob');
+        addTearDown(room.dispose);
+        await flush();
 
-        // Bob closes the app: no presence meta at all any more.
-        transport.onlineUsers = [readyUser('user-a')];
-        transport.emitPresence({'event': 'leave'});
-        await flushEvents();
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+        await Future<void>.delayed(const Duration(milliseconds: 80));
 
+        expect(alice.service.currentState.status, SyncStatus.idle);
         expect(
-          await service.requestPageTurn(
-            direction: PageTurnDirection.next,
-            fromCfi: cfi,
-          ),
-          isTrue,
-        );
-        expect(
-          service.currentState.currentRequest?.requiredUserIds,
-          {'user-a'},
+          alice.service.currentState.errorMessage,
+          'Page turn timed out waiting for Bob',
         );
       },
     );
 
     test(
-      'a lobby participant blocks again after reconnecting to the room',
+      'a transient failure clears itself instead of pinning the bar',
       () async {
-        final transport = FakePageSyncTransport()
-          ..onlineUsers = [
-            readyUser('user-a'),
-            {'user_id': 'user-b', 'nickname': 'Bob', 'is_reading': false},
-          ];
-        final service = createService(transport, currentCfi: cfi);
-        addTearDown(() async {
-          await service.dispose();
-          await transport.dispose();
+        final room = FakeRoom();
+        final alice = room.join(
+          'alice',
+          'Alice',
+          errorAutoClearDelay: const Duration(milliseconds: 20),
+        );
+        final bob = room.join('bob', 'Bob');
+        addTearDown(room.dispose);
+        await flush();
+
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+        await flush();
+        await bob.service.declinePageTurn();
+        await flush();
+        expect(alice.service.currentState.errorMessage, isNotNull);
+
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(alice.service.currentState.errorMessage, isNull);
+        expect(alice.service.currentState.status, SyncStatus.idle);
+      },
+    );
+
+    test('fails closed until Presence includes this reader', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', trackPresence: false);
+      addTearDown(room.dispose);
+      await flush();
+
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isFalse,
+      );
+      expect(alice.service.currentState.errorMessage, contains('connecting'));
+      expect(alice.service.position.seq, 0);
+    });
+
+    test(
+      'a dropped connection does not let the requester turn alone',
+      () async {
+        final room = FakeRoom();
+        final alice = room.join('alice', 'Alice');
+        room.join('bob', 'Bob');
+        addTearDown(room.dispose);
+        await flush();
+
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+        await flush();
+        // A reconnect empties the Presence view for a moment.
+        room.blackout('alice');
+        await flush();
+
+        expect(alice.service.position.seq, 0);
+        expect(alice.service.currentState.status, SyncStatus.requesting);
+        expect(alice.service.currentState.currentRequest!.requiredUserIds, {
+          'alice',
+          'bob',
         });
+      },
+    );
 
-        transport.onlineUsers = [readyUser('user-a')];
-        transport.emitPresence({'event': 'leave'});
-        await flushEvents();
+    test('a reader whose connection dropped does not turn alone', () async {
+      // Regression: with the channel down, Presence read empty, so the
+      // quorum was this reader alone and the turn went through unasked — or
+      // the request was sent and failed with "Could not reach the other
+      // readers".
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
 
-        // Back on the channel, still in the lobby. A blip must not exempt a
-        // participant that a continuously connected one would not be exempt
-        // from — absence is the only thing that drops them.
-        transport.onlineUsers = [
-          readyUser('user-a'),
-          {'user_id': 'user-b', 'nickname': 'Bob', 'is_reading': false},
-        ];
-        transport.emitPresence({'event': 'sync'});
-        await flushEvents();
+      room.offline.add('alice');
+      room.blackout('alice');
+      await flush();
+
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isFalse,
+      );
+      expect(alice.service.position.seq, 0);
+      expect(alice.service.currentState.errorMessage, contains('Reconnecting'));
+      expect(
+        room.sent.where((e) => e.event == PageSyncService.requestEvent),
+        isEmpty,
+      );
+    });
+
+    test(
+      'right after a reconnect it waits for Presence before turning',
+      () async {
+        final room = FakeRoom();
+        final alice = room.join('alice', 'Alice');
+        room.join('bob', 'Bob');
+        addTearDown(room.dispose);
+        await flush();
+
+        // Connected again, but the new channel has not synced Presence yet.
+        room.blackout('alice');
+        await flush();
 
         expect(
-          await service.requestPageTurn(
+          await alice.service.requestPageTurn(
             direction: PageTurnDirection.next,
-            fromCfi: cfi,
           ),
           isFalse,
         );
-        expect(service.currentState.errorMessage, contains('Bob'));
+        expect(alice.service.position.seq, 0);
+        expect(alice.service.currentState.errorMessage, contains('connecting'));
       },
+    );
+
+    test('a loading reader cannot start a turn', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', viewerReady: false);
+      addTearDown(room.dispose);
+      await flush();
+
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isFalse,
+      );
+      expect(alice.service.currentState.errorMessage, contains('loading'));
+    });
+
+    test(
+      'a reader waking from an older stretch does not pull the room back',
+      () async {
+        // Regression: seq restarted at 0 for every reader who opened the book
+        // alone, so a reader who slept through a session with a higher seq
+        // dragged everyone back to their stale page when they woke.
+        final room = FakeRoom();
+        final bob = room.join(
+          'bob',
+          'Bob',
+          isReading: false, // asleep
+          initialPosition: const SharedPosition(epoch: 5, seq: 10, cfi: 'p10'),
+        );
+        final alice = room.join('alice', 'Alice', mintEpoch: () => 100);
+        addTearDown(room.dispose);
+        await flush();
+
+        for (var i = 0; i < 2; i++) {
+          await alice.service.requestPageTurn(
+            direction: PageTurnDirection.next,
+          );
+          await flush();
+        }
+        expect(alice.service.position.epoch, 100);
+        expect(alice.service.position.seq, 2);
+
+        room.setPresence('bob', isReading: true, readerReady: true);
+        await flush();
+
+        expect(alice.service.position.seq, 2, reason: 'Alice stays put');
+        expect(alice.displayed, isEmpty);
+        expect(bob.service.position, alice.service.position);
+      },
+    );
+
+    test('readers converge on one page after conflicting commits', () async {
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        initialPosition: const SharedPosition(seq: 2, cfi: 'aaa'),
+      );
+      final bob = room.join(
+        'bob',
+        'Bob',
+        initialPosition: const SharedPosition(seq: 2, cfi: 'bbb'),
+      );
+      addTearDown(room.dispose);
+      await flush();
+
+      expect(alice.service.position, const SharedPosition(seq: 2, cfi: 'bbb'));
+      expect(bob.service.position, const SharedPosition(seq: 2, cfi: 'bbb'));
+    });
+  });
+
+  test('cancel reasons are never shown as protocol codes', () {
+    for (final reason in [
+      'timeout',
+      'out_of_sync',
+      'requester_left',
+      'superseded',
+      'turn_failed',
+      'requester_busy',
+      'declined_by_Bob',
+      'something_new',
+    ]) {
+      expect(
+        describeCancelReason(reason),
+        isNot(contains('_')),
+        reason: reason,
+      );
+    }
+    expect(
+      describeCancelReason('declined_by_Bob'),
+      'Bob asked to wait on this page',
     );
   });
 }
 
-PageSyncService createService(
-  FakePageSyncTransport transport, {
-  String userId = 'user-a',
-  String nickname = 'Alice',
-  required String currentCfi,
-  Duration requestTimeout = const Duration(seconds: 30),
-  Duration errorAutoClearDelay = const Duration(hours: 1),
-}) {
-  final service = PageSyncService(
-    transport: transport,
-    currentUserId: userId,
-    currentNickname: nickname,
-    readingSessionId: 'session-1',
-    expectedParticipantUserIds: transport.onlineUsers
-        .map((user) => user['user_id'])
-        .whereType<String>()
-        .toSet(),
-    requestTimeout: requestTimeout,
-    errorAutoClearDelay: errorAutoClearDelay,
-  );
-  service.updateReaderContext(isReady: true, currentCfi: currentCfi);
-  service.initialize();
-  return service;
-}
-
-Map<String, dynamic> readyUser(String userId) => {
-  'user_id': userId,
-  'nickname': userId,
-  'is_reading': true,
-  'reader_ready': true,
-};
-
-Map<String, dynamic> requestPayload({
-  required String requestId,
-  required String fromCfi,
-  List<String> requiredUsers = const ['user-a', 'user-b'],
-  DateTime? requestedAt,
-}) {
-  return {
-    'session_id': 'session-1',
-    'request_id': requestId,
-    'user_id': 'user-a',
-    'nickname': 'Alice',
-    'direction': 'next',
-    'from_cfi': fromCfi,
-    'requested_at': (requestedAt ?? DateTime.now().toUtc()).toIso8601String(),
-    'required_users': requiredUsers,
-  };
-}
-
-Future<void> flushEvents() async {
-  await Future<void>.delayed(Duration.zero);
-  await Future<void>.delayed(Duration.zero);
+Future<void> flush() async {
+  for (var i = 0; i < 6; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
 }
 
 class SentEvent {
+  final String sender;
   final String event;
   final Map<String, dynamic> payload;
 
-  const SentEvent(this.event, this.payload);
+  const SentEvent(this.sender, this.event, this.payload);
 }
 
-class FakePageSyncTransport implements PageSyncTransport {
-  final Map<String, StreamController<Map<String, dynamic>>> _controllers = {};
-  final StreamController<Map<String, dynamic>> _presenceController =
-      StreamController<Map<String, dynamic>>.broadcast();
+/// A room of readers wired through one fake Realtime channel: broadcasts reach
+/// everyone (sender included, as with `self: true`), and every client sees the
+/// same Presence.
+class FakeRoom {
+  final Map<String, FakeReader> readers = {};
+  final Map<String, Map<String, dynamic>> _presence = {};
+  final Set<String> _blackedOut = {};
+  final Set<String> offline = {};
+  final List<SentEvent> sent = [];
+  final Set<String> dropEvents = {};
+  int turnsExecuted = 0;
 
-  List<Map<String, dynamic>> onlineUsers = [];
-  final List<SentEvent> sentEvents = [];
-  final Set<String> failingEvents = {};
-  bool echo = true;
+  FakeReader join(
+    String userId,
+    String nickname, {
+    bool isReading = true,
+    bool readerReady = true,
+    bool viewerReady = true,
+    bool trackPresence = true,
+    bool canTurn = true,
+    bool neverRelocates = false,
+    String layout = 'phone',
+    SharedPosition initialPosition = const SharedPosition.start(),
+    Duration requestTimeout = const Duration(minutes: 5),
+    Duration nudgeInterval = const Duration(minutes: 5),
+    Duration followerLiveness = const Duration(minutes: 5),
+    Duration turnTimeout = const Duration(minutes: 5),
+    Duration errorAutoClearDelay = const Duration(hours: 1),
+    int Function()? mintEpoch,
+  }) {
+    if (trackPresence) {
+      _presence[userId] = {
+        'user_id': userId,
+        'nickname': nickname,
+        'is_reading': isReading,
+        'reader_ready': readerReady,
+      };
+    }
+    final transport = FakeTransport(this, userId);
+    final service = PageSyncService(
+      transport: transport,
+      currentUserId: userId,
+      currentNickname: nickname,
+      initialPosition: initialPosition,
+      requestTimeout: requestTimeout,
+      nudgeInterval: nudgeInterval,
+      followerLiveness: followerLiveness,
+      turnTimeout: turnTimeout,
+      errorAutoClearDelay: errorAutoClearDelay,
+      mintEpoch: mintEpoch ?? () => 1,
+    );
+    final reader = FakeReader(service, transport);
+    var localPage = 0;
+    service.onExecuteTurn = (command) {
+      turnsExecuted++;
+      if (neverRelocates) return;
+      scheduleMicrotask(() {
+        if (!canTurn) {
+          service.abandonTurn(command.requestId);
+          return;
+        }
+        localPage += command.direction == PageTurnDirection.next ? 1 : -1;
+        // Each device paginates its own way: the CFI it lands on is its own.
+        service.completeTurn(command.requestId, 'cfi-$layout-$localPage');
+      });
+    };
+    service.onPositionChanged = reader.displayed.add;
+    service.onTurnAbandoned = reader.abandoned.add;
+    service.setViewerReady(viewerReady && isReading);
+    readers[userId] = reader;
+    service.initialize();
+    if (trackPresence) _emitPresence();
+    return reader;
+  }
+
+  void setPresence(String userId, {bool? isReading, bool? readerReady}) {
+    final meta = _presence[userId]!;
+    if (isReading != null) meta['is_reading'] = isReading;
+    if (readerReady != null) meta['reader_ready'] = readerReady;
+    _emitPresence();
+  }
+
+  void publishPosition(String userId, SharedPosition position) {
+    final meta = _presence[userId];
+    if (meta == null) return;
+    meta['page_epoch'] = position.epoch;
+    meta['page_seq'] = position.seq;
+    meta['page_cfi'] = position.cfi;
+    _emitPresence();
+  }
+
+  void leave(String userId) {
+    _presence.remove(userId);
+    _emitPresence();
+  }
+
+  /// This client's view of Presence goes empty, as during a reconnect.
+  void blackout(String userId) {
+    _blackedOut.add(userId);
+    readers[userId]!.transport.presence.add({'event': 'sync'});
+  }
+
+  List<Map<String, dynamic>> presenceFor(String userId) {
+    if (_blackedOut.contains(userId)) return const [];
+    return [for (final meta in _presence.values) Map.of(meta)];
+  }
+
+  void deliver(String sender, String event, Map<String, dynamic> payload) {
+    sent.add(SentEvent(sender, event, Map.of(payload)));
+    if (dropEvents.contains(event)) return;
+    for (final reader in readers.values.toList()) {
+      final copy = Map<String, dynamic>.from(payload);
+      scheduleMicrotask(() => reader.transport.receive(event, copy));
+    }
+  }
+
+  /// A message from a client that is not modelled here.
+  void inject(String event, Map<String, dynamic> payload) {
+    for (final reader in readers.values) {
+      reader.transport.receive(event, Map.of(payload));
+    }
+  }
+
+  void _emitPresence() {
+    for (final reader in readers.values.toList()) {
+      scheduleMicrotask(() {
+        if (!reader.transport.presence.isClosed) {
+          reader.transport.presence.add({'event': 'sync'});
+        }
+      });
+    }
+  }
+
+  Future<void> dispose() async {
+    for (final reader in readers.values) {
+      await reader.service.dispose();
+      await reader.transport.close();
+    }
+  }
+}
+
+class FakeReader {
+  final PageSyncService service;
+  final FakeTransport transport;
+  final List<SharedPosition> displayed = [];
+  final List<String> abandoned = [];
+
+  FakeReader(this.service, this.transport);
+}
+
+class FakeTransport implements PageSyncTransport {
+  final FakeRoom room;
+  final String userId;
+  final Map<String, StreamController<Map<String, dynamic>>> _controllers = {};
+  final presence = StreamController<Map<String, dynamic>>.broadcast();
+
+  FakeTransport(this.room, this.userId);
 
   @override
   Stream<Map<String, dynamic>> broadcastStream(String event) {
@@ -1239,33 +796,34 @@ class FakePageSyncTransport implements PageSyncTransport {
   }
 
   @override
-  Stream<Map<String, dynamic>> get presenceStream => _presenceController.stream;
+  Stream<Map<String, dynamic>> get presenceStream => presence.stream;
 
   @override
-  List<Map<String, dynamic>> getOnlineUsers() => onlineUsers;
+  List<Map<String, dynamic>> getOnlineUsers() => room.presenceFor(userId);
+
+  @override
+  bool get isConnected => !room.offline.contains(userId);
 
   @override
   Future<void> broadcast({
     required String event,
     required Map<String, dynamic> payload,
   }) async {
-    if (failingEvents.contains(event)) {
-      throw StateError('network failure for $event');
-    }
-    sentEvents.add(SentEvent(event, Map<String, dynamic>.from(payload)));
-    if (echo) emit(event, payload);
+    room.deliver(userId, event, payload);
   }
 
-  void emit(String event, Map<String, dynamic> payload) {
-    _controllers[event]?.add(Map<String, dynamic>.from(payload));
+  @override
+  Future<void> publishPosition(SharedPosition position) async {
+    room.publishPosition(userId, position);
   }
 
-  void emitPresence(Map<String, dynamic> event) {
-    _presenceController.add(Map<String, dynamic>.from(event));
+  void receive(String event, Map<String, dynamic> payload) {
+    final controller = _controllers[event];
+    if (controller != null && !controller.isClosed) controller.add(payload);
   }
 
-  Future<void> dispose() async {
-    await _presenceController.close();
+  Future<void> close() async {
+    await presence.close();
     for (final controller in _controllers.values) {
       await controller.close();
     }

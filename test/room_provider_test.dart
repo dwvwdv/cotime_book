@@ -8,6 +8,46 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('RoomNotifier', () {
+    test('overlapping position saves never leave an older page behind', () async {
+      // Regression: two saves raced; the newer committed first and the older
+      // one's conflict retry then wrote the older page over it.
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+      await notifier.joinRoom('ABC234', 'Alice');
+
+      final firstWrite = Completer<Room>();
+      service.cfiWrite = firstWrite;
+      final saves = [
+        notifier.saveReadingPosition('page-1'),
+        notifier.saveReadingPosition('page-2'),
+        notifier.saveReadingPosition('page-3'),
+      ];
+      await Future<void>.delayed(Duration.zero);
+      service.cfiWrite = null;
+      firstWrite.complete(
+        service.nextRoom.copyWith(currentCfi: 'page-1', revision: 1),
+      );
+      await Future.wait(saves);
+
+      expect(service.cfiWrites, ['page-1', 'page-3']);
+      expect(notifier.state.currentRoom?.currentCfi, 'page-3');
+    });
+
+    test('a dropped leave request is sent again', () async {
+      // Regression: one failed leave RPC left the member in everyone else's
+      // list until the server evicted them half an hour later.
+      final service = FakeRoomService()..leaveFailures = 1;
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.joinRoom('ABC234', 'Alice');
+      await notifier.leaveRoom();
+
+      expect(service.leaveCalls, 2);
+      expect(notifier.state.currentRoom, isNull);
+    });
+
     test('revoked heartbeat clears local room session and runs teardown', () async {
       final service = FakeRoomService()..heartbeatError =
           const RoomSessionRevokedException('membership expired');
@@ -506,6 +546,7 @@ class FakeRoomService extends RoomService {
   Room conflictRoom = testRoom();
   final List<int> cfiExpectedRevisions = [];
   final List<int> bookExpectedRevisions = [];
+  final List<String> cfiWrites = [];
 
   @override
   Future<Room> createRoom({required String nickname}) async => nextRoom;
@@ -540,6 +581,7 @@ class FakeRoomService extends RoomService {
     required int expectedRevision,
   }) async {
     lastCfiExpectedRevision = expectedRevision;
+    cfiWrites.add(cfi);
     cfiExpectedRevisions.add(expectedRevision);
     if (cfiConflicts > 0) {
       cfiConflicts--;
@@ -576,8 +618,16 @@ class FakeRoomService extends RoomService {
     );
   }
 
+  int leaveFailures = 0;
+  int leaveCalls = 0;
+
   @override
   Future<Map<String, dynamic>> leaveRoom({required String roomId}) async {
+    leaveCalls++;
+    if (leaveFailures > 0) {
+      leaveFailures--;
+      throw StateError('connection reset');
+    }
     return {'left': true};
   }
 }

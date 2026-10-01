@@ -15,6 +15,9 @@ class SyncStatusBar extends StatelessWidget {
 
   final PageSyncState syncState;
   final List<Map<String, dynamic>> onlineUsers;
+
+  /// False while the room channel is being rebuilt.
+  final bool isConnected;
   final VoidCallback? onConfirm;
   final VoidCallback? onDecline;
 
@@ -27,6 +30,7 @@ class SyncStatusBar extends StatelessWidget {
     super.key,
     required this.syncState,
     required this.onlineUsers,
+    this.isConnected = true,
     this.onConfirm,
     this.onDecline,
     this.ink = AppTheme.ink,
@@ -82,6 +86,23 @@ class SyncStatusBar extends StatelessWidget {
   );
 
   Widget _buildIdleBar() {
+    if (!isConnected) {
+      // "0 readers ready" during a reconnect reads as everyone having left.
+      return _frame(
+        child: Row(
+          children: [
+            Icon(Icons.sync, size: 20, color: ink),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Reconnecting to the room...',
+                style: _text(bold: true),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     final readyReaderCount = onlineUsers
         .where(
           (user) =>

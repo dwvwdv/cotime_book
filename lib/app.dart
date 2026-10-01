@@ -33,7 +33,8 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final isActive = state == AppLifecycleState.resumed;
+    final isActive = appActivityFor(state);
+    if (isActive == null) return;
     // Backgrounding is not leaving a room. Presence becomes transiently
     // unavailable and the database lease stops renewing until resume.
     unawaited(_updateAppLifecycle(isActive));
@@ -44,6 +45,12 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
       ref.read(roomProvider.notifier).setAppActive(isActive);
     } catch (error) {
       debugPrint('Unable to update room heartbeat lifecycle: $error');
+    }
+    if (isActive) {
+      // The socket is closed while the app sleeps (supabase_flutter does that
+      // on pause, and e-readers sleep between pages). If the library's own
+      // rejoin does not bring the room channel back, rebuild it.
+      ref.read(realtimeServiceProvider).checkConnection();
     }
     try {
       await ref.read(presenceProvider.notifier).setAppActive(isActive);
@@ -76,4 +83,19 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
       debugShowCheckedModeBanner: false,
     );
   }
+}
+
+/// Whether the room should see this app as active, or null to leave it as is.
+///
+/// `inactive` is a notification shade, a permission dialog, a transition: the
+/// reader is still looking at the page. Treating it as leaving dropped the
+/// reader out of the page-turn quorum for a moment and cancelled turns.
+bool? appActivityFor(AppLifecycleState state) {
+  return switch (state) {
+    AppLifecycleState.inactive => null,
+    AppLifecycleState.resumed => true,
+    AppLifecycleState.paused ||
+    AppLifecycleState.hidden ||
+    AppLifecycleState.detached => false,
+  };
 }
