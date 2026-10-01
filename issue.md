@@ -203,8 +203,9 @@
     +1 的整數），CFI 只拿來 `display()`。本機 relocate 永遠不會改動共享位置。
   - requester 是**唯一的協調者**：`request → vote(accept/decline) → 本機翻頁 → commit(seq+1, cfi)`。
     follower 只投票、只跟隨 commit，不再因為「自己對房間的看法不同」而取消別人的請求。
-  - 每個 reader 把 `page_seq` / `page_cfi` 放進 Presence。漏掉的 commit、晚進來的人、
+  - 每個 reader 定期對外宣告自己的位置。漏掉的 commit、晚進來的人、
     斷線重連的人，全都是「採用 reader 中最新的位置」而收斂——不需要回資料庫重試。
+    （原本放在 Presence，這是 #18 的根因；現在走 broadcast。）
   - 存活性明確化：requester 等待期間每 8 秒 re-broadcast 請求（遺失的請求會被補上、
     遺失的 vote 會重送）；follower 25 秒沒聽到就放掉；requester 離開 reader 時其他人立即放掉。
   - 只有「在 reader 裡且書已載入」的人會被詢問。在 lobby、背景、載入中的人不會擋住房間。
@@ -226,7 +227,7 @@
 - **測試**：`test/page_sync_service_test.dart`（多 client 的 `FakeRoom`，broadcast 與 Presence 共享）→
   `readers on different screens keep turning pages together`、
   `a reader who opens the book late lands on the room's page`、
-  `a lost commit still reaches the follower through Presence`、
+  `a lost commit still reaches the follower`、
   `a lost vote is sent again when the requester nudges`、
   `two readers pressing next together turn exactly one page`、
   `a dropped connection does not let the requester turn alone` 等 22 條。
@@ -348,13 +349,66 @@
 - **未在實機驗證**：library 的 `leaveOpenTopic` 自我退訂與 socket 競態是讀
   `realtime_client 2.10.0` 原始碼推得的；watchdog 不依賴哪一個才是實際觸發點。
 
+### [x] #18 兩台裝置都恆亮，Realtime 仍然頻繁斷線重連
+
+- **檔案**：`lib/services/realtime_service.dart`、`lib/services/page_sync_service.dart`、
+  `lib/services/presence_merge.dart`、`lib/providers/presence_provider.dart`
+- **症狀**：#17 合併後連線能自己接回來，但即使兩台裝置螢幕都恆亮、網路正常，
+  仍然每隔一陣子就「Reconnecting to the room...」。
+- **原因**：不是網路，也不是距離（專案在 ap-southeast-1 新加坡）。Supabase Realtime 的
+  log 在測試期間有 23 筆 `ClientPresenceRateLimitReached: :client_rate_limit_exceeded`：
+  **每個 client 每 30 秒最多 5 次 Presence 更新（track + untrack）**，超過時伺服器直接關掉
+  channel。#14 把 `page_seq` / `page_cfi` 放進 Presence，於是每翻一頁每個 reader 都
+  re-track 一次，再加上 `reader_ready`、`is_reading`、`has_book` 的變化，連續翻幾頁就超標。
+  channel 被關 → watchdog 重建 → 重建後又 track → 很快再超標，形成週期性斷線。
+- **修法**：
+  - 頁面位置**不再放進 Presence**。改成 broadcast：`page_position_query`（剛連上／重連後詢問）
+    與 `page_position`（回答，以及每 20 秒的定期宣告）。收斂規則不變——採用
+    `SharedPosition.isNewerThan` 最新的那個。
+  - follower 錯過 commit 時，下一個 request 會帶 `from_cfi`，follower 先跳到 requester 的頁
+    再投票；過期的 requester 收到的 `out_of_sync` 票帶著正確位置，直接採用。
+  - `RealtimeService` 的 Presence 更新改成**合併 + 限流**：500ms 內的多次變化只送最後一次，
+    且 30 秒內最多 4 次（低於伺服器的 5 次）；超過就延到視窗結束再送最新狀態。
+- **測試**：`test/realtime_service_test.dart` → group `Presence updates`
+  （`a burst of changes goes out as one update with the last value`、`never more than four updates per window`）；
+  `test/page_sync_service_test.dart` → `a lost commit still reaches the follower`、
+  `a follower that missed a commit catches up from the next request`、
+  `a reader waking from an older stretch does not pull the room back`。
+  已用 mutation 驗證：拿掉每視窗上限會讓 `never more than four updates per window` 失敗。
+- **未在實機驗證**：限流門檻是依 Supabase 文件與 log 的錯誤碼推得；若伺服器的計算方式
+  不同（例如 join 也算一次），可能需要再調低 `defaultMaxPresenceUpdatesPerWindow`。
+
+### [x] #19 有人斷線時，房間裡剩下的人可以自己翻頁，對方回來後畫面不同步
+
+- **檔案**：`lib/services/page_sync_service.dart`、`lib/models/page_sync_state.dart`、
+  `lib/widgets/sync_status_bar.dart`
+- **症狀**：兩人共讀，其中一人斷線（重連中），另一人的 quorum 只剩自己，可以隨意翻頁；
+  斷線的人回來時停在舊頁，兩邊畫面不同。
+- **原因**：quorum 只看「此刻在 Presence 裡、正在讀」的人。斷線的人從 Presence 消失，
+  跟「離開了」在協定上無法分辨，於是不再被詢問。
+- **修法**：
+  - 一個 reader 從 Presence 消失、但**沒有說自己要離開**，就視為「重連中」，
+    在 `defaultReconnectGrace`（1 分鐘）內**任何人都不能翻頁**。
+    主動離開不算：`leave()` 會廣播 `reader_left`，離開房間的 `membership_changed`
+    （action `leaving`）與 Presence 的 `is_reading: false` 也都會立刻解除等待。
+  - 不是靜默拒絕：同步列顯示「Waiting for {名字} to reconnect...」，按翻頁會得到
+    「Waiting for {名字} to reconnect」；翻頁進行中有人掉線，requester 取消這次翻頁並廣播
+    `reader_disconnected`（UI 顯示「Page turn paused: a reader is reconnecting」）。
+  - 對方一回到 Presence 就解除等待並互相詢問位置；超過 1 分鐘沒回來就放行，
+    之後他回來時靠位置宣告追上。
+- **測試**：`test/page_sync_service_test.dart` → `a reader who drops out holds the room until they are back`、
+  `the hold ends once the reconnect grace has passed`、`leaving on purpose never holds anyone up`、
+  `a reader dropping out mid-request pauses the turn`；`test/sync_status_bar_test.dart` →
+  `a reader who dropped out is named while turns are held`、`the bar keeps one height in every state`。
+  已用 mutation 驗證：拿掉 `requestPageTurn` 的等待閘門會讓測試失敗。
+
 ### [x] #A 不同螢幕尺寸的裝置之間 CFI 對不起來
 
 - 由 #14 的重新設計解決：共識比對 `seq`，不比對 CFI 字串。
 
 ### [x] #D reader 進場的頭幾毫秒會丟掉 page_turn 事件
 
-- 不再造成問題：遺失的請求會被 requester 的 nudge 補上，遺失的 commit 由 Presence 位置補上。
+- 不再造成問題：遺失的請求會被 requester 的 nudge 補上，遺失的 commit 由定期的位置宣告補上。
   （`RealtimeService` 的 controller 仍是 lazy 建立；broadcast stream 沒有 listener 時本來就會丟事件，
   提早建立 controller 也不會緩衝。）
 
@@ -449,3 +503,17 @@
   受 Realtime 的訊息配額限制，大房間或付費方案以外可能很慢。
 - **建議**：若可以接受書檔經過伺服器，改用 Supabase Storage（上傳一次、各自 HTTP 下載，
   RLS 依房間成員授權）。這牽涉到儲存成本與版權／隱私的產品決定，所以沒有在這次改。
+
+### [ ] #N Realtime log 出現對已無成員房間的 `Unauthorized` 訂閱
+
+- **檔案**：`lib/services/realtime_service.dart`（watchdog 重建）、
+  `supabase/migrations/20260812120002_harden_room_lifecycle.sql`（topic 授權）
+- **現象**：2026-10-01 10:27 UTC 有 2 筆
+  `Unauthorized: You do not have permissions to read from this Channel topic: cotime_book:room:6NZUHD`。
+  該房間仍存在，但已經沒有任何成員。
+- **推測**：某個 client 的成員資格已經結束（離開房間或被驅逐），channel 卻仍在嘗試加入——
+  可能是 library 自己的 rejoin，或 watchdog 在 `leave_room` 之後、`leaveRoom()` 之前的
+  空窗重建。伺服器拒絕是正確的，所以不會洩漏資料；影響只是多一次失敗的訂閱與退避。
+- **為什麼先不動**：只有兩筆、無使用者可見影響，而且還沒能重現是哪一條路徑。
+  若之後變多，watchdog 應在重建前確認成員資格，或把 `Unauthorized` 當成「已不在房間」
+  而停止重建並回到首頁。

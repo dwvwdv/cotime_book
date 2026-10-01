@@ -46,11 +46,15 @@ supabase/
    - 大家比對的是 `SharedPosition` 的 `(epoch, seq)`，**永遠不要比對 CFI 字串**——
      CFI 依本機分頁而定，不同螢幕同一頁的字串不同（見 issue #14）。CFI 只用來 `display()`。
      seq 只在一段連續閱讀裡單調，跨段靠 `epoch` 排序；排序只定義在
-     `SharedPosition.isNewerThan`，Presence 合併也用它，不要另寫一份。
+     `SharedPosition.isNewerThan`，位置宣告的合併也用它，不要另寫一份。
    - requester 是唯一的協調者；follower 只投票與跟隨 commit。
-   - 每個 reader 把 `page_seq` / `page_cfi` 放進 Presence，任何漏掉的訊息都靠
-     「採用 reader 中最新的位置」收斂。資料庫的 `current_cfi` 只是給之後才打開書的人用的
-     best-effort 紀錄。
+   - 每個 reader 用 broadcast 宣告位置（`page_position_query` / `page_position`，
+     另有每 20 秒的定期宣告），任何漏掉的訊息都靠「採用 reader 中最新的位置」收斂。
+     **不要把頁面位置放回 Presence**——見第 5 點的 Presence 限流（issue #18）。
+     資料庫的 `current_cfi` 只是給之後才打開書的人用的 best-effort 紀錄。
+   - reader 從 Presence 消失但沒說要離開（`reader_left`、`membership_changed` leaving、
+     `is_reading: false`），就視為重連中：1 分鐘內全房不能翻頁，並在同步列寫出在等誰
+     （issue #19）。新增「離開」路徑時要記得送出明確的離開訊號，否則會讓別人白等一分鐘。
    - reader 畫面不決定房間在哪一頁：它只顯示 shared position，以及在自己是 requester
      時翻一頁並回報落點。
    改這個檔案前先讀 `test/page_sync_service_test.dart`——它用多 client 的 `FakeRoom`
@@ -71,6 +75,9 @@ supabase/
    `RealtimeService` 有 watchdog 會重建壞掉的 channel（見 issue #17）。
    換 channel 時不要用 `removeChannel()`（它會在背景斷掉 socket），走 `remove(releaseSocket: false)`；
    任何依賴 Presence 的決策都要先確認 `isConnected`——斷線時的 Presence 是舊的或空的。
+   **Presence 更新有每 client 每 30 秒 5 次的上限**（track + untrack），超過時伺服器直接關掉
+   channel（`ClientPresenceRateLimitReached`）。`RealtimeService` 會合併並限流 Presence 更新；
+   Presence 只放變化不頻繁的狀態，會隨翻頁變化的東西一律走 broadcast（見 issue #18）。
 
 6. **傳書是 receiver 驅動的。** `FileTransferService` 的初次分享只是快速路徑；
    收書端缺什麼就向 Presence 裡持有這本書的人要，停滯就輪替持有者再要。

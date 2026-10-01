@@ -103,6 +103,26 @@ class SyncStatusBar extends StatelessWidget {
         ),
       );
     }
+    final reconnecting = syncState.readersReconnecting;
+    if (reconnecting.isNotEmpty) {
+      // Not silent: turns are held until they are back, and the bar says why.
+      return _frame(
+        child: Row(
+          children: [
+            Icon(Icons.hourglass_top, size: 20, color: ink),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Waiting for ${reconnecting.join(', ')} to reconnect...',
+                style: _text(bold: true),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     final readyReaderCount = onlineUsers
         .where(
           (user) =>
