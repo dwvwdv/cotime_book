@@ -61,6 +61,8 @@ supabase/
      （最小的頁框、最大的字級，由 Presence 的 `page_fit` 算出）上、用內建字型與固定行高排版，
      由 `assets/reader/shared_page.js` 在書載入後套用。不要讓書回到用本機視窗或系統字型排版，
      也不要用 CSS transform 縮放頁面——epub.js 會因此算錯頁首 CFI。
+     頁首 CFI 以「第一個可見字元」計算（`shared_page.js` 換掉了 epub.js 用空白切詞的方法，
+     issue #21）——中文沒有空白，用詞切會讓頁首指到上一頁。
      改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，跑
      `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致。
    改這個檔案前先讀 `test/page_sync_service_test.dart`——它用多 client 的 `FakeRoom`

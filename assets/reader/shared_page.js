@@ -51,6 +51,52 @@
     });
   }
 
+  // epub.js names a page by the first visible "word", and finds words by
+  // splitting text on spaces. Chinese has no spaces, so a whole paragraph is
+  // one word: a page that begins halfway through a paragraph is named by
+  // where the paragraph starts — on the page before. The requester turned,
+  // but the CFI it handed the room showed everyone else the page they were
+  // already on (issue #21). It also gave every page inside one long
+  // paragraph the same name, so the reader could not tell a turn from a
+  // re-layout. Splitting into characters names each page by its first
+  // visible character.
+  function installCharacterPageStarts() {
+    var manager = rendition.manager;
+    if (!manager || !manager.mapping) return false;
+    var proto = Object.getPrototypeOf(manager.mapping);
+    if (proto.cotimeCharacterRanges) return true;
+    proto.splitTextNodeIntoRanges = function (node) {
+      var doc = node.ownerDocument;
+      var range;
+      if (node.nodeType !== Node.TEXT_NODE) {
+        range = doc.createRange();
+        range.selectNodeContents(node);
+        return [range];
+      }
+      var text = node.textContent || '';
+      var ranges = [];
+      var offset = 0;
+      // By code point, so a range never splits a surrogate pair.
+      for (var ch of text) {
+        if (!/\s/.test(ch)) {
+          range = doc.createRange();
+          range.setStart(node, offset);
+          range.setEnd(node, offset + ch.length);
+          ranges.push(range);
+        }
+        offset += ch.length;
+      }
+      if (ranges.length === 0) {
+        range = doc.createRange();
+        range.selectNodeContents(node);
+        ranges.push(range);
+      }
+      return ranges;
+    };
+    proto.cotimeCharacterRanges = true;
+    return true;
+  }
+
   var stylesInstalled = false;
 
   window.cotimeSharedPage = {
@@ -62,6 +108,7 @@
     apply: async function (page) {
       if (typeof rendition === 'undefined' || !rendition) return false;
       await firstPageShown();
+      installCharacterPageStarts();
 
       var body = document.body;
       body.style.margin = '0';
