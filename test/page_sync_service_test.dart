@@ -305,6 +305,7 @@ void main() {
         'user_id': 'bob',
         'nickname': 'Bob',
         'direction': 'next',
+        'from_epoch': 0,
         'from_seq': 2,
         'requested_at': DateTime.now().toUtc().toIso8601String(),
         'required_users': ['alice', 'bob'],
@@ -485,6 +486,41 @@ void main() {
       expect(alice.service.currentState.errorMessage, contains('loading'));
     });
 
+    test(
+      'a reader waking from an older stretch does not pull the room back',
+      () async {
+        // Regression: seq restarted at 0 for every reader who opened the book
+        // alone, so a reader who slept through a session with a higher seq
+        // dragged everyone back to their stale page when they woke.
+        final room = FakeRoom();
+        final bob = room.join(
+          'bob',
+          'Bob',
+          isReading: false, // asleep
+          initialPosition: const SharedPosition(epoch: 5, seq: 10, cfi: 'p10'),
+        );
+        final alice = room.join('alice', 'Alice', mintEpoch: () => 100);
+        addTearDown(room.dispose);
+        await flush();
+
+        for (var i = 0; i < 2; i++) {
+          await alice.service.requestPageTurn(
+            direction: PageTurnDirection.next,
+          );
+          await flush();
+        }
+        expect(alice.service.position.epoch, 100);
+        expect(alice.service.position.seq, 2);
+
+        room.setPresence('bob', isReading: true, readerReady: true);
+        await flush();
+
+        expect(alice.service.position.seq, 2, reason: 'Alice stays put');
+        expect(alice.displayed, isEmpty);
+        expect(bob.service.position, alice.service.position);
+      },
+    );
+
     test('readers converge on one page after conflicting commits', () async {
       final room = FakeRoom();
       final alice = room.join(
@@ -512,6 +548,7 @@ void main() {
       'requester_left',
       'superseded',
       'turn_failed',
+      'requester_busy',
       'declined_by_Bob',
       'something_new',
     ]) {
@@ -569,6 +606,7 @@ class FakeRoom {
     Duration followerLiveness = const Duration(minutes: 5),
     Duration turnTimeout = const Duration(minutes: 5),
     Duration errorAutoClearDelay = const Duration(hours: 1),
+    int Function()? mintEpoch,
   }) {
     if (trackPresence) {
       _presence[userId] = {
@@ -589,6 +627,7 @@ class FakeRoom {
       followerLiveness: followerLiveness,
       turnTimeout: turnTimeout,
       errorAutoClearDelay: errorAutoClearDelay,
+      mintEpoch: mintEpoch ?? () => 1,
     );
     final reader = FakeReader(service, transport);
     var localPage = 0;
@@ -624,6 +663,7 @@ class FakeRoom {
   void publishPosition(String userId, SharedPosition position) {
     final meta = _presence[userId];
     if (meta == null) return;
+    meta['page_epoch'] = position.epoch;
     meta['page_seq'] = position.seq;
     meta['page_cfi'] = position.cfi;
     _emitPresence();

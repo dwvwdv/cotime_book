@@ -14,51 +14,87 @@ PageTurnDirection? pageTurnDirectionFromWire(Object? value) {
 
 /// The page the whole room is on.
 ///
-/// [seq] is what readers agree on; [cfi] is only where to display it. A CFI is
-/// computed from the local pagination — screen size, font size, a resize — so
-/// two readers on the same page routinely hold different strings for it. The
-/// previous protocol compared those strings for equality and therefore
-/// rejected nearly every turn between two different devices. A counter that
-/// only ever moves when a turn commits means the same thing everywhere.
+/// Readers agree on ([epoch], [seq]); [cfi] is only where to display it. A CFI
+/// is computed from the local pagination — screen size, font size, a resize —
+/// so two readers on the same page routinely hold different strings for it.
+/// The previous protocol compared those strings for equality and therefore
+/// rejected nearly every turn between two different devices.
+///
+/// [seq] counts commits, but only within one stretch of reading: a reader who
+/// opens the book when nobody else is reading starts again from the database
+/// at seq 0. [epoch] tells those stretches apart. It is minted (a wall-clock
+/// timestamp) by the first commit of a stretch that started at epoch 0, so a
+/// reader coming back from sleep with a high seq from an *older* stretch can
+/// never drag the room back to its stale page.
 class SharedPosition {
+  final int epoch;
   final int seq;
 
   /// Empty means "the start of the book": a room that has never turned a page
   /// has no CFI yet.
   final String cfi;
 
-  const SharedPosition({required this.seq, required this.cfi});
+  const SharedPosition({this.epoch = 0, required this.seq, required this.cfi});
 
-  const SharedPosition.start() : seq = 0, cfi = '';
+  const SharedPosition.start() : epoch = 0, seq = 0, cfi = '';
 
-  /// Total order used to converge. Two commits for the same seq can only come
-  /// from a race between overlapping quorums; picking the larger CFI is
-  /// arbitrary, but every client picks the same one.
+  /// Total order used to converge. Two commits for the same (epoch, seq) can
+  /// only come from a race between overlapping quorums; picking the larger CFI
+  /// is arbitrary, but every client picks the same one.
   bool isNewerThan(SharedPosition other) {
+    if (epoch != other.epoch) return epoch > other.epoch;
     if (seq != other.seq) return seq > other.seq;
     return cfi.compareTo(other.cfi) > 0;
   }
 
-  SharedPosition advancedTo(String targetCfi) =>
-      SharedPosition(seq: seq + 1, cfi: targetCfi);
+  /// Whether this page comes after the page ([fromEpoch], [fromSeq]) a request
+  /// was made from — i.e. the request is stale.
+  bool isPastPage(int fromEpoch, int fromSeq) {
+    if (epoch != fromEpoch) return epoch > fromEpoch;
+    return seq > fromSeq;
+  }
+
+  /// The page one commit after ([fromEpoch], [fromSeq]).
+  static SharedPosition committed({
+    required int fromEpoch,
+    required int fromSeq,
+    required String cfi,
+    required int Function() mintEpoch,
+  }) {
+    return SharedPosition(
+      epoch: fromEpoch == 0 ? mintEpoch() : fromEpoch,
+      seq: fromSeq + 1,
+      cfi: cfi,
+    );
+  }
 
   /// Reads the position a reader advertises in its Presence meta.
   static SharedPosition? fromPresence(Map<String, dynamic> user) {
+    final epoch = user['page_epoch'] ?? 0;
     final seq = user['page_seq'];
     final cfi = user['page_cfi'];
-    if (seq is! int || seq < 0 || cfi is! String) return null;
-    return SharedPosition(seq: seq, cfi: cfi);
+    if (epoch is! int ||
+        epoch < 0 ||
+        seq is! int ||
+        seq < 0 ||
+        cfi is! String) {
+      return null;
+    }
+    return SharedPosition(epoch: epoch, seq: seq, cfi: cfi);
   }
 
   @override
   bool operator ==(Object other) =>
-      other is SharedPosition && other.seq == seq && other.cfi == cfi;
+      other is SharedPosition &&
+      other.epoch == epoch &&
+      other.seq == seq &&
+      other.cfi == cfi;
 
   @override
-  int get hashCode => Object.hash(seq, cfi);
+  int get hashCode => Object.hash(epoch, seq, cfi);
 
   @override
-  String toString() => 'SharedPosition($seq, $cfi)';
+  String toString() => 'SharedPosition($epoch:$seq, $cfi)';
 }
 
 enum SyncStatus {
@@ -86,6 +122,7 @@ class PageTurnRequest {
 
   /// The shared page the turn starts from. A request from an older page is
   /// stale by definition.
+  final int fromEpoch;
   final int fromSeq;
   final DateTime requestedAt;
   final Set<String> confirmedUserIds;
@@ -96,6 +133,7 @@ class PageTurnRequest {
     required this.requestedByUserId,
     required this.requestedByNickname,
     required this.direction,
+    this.fromEpoch = 0,
     required this.fromSeq,
     required this.requestedAt,
     required this.confirmedUserIds,
@@ -130,6 +168,7 @@ class PageTurnRequest {
       requestedByUserId: requestedByUserId,
       requestedByNickname: requestedByNickname,
       direction: direction,
+      fromEpoch: fromEpoch,
       fromSeq: fromSeq,
       requestedAt: requestedAt,
       confirmedUserIds: confirmedUserIds ?? this.confirmedUserIds,
@@ -143,6 +182,7 @@ class PageTurnRequest {
       'user_id': requestedByUserId,
       'nickname': requestedByNickname,
       'direction': pageTurnDirectionToWire(direction),
+      'from_epoch': fromEpoch,
       'from_seq': fromSeq,
       'requested_at': requestedAt.toUtc().toIso8601String(),
       'required_users': requiredUserIds.toList()..sort(),
@@ -157,6 +197,7 @@ class PageTurnRequest {
 
     final requestId = json['request_id'];
     final requestedByUserId = json['user_id'];
+    final fromEpoch = json['from_epoch'];
     final fromSeq = json['from_seq'];
     final rawRequestedAt = json['requested_at'];
     final requestedAt = rawRequestedAt is String
@@ -166,6 +207,8 @@ class PageTurnRequest {
         requestId.isEmpty ||
         requestedByUserId is! String ||
         requestedByUserId.isEmpty ||
+        fromEpoch is! int ||
+        fromEpoch < 0 ||
         fromSeq is! int ||
         fromSeq < 0 ||
         requestedAt == null) {
@@ -190,6 +233,7 @@ class PageTurnRequest {
           ? json['nickname'] as String
           : 'Unknown',
       direction: direction,
+      fromEpoch: fromEpoch,
       fromSeq: fromSeq,
       requestedAt: requestedAt,
       confirmedUserIds: {requestedByUserId},

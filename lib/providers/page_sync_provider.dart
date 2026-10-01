@@ -75,7 +75,8 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     return _service?.completeTurn(requestId, targetCfi);
   }
 
-  void abandonTurn(String requestId) => _service?.abandonTurn(requestId);
+  void abandonTurn(String requestId, {String reason = 'turn_failed'}) =>
+      _service?.abandonTurn(requestId, reason: reason);
 
   Future<void> stop({bool clearCallbacks = true}) async {
     _lifecycleGeneration++;

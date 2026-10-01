@@ -1,3 +1,5 @@
+import '../models/page_sync_state.dart';
+
 /// Collapses multiple device/connection metas into one logical room member.
 ///
 /// Supabase Presence is keyed per connection, so one logical user can appear
@@ -48,32 +50,35 @@ List<Map<String, dynamic>> mergePresenceUsers(
 /// The newest page any of this user's reading connections holds.
 ///
 /// Taken from reading metas only: a lobby meta's position is whatever page that
-/// connection last saw, and must not drag the merged row backwards.
+/// connection last saw, and must not drag the merged row backwards. Ordered by
+/// [SharedPosition.isNewerThan], the same order [PageSyncService] converges on.
 void _mergeReadingPosition(
   Map<String, dynamic> merged,
   List<Map<String, dynamic>> metas,
 ) {
-  merged.remove('page_seq');
-  merged.remove('page_cfi');
-  int? bestSeq;
-  String? bestCfi;
+  merged
+    ..remove('page_epoch')
+    ..remove('page_seq')
+    ..remove('page_cfi');
+  SharedPosition? newest;
   for (final meta in metas) {
-    final seq = meta['page_seq'];
-    final cfi = meta['page_cfi'];
-    if (meta['is_reading'] != true || seq is! int || cfi is! String) continue;
-    final isNewer =
-        bestSeq == null ||
-        seq > bestSeq ||
-        (seq == bestSeq && cfi.compareTo(bestCfi!) > 0);
-    if (isNewer) {
-      bestSeq = seq;
-      bestCfi = cfi;
-    }
+    if (meta['is_reading'] != true) continue;
+    final position = SharedPosition.fromPresence(meta);
+    if (position == null) continue;
+    if (newest == null || position.isNewerThan(newest)) newest = position;
   }
-  if (bestSeq != null) {
-    merged['page_seq'] = bestSeq;
-    merged['page_cfi'] = bestCfi;
+  if (newest != null) {
+    merged['page_epoch'] = newest.epoch;
+    merged['page_seq'] = newest.seq;
+    merged['page_cfi'] = newest.cfi;
   }
+}
+
+/// Whether a merged Presence row holds the book [bookHash] — i.e. can serve
+/// it, and has it ready to read.
+bool presenceHoldsBook(Map<String, dynamic> user, String bookHash) {
+  final hashes = user['ready_book_hashes'];
+  return hashes is List && hashes.contains(bookHash);
 }
 
 DateTime presenceTime(Map<String, dynamic> presence) {

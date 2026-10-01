@@ -74,6 +74,32 @@ void main() {
     expect(users.single['page_cfi'], 'p6');
   });
 
+  test('a newer reading stretch outranks a higher page count', () {
+    // A meta from an earlier stretch of reading (lower epoch) can carry a
+    // larger seq; it is still the older page.
+    final users = mergePresenceUsers([
+      {
+        'user_id': 'alice',
+        'is_reading': true,
+        'page_epoch': 1,
+        'page_seq': 10,
+        'page_cfi': 'old',
+        'online_at': '2026-08-12T01:00:00Z',
+      },
+      {
+        'user_id': 'alice',
+        'is_reading': true,
+        'page_epoch': 2,
+        'page_seq': 1,
+        'page_cfi': 'new',
+        'online_at': '2026-08-12T00:00:00Z',
+      },
+    ]);
+
+    expect(users.single['page_epoch'], 2);
+    expect(users.single['page_cfi'], 'new');
+  });
+
   test('the reading position is published while reading and dropped after',
       () async {
     final realtime = _RecordingRealtimeService();
@@ -295,6 +321,7 @@ class _DeferredConnectionRealtimeService extends RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    int? pageEpoch,
     int? pageSeq,
     String? pageCfi,
   }) async {}
@@ -351,6 +378,7 @@ class _RecordingRealtimeService extends RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    int? pageEpoch,
     int? pageSeq,
     String? pageCfi,
   }) async {
@@ -374,6 +402,7 @@ class _RecordingRealtimeService extends RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    int? pageEpoch,
     int? pageSeq,
     String? pageCfi,
   }) async {

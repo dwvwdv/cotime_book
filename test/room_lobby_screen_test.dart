@@ -93,6 +93,21 @@ void main() {
       expect(running.isHostStart, isFalse);
     });
 
+    test('the host joins a running session instead of restarting it', () {
+      // "Start" broadcasts start_reading, which would pull back into the
+      // reader members who had just chosen to leave it.
+      final lobby = readiness(
+        members: [member('host'), member('bob'), member('carol')],
+        onlineUsers: [
+          online('host'),
+          online('bob', isReading: true),
+          online('carol'),
+        ],
+      );
+      expect(lobby.canOpenReader, isTrue);
+      expect(lobby.isHostStart, isFalse);
+    });
+
     test('nobody can open the reader without the book on this device', () {
       expect(
         readiness(

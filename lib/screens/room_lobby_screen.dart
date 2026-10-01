@@ -10,6 +10,7 @@ import '../providers/auth_provider.dart';
 import '../providers/book_provider.dart';
 import '../providers/presence_provider.dart';
 import '../providers/room_provider.dart';
+import '../services/presence_merge.dart';
 import '../widgets/member_list.dart';
 import '../widgets/paper.dart';
 import '../widgets/room_code_display.dart';
@@ -667,7 +668,9 @@ class LobbyReadiness {
       (user) =>
           user['user_id'] != currentUserId && user['is_reading'] == true,
     );
-    final isHostStart = isHost;
+    // During a running session the host joins like anyone else. "Start" would
+    // broadcast start_reading and pull back in members who chose to leave.
+    final isHostStart = isHost && !someoneReading;
 
     if (currentBookHash == null) {
       return LobbyReadiness(
@@ -709,8 +712,7 @@ class LobbyReadiness {
         .where((member) {
           final presence = onlineById[member.userId];
           if (presence == null) return false;
-          final hashes = presence['ready_book_hashes'];
-          return !(hashes is List && hashes.contains(currentBookHash));
+          return !presenceHoldsBook(presence, currentBookHash);
         })
         .map((member) => member.nickname)
         .toList()

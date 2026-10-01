@@ -180,8 +180,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   void _handlePositionChanged(SharedPosition position) {
     if (!mounted || _leaving) return;
-    // Any turn of ours is void now; the service has already dropped it.
-    _pendingTurn = null;
+    // A position that voids our turn arrives after onTurnAbandoned, which
+    // already cleared it. One that does not (a tie-break on the page the turn
+    // started from) is overtaken by the turn landing: displaying it now would
+    // swallow the turn's relocation and orphan the turn.
+    if (_pendingTurn != null) return;
     if (!_positionKnown || !_viewerLoaded) {
       _queuedCfi = position.cfi;
       return;
@@ -219,7 +222,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   void _handleExecuteTurn(PageTurnCommand command) {
     if (!mounted || !_viewerReadyForTurns) {
-      _pageSync.abandonTurn(command.requestId);
+      // Not "start or end of the book": the viewer was busy, and every reader
+      // is shown this reason.
+      _pageSync.abandonTurn(command.requestId, reason: 'requester_busy');
       return;
     }
     _snapBackFrom = null;

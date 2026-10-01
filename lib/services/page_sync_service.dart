@@ -68,10 +68,10 @@ class RealtimePageSyncTransport implements PageSyncTransport {
 ///
 /// Design rules, each one the answer to a way the previous protocol got stuck:
 ///
-/// * **Readers agree on [SharedPosition.seq], never on CFI strings.** A CFI is
-///   a product of local pagination, so two devices on the same page disagree
-///   about it. Equality on CFIs rejected almost every turn between different
-///   screens and nothing ever brought them back together.
+/// * **Readers agree on [SharedPosition]'s (epoch, seq), never on CFI
+///   strings.** A CFI is a product of local pagination, so two devices on the
+///   same page disagree about it. Equality on CFIs rejected almost every turn
+///   between different screens and nothing ever brought them back together.
 /// * **The requester is the only coordinator.** Followers vote and follow the
 ///   commit; they never cancel a request because *their* view of the room
 ///   differs from the requester's.
@@ -102,7 +102,10 @@ class PageSyncService {
   static const defaultRequestTimeout = Duration(minutes: 2);
   static const defaultNudgeInterval = Duration(seconds: 8);
   static const defaultFollowerLiveness = Duration(seconds: 25);
-  static const defaultTurnTimeout = Duration(seconds: 8);
+
+  /// Short: on the first or last page the viewer simply never relocates, and
+  /// everyone waits this long to find out.
+  static const defaultTurnTimeout = Duration(seconds: 4);
 
   static const _maxRememberedRequestIds = 200;
 
@@ -115,6 +118,7 @@ class PageSyncService {
   final Duration _followerLiveness;
   final Duration _turnTimeout;
   final Duration _errorAutoClearDelay;
+  final int Function() _mintEpoch;
 
   final _stateController = StreamController<PageSyncState>.broadcast();
   final List<StreamSubscription<Map<String, dynamic>>> _subscriptions = [];
@@ -160,6 +164,7 @@ class PageSyncService {
     Duration followerLiveness = defaultFollowerLiveness,
     Duration turnTimeout = defaultTurnTimeout,
     Duration errorAutoClearDelay = defaultErrorAutoClearDelay,
+    int Function()? mintEpoch,
   }) : _transport = transport,
        _currentUserId = currentUserId,
        _currentNickname = currentNickname,
@@ -169,7 +174,10 @@ class PageSyncService {
        _nudgeInterval = nudgeInterval,
        _followerLiveness = followerLiveness,
        _turnTimeout = turnTimeout,
-       _errorAutoClearDelay = errorAutoClearDelay;
+       _errorAutoClearDelay = errorAutoClearDelay,
+       _mintEpoch = mintEpoch ?? _wallClockEpoch;
+
+  static int _wallClockEpoch() => DateTime.now().millisecondsSinceEpoch;
 
   Stream<PageSyncState> get stateStream => _stateController.stream;
   PageSyncState get currentState => _state;
@@ -234,6 +242,7 @@ class PageSyncService {
       requestedByUserId: _currentUserId,
       requestedByNickname: _currentNickname,
       direction: direction,
+      fromEpoch: _position.epoch,
       fromSeq: _position.seq,
       requestedAt: DateTime.now().toUtc(),
       confirmedUserIds: {_currentUserId},
@@ -340,7 +349,12 @@ class PageSyncService {
       return null;
     }
 
-    final next = SharedPosition(seq: request.fromSeq + 1, cfi: targetCfi);
+    final next = SharedPosition.committed(
+      fromEpoch: request.fromEpoch,
+      fromSeq: request.fromSeq,
+      cfi: targetCfi,
+      mintEpoch: _mintEpoch,
+    );
     _position = next;
     _finishRequest(request);
     unawaited(_broadcastCommit(request, next));
@@ -405,7 +419,7 @@ class PageSyncService {
 
     // The request may come from a page this reader has not reached yet.
     _absorbPresencePositions(_transport.getOnlineUsers());
-    if (incoming.fromSeq < _position.seq) {
+    if (_position.isPastPage(incoming.fromEpoch, incoming.fromSeq)) {
       if (incoming.requiredUserIds.contains(_currentUserId)) {
         // Tell the requester it is behind; it catches up from Presence.
         unawaited(
@@ -485,13 +499,21 @@ class PageSyncService {
 
   void _onCommit(Map<String, dynamic> payload) {
     if (_disposed) return;
+    final epoch = payload['epoch'] ?? 0;
     final seq = payload['seq'];
     final cfi = payload['cfi'];
     final requestId = payload['request_id'];
-    if (seq is! int || seq < 0 || cfi is! String || cfi.isEmpty) return;
+    if (epoch is! int ||
+        epoch < 0 ||
+        seq is! int ||
+        seq < 0 ||
+        cfi is! String ||
+        cfi.isEmpty) {
+      return;
+    }
     if (requestId is String) _rememberFinished(requestId);
 
-    _adoptRemotePosition(SharedPosition(seq: seq, cfi: cfi));
+    _adoptRemotePosition(SharedPosition(epoch: epoch, seq: seq, cfi: cfi));
   }
 
   void _onCancel(Map<String, dynamic> payload) {
@@ -601,7 +623,8 @@ class PageSyncService {
     _position = candidate;
 
     final request = _state.currentRequest;
-    if (request != null && request.fromSeq < candidate.seq) {
+    if (request != null &&
+        candidate.isPastPage(request.fromEpoch, request.fromSeq)) {
       final wasTurning =
           request.requestedByUserId == _currentUserId &&
           _state.status == SyncStatus.turning;
@@ -753,6 +776,7 @@ class PageSyncService {
         payload: {
           'request_id': request.requestId,
           'user_id': _currentUserId,
+          'epoch': position.epoch,
           'seq': position.seq,
           'cfi': position.cfi,
         },
@@ -799,8 +823,19 @@ class PageSyncService {
 
   /// A request from a later page always wins; otherwise the lower id does.
   bool _wins(PageTurnRequest candidate, {required PageTurnRequest over}) {
-    if (candidate.fromSeq != over.fromSeq) {
-      return candidate.fromSeq > over.fromSeq;
+    final candidatePage = SharedPosition(
+      epoch: candidate.fromEpoch,
+      seq: candidate.fromSeq,
+      cfi: '',
+    );
+    if (candidatePage.isPastPage(over.fromEpoch, over.fromSeq)) return true;
+    final overPage = SharedPosition(
+      epoch: over.fromEpoch,
+      seq: over.fromSeq,
+      cfi: '',
+    );
+    if (overPage.isPastPage(candidate.fromEpoch, candidate.fromSeq)) {
+      return false;
     }
     return candidate.winsOver(over);
   }
@@ -889,8 +924,8 @@ String describeCancelReason(String reason) {
     'requester_left': 'Page turn cancelled: the requester left',
     'superseded': 'Another page turn went first',
     'turn_failed':
-        'The page did not move — this may be the start or end '
-        'of the book',
+        'The page did not move — this may be the start or end of the book',
+    'requester_busy': 'Page turn cancelled: the page was still loading',
   };
 
   final known = messages[reason];

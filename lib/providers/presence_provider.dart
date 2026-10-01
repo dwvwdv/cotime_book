@@ -154,6 +154,7 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
         bookHash: bookHash,
         isReading: _isAppActive && isReading,
         readerReady: _isAppActive && readerReady,
+        pageEpoch: _currentPosition?.epoch,
         pageSeq: _currentPosition?.seq,
         pageCfi: _currentPosition?.cfi,
       );
@@ -271,6 +272,7 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
       bookHash: _currentBookHash,
       isReading: _isAppActive && _currentIsReading,
       readerReady: _isAppActive && _currentReaderReady,
+      pageEpoch: _currentPosition?.epoch,
       pageSeq: _currentPosition?.seq,
       pageCfi: _currentPosition?.cfi,
     );

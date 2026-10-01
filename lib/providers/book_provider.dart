@@ -234,8 +234,12 @@ class BookNotifier extends StateNotifier<BookState> {
     int generation,
     int transferGeneration,
   ) async {
+    // A receive that finishes after the room moved on to another book must not
+    // replace it.
+    if (bookHash != _expectedBookHash) return;
     final bookFile = await _storageService.getBookFile(bookHash);
     if (bookFile != null &&
+        bookHash == _expectedBookHash &&
         _isCurrent(generation) &&
         transferGeneration == _transferGeneration) {
       state = state.copyWith(bookFile: bookFile, isLoading: false);

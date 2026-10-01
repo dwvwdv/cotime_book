@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../config/app_constants.dart';
 import '../models/transfer_state.dart';
+import 'presence_merge.dart';
 import 'realtime_service.dart';
 
 /// The Realtime surface the transfer needs. Injectable for tests.
@@ -163,9 +164,14 @@ class FileTransferService {
       _heldHash = hash;
       _heldBytes = null;
       _sendQueue.clear();
+      _sentInBatch = 0;
+      _batchSize = 0;
     }
     if (bytes != null) _heldBytes = bytes;
-    if (_wantedHash == hash) {
+    // Holding a book means it is the room's book now. A receive of anything
+    // else must stop here: left running, it would finish later and replace
+    // the book this device just shared.
+    if (_wantedHash != null) {
       _stopReceiving();
       if (!_state.isSending) _updateState(const TransferState.idle());
     }
@@ -423,11 +429,9 @@ class FileTransferService {
   List<Map<String, dynamic>> _holdersOf(String hash) {
     final holders = _transport.getOnlineUsers().where((user) {
       final userId = user['user_id'];
-      final hashes = user['ready_book_hashes'];
       return userId is String &&
           userId != _currentUserId &&
-          hashes is List &&
-          hashes.contains(hash);
+          presenceHoldsBook(user, hash);
     }).toList();
     // Every receiver starts from the same holder, so their requests collapse
     // into one send queue on that holder.

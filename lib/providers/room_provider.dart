@@ -61,6 +61,9 @@ class RoomNotifier extends StateNotifier<RoomState> {
   static const heartbeatInterval = Duration(minutes: 5);
   static const leaveRetryDelay = Duration(milliseconds: 800);
 
+  String? _pendingSaveCfi;
+  Future<void>? _saveLoop;
+
   final RoomService _roomService;
   final Future<void> Function()? _onSessionRevoked;
   Timer? _heartbeatTimer;
@@ -419,14 +422,29 @@ class RoomNotifier extends StateNotifier<RoomState> {
   /// Best effort by design: live readers converge through Presence, so a
   /// failed write must never hold up or undo a page turn. A revoked membership
   /// still tears the session down inside [updateCfiForRoom].
-  Future<bool> saveReadingPosition(String cfi) async {
-    final room = state.currentRoom;
-    if (room == null || cfi.isEmpty) return false;
-    try {
-      await updateCfiForRoom(roomId: room.id, cfi: cfi);
-      return true;
-    } catch (_) {
-      return false;
+  ///
+  /// Saves are serialized and coalesced to the latest page. Two overlapping
+  /// writes used to race: the newer one committed first, and the older one's
+  /// revision-conflict retry then wrote the older page over it.
+  Future<void> saveReadingPosition(String cfi) {
+    if (state.currentRoom == null || cfi.isEmpty) return Future.value();
+    _pendingSaveCfi = cfi;
+    return _saveLoop ??= _drainPositionSaves().whenComplete(
+      () => _saveLoop = null,
+    );
+  }
+
+  Future<void> _drainPositionSaves() async {
+    while (true) {
+      final cfi = _pendingSaveCfi;
+      final room = state.currentRoom;
+      _pendingSaveCfi = null;
+      if (cfi == null || room == null) return;
+      try {
+        await updateCfiForRoom(roomId: room.id, cfi: cfi);
+      } catch (_) {
+        // Best effort; the next save (or live Presence) supersedes it.
+      }
     }
   }
 

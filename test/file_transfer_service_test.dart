@@ -134,6 +134,31 @@ void main() {
   });
 
   test(
+    'a receive still running when a new book is shared cannot replace it',
+    () async {
+      // Regression: sharing H2 left the receive of H1 running; when H1
+      // finished it replaced H2 on the sharer, who then could not serve H2.
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final alice = room.join('alice');
+      final bob = room.join('bob');
+      bob.service.expectBook(bookHash);
+
+      final other = Uint8List.fromList(List.generate(5000, (i) => i % 7));
+      final otherHash = sha256.convert(other).toString();
+      await bob.share(other, otherHash);
+      // The old book keeps arriving.
+      await alice.share(book, bookHash);
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(bob.service.heldBookHash, otherHash);
+      expect(bob.service.wantedBookHash, isNull);
+      expect(bob.store.books.containsKey(bookHash), isFalse);
+      expect(bob.service.currentState.bookHash, isNot(bookHash));
+    },
+  );
+
+  test(
     'sharing rejects a file over the limit or with the wrong hash',
     () async {
       final room = TransferRoom();

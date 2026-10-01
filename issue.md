@@ -211,7 +211,16 @@
   - 兩人同時按同方向翻頁：以 `(fromSeq, requestId)` 決定勝者，輸的一方自動同意勝者，
     只翻一頁。
   - 資料庫寫入降為 best-effort（`RoomNotifier.saveReadingPosition`），只給「之後才打開書的人」用；
-    寫入失敗不再卡住或回滾翻頁。
+    寫入失敗不再卡住或回滾翻頁。寫入會序列化並合併成最新一頁——重疊的兩次寫入曾經讓
+    舊頁的 conflict retry 蓋掉新頁（`overlapping position saves never leave an older page behind`）。
+  - **`epoch`**：沒有人在讀時開書的 reader 從 DB 以 seq 0 起步，所以 seq 只在「一段連續閱讀」
+    裡單調。這段的第一次 commit 會鑄造 `epoch`（wall clock），排序改為 `(epoch, seq, cfi)`。
+    否則在背景睡過一整段、手上 seq 較大的 reader 醒來時會把全房拉回舊頁
+    （`a reader waking from an older stretch does not pull the room back`）。
+    殘留風險：兩台裝置時鐘差距大於兩段閱讀的間隔時，舊段仍可能勝出。
+  - requester 的翻頁進行中，若 Presence 帶來同一頁的 tie-break（CFI 較大），reader 不再中斷
+    自己的翻頁；viewer 忙碌導致放棄時用 `requester_busy`，不再誤報「可能在書頭或書尾」。
+    turn timeout 縮短為 4 秒（書頭／書尾時 viewer 根本不會 relocate，大家要等這麼久）。
   - reader 不再需要 reading session id 與凍結的參與者名單（#6 那類「永遠擋住 quorum」的
     根源一起移除）；任何持有書的成員都可以隨時 Join Reading。
 - **測試**：`test/page_sync_service_test.dart`（多 client 的 `FakeRoom`，broadcast 與 Presence 共享）→
@@ -246,7 +255,8 @@
   - `RoomNotifier.leaveRoom()` 失敗時重試一次（leave 是冪等的）。
   - 成員列表在線者排前面，離線者標示「Away — not connected」。
   - `LobbyReadiness` 取代 `hasExactReadyBookRoster`：host 有書就能開始；有人在讀時任何
-    持書成員都能 Join Reading；還在收書的人只會被點名，不會擋住別人。
+    持書成員（包括 host）都是 Join Reading——host 按 Start 會廣播 `start_reading`，
+    把剛選擇離開 reader 的人拉回去；還在收書的人只會被點名，不會擋住別人。
 - **測試**：`test/room_lobby_screen_test.dart` →
   `a member who left while you were away is gone when the lobby opens`、
   `the lobby keeps re-reading the roster on its own`、
@@ -277,7 +287,10 @@
     hash 不符就整本丟掉重要。**沒有任何終止狀態**——收書只會越來越接近完成。
   - 持有者用單一 send queue 服務請求，多人同時要書時共用同一輪 broadcast。
   - 初次分享仍然 push 給所有人，只是變成快速路徑。
-  - `isLoading` 只代表「正在選檔」；收書與分享互不阻擋，分享新書會直接取代進行中的傳輸。
+  - `isLoading` 只代表「正在選檔」；收書與分享互不阻擋，分享新書會直接取代進行中的傳輸——
+    `holdBook` 會停掉任何其他書的接收，`BookNotifier._onBookReceived` 也會忽略不是
+    房間當前書的完成事件（否則舊書晚到會蓋掉剛分享的新書：
+    `a receive still running when a new book is shared cannot replace it`）。
   - 進度元件改成 waiting / transferring / completed，並以文字說明正在做什麼
     （「Asking Alice for the book...」「Waiting for someone with the book to come online...」）。
 - **測試**：`test/file_transfer_service_test.dart` →
@@ -302,7 +315,9 @@
 
 - **檔案**：`lib/app.dart`
 - **修法**：`AppLifecycleState.inactive`（下拉通知列、系統對話框、轉場）直接忽略，
-  只對 resumed / paused / hidden / detached 反應。
+  只對 resumed / paused / hidden / detached 反應（`appActivityFor()`）。
+- **測試**：`test/app_lifecycle_test.dart` →
+  `a passing interruption does not take the reader out of the room`
 
 ### [x] #G 同一使用者多個 reader session 的 readiness 是 OR 合併的
 

@@ -43,8 +43,10 @@ supabase/
 2. **翻頁是一套共識協定**，不是單純的廣播。狀態機在
    `lib/services/page_sync_service.dart`：
    `request → vote → (requester 本機翻頁) → commit(seq+1, cfi)`。
-   - 大家比對的是 `SharedPosition.seq`，**永遠不要比對 CFI 字串**——CFI 依本機分頁而定，
-     不同螢幕同一頁的字串不同（見 issue #14）。CFI 只用來 `display()`。
+   - 大家比對的是 `SharedPosition` 的 `(epoch, seq)`，**永遠不要比對 CFI 字串**——
+     CFI 依本機分頁而定，不同螢幕同一頁的字串不同（見 issue #14）。CFI 只用來 `display()`。
+     seq 只在一段連續閱讀裡單調，跨段靠 `epoch` 排序；排序只定義在
+     `SharedPosition.isNewerThan`，Presence 合併也用它，不要另寫一份。
    - requester 是唯一的協調者；follower 只投票與跟隨 commit。
    - 每個 reader 把 `page_seq` / `page_cfi` 放進 Presence，任何漏掉的訊息都靠
      「採用 reader 中最新的位置」收斂。資料庫的 `current_cfi` 只是給之後才打開書的人用的

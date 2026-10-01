@@ -187,6 +187,7 @@ class RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    int? pageEpoch,
     int? pageSeq,
     String? pageCfi,
   }) {
@@ -200,6 +201,7 @@ class RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
+      pageEpoch: pageEpoch,
       pageSeq: pageSeq,
       pageCfi: pageCfi,
     );
@@ -326,6 +328,7 @@ class RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    int? pageEpoch,
     int? pageSeq,
     String? pageCfi,
   }) {
@@ -337,6 +340,7 @@ class RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
+      pageEpoch: pageEpoch,
       pageSeq: pageSeq,
       pageCfi: pageCfi,
     );
@@ -460,6 +464,7 @@ class RealtimeService {
     required String? bookHash,
     required bool isReading,
     required bool readerReady,
+    required int? pageEpoch,
     required int? pageSeq,
     required String? pageCfi,
   }) {
@@ -473,6 +478,7 @@ class RealtimeService {
       'reader_ready': readerReady,
       // Only a reader holds a shared position; see PageSyncService.
       if (isReading && pageSeq != null && pageCfi != null) ...{
+        'page_epoch': pageEpoch ?? 0,
         'page_seq': pageSeq,
         'page_cfi': pageCfi,
       },
