@@ -70,6 +70,9 @@ supabase/
 4. **房間成員只能透過 `create_room` / `join_room` / `leave_room` 三個 RPC 變動。**
    不要恢復對 `cotime_book.room_members` 的直接 DELETE 權限；RPC 會在 room 母列上
    序列化並行的離開、過期成員驅逐與 host 轉移。
+   已關閉（或租約過期）的房間，曾在房內的人可以用 `join_room` 重新啟用——
+   依據是 `cotime_book_private.room_participants`（由 `room_members` 的 insert trigger 記錄）。
+   其他人一律得到與「房號不存在」相同的 `P0002`，不要讓錯誤訊息洩漏房間是否存在（見 issue #R）。
 
 5. **Realtime 連線會斷，而且 library 不一定會自己接回來。** 裝置在讀一頁時休眠是常態。
    `RealtimeService` 有 watchdog 會重建壞掉的 channel（見 issue #17）。

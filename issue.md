@@ -430,6 +430,83 @@
 
 - 由 #16 解決：收書沒有失敗終態，元件顯示的是「正在做什麼」。
 
+### [x] #O 每次打開 App 都要重新輸入 Nickname
+
+- **檔案**：`lib/providers/auth_provider.dart`、`lib/services/local_store.dart`、`lib/main.dart`
+- **症狀**：匿名 session 會跨重啟保留，但 nickname 欄位每次都是空的，進房前一定要重打。
+- **原因**：nickname 只存在 `AuthState` 的記憶體裡，App 沒有任何本機儲存。
+- **修法**：新增 `shared_preferences` 依賴與 `LocalStore`（`localStoreProvider`，
+  `main()` 用 SharedPreferences 覆寫；預設是純記憶體，讓測試不需要 plugin）。
+  `AuthNotifier` 建構時讀出上次的 nickname，`setNickname()` 時寫回；首頁欄位用它預填。
+  plugin 載入失敗時退回記憶體，不會讓 App 起不來。
+- **測試**：`test/local_store_test.dart` → `is remembered across launches`；
+  `test/home_screen_test.dart` → `the nickname from last time is already filled in`
+
+### [x] #P Room code 欄位跳出中文輸入法
+
+- **檔案**：`lib/widgets/room_code_input.dart`
+- **症狀**：點 Room code 時鍵盤沿用上一次的輸入法（多半是注音／拼音），
+  字母會進組字區變成候選字，要手動切英文。
+- **修法**：`keyboardType: TextInputType.visiblePassword`，並關掉 autocorrect / suggestions。
+  這是唯一一個 Android 各家 IME 與 iOS（對應 ASCII-capable 鍵盤）都會改給英文配置的型別；
+  大寫仍由 `UpperCaseTextFormatter` 處理。
+- **測試**：`test/home_screen_test.dart` → `the room code field asks for an English keyboard`
+
+### [x] #Q 沒有辦法快速回到之前的房間
+
+- **檔案**：`lib/providers/recent_rooms_provider.dart`、`lib/widgets/recent_rooms_list.dart`、
+  `lib/providers/room_provider.dart`（`rejoinRoom`）、`lib/services/room_service.dart`
+- **功能**：首頁的「Recent rooms」列出最近 8 個進過的房間（房號、書名、上次進入日期），
+  點一下直接進房（已關閉的房間會被重新啟用，見 #R），旁邊的 × 可以移除。
+  **不會**替使用者開新房——新房號沒有其他人知道，使用者要的是回到原本那間。
+- **設計**：
+  - 紀錄由 `recentRoomsProvider` 監聽 `roomProvider.currentRoom` 寫入，而不是由按鈕寫入——
+    create / join / 最近房間三條路徑都會被記到，lobby 選書後書名也會跟著更新。
+    這個 provider 由首頁第一次 watch 後常駐（非 autoDispose）；App 一律從首頁啟動，
+    若之後加入直接開 lobby 的 deep link，要記得在啟動時先 read 它。
+  - `rejoinRoom()` 只 join：已關閉的房間由伺服器重新啟用（見 #R）。收到
+    `RoomNotFoundException`（RPC 的 `P0002`）代表房間已被清除（關閉超過 30 天），
+    首頁顯示「Room X is no longer available.」並移除那筆；網路錯誤則保留，可以再點。
+  - 清單會在登入後用 `available_room_codes` RPC 過濾，只留「這個帳號進過、而且還沒被清除」的房間，
+    所以關閉超過 30 天的房間不會出現。App 不能直接查 `rooms`：RLS 只讓目前的成員讀，
+    關閉的房間對所有人都是空的，跟「不存在」分不出來；放寬 SELECT policy 又會讓離開的人
+    透過 Realtime postgres_changes 持續看到房間的換書與 `current_cfi`。RPC 只回房號。
+    查詢失敗（離線）時不動清單；查詢期間又進了某個房間，就丟棄這次結果（`_pruneGeneration`）。
+  - `join_room` 的 `P0002` 現在轉成 `RoomNotFoundException`，手動輸入不存在的房號時
+    錯誤訊息是人話（「Room ABC234 is no longer available.」）而不是 PostgrestException。
+  - 存檔裡壞掉的條目會被略過，不會讓整份清單或首頁壞掉。
+- **測試**：`test/local_store_test.dart`（排序、去重、上限、書名保留、移除、壞資料）；
+  `test/room_provider_test.dart` → `a recent room that is gone does not open a new room`、
+  `joining a closed room by code says so in words`；
+  `test/home_screen_test.dart` → `tapping a recent room goes straight back in`
+
+### [x] #R 已關閉的房間無法重新啟用
+
+- **檔案**：`supabase/migrations/20261001142734_record_room_participants.sql`、`20261001144100_available_room_codes.sql`（已套用到正式庫）、`20261001150000_reopen_closed_rooms.sql`（`join_room`，尚未套用——**新版 APK 要等它套用後才能發佈**，否則點已關閉的房間會被當成已刪除而從清單移除）
+- **症狀**：大家離開（或 24 小時沒活動）後房間就關了；從「Recent rooms」點回去只會開一個新房號，
+  要重新把房號傳給所有人，書與上次的位置也都沒了——即使關閉的房間列還在資料庫裡保留 30 天。
+- **原因**：`join_room` 把任何非 active 的房間都當成不存在。
+- **修法**：
+  - 新增 `cotime_book_private.room_participants`（room_id, user_id），由 `room_members` 的
+    AFTER INSERT trigger 記錄，所以 create / join 以及之後任何進房路徑都會被記到；
+    房間被清除時 cascade 一起刪掉。API 角色沒有任何權限。
+  - `join_room` 在鎖住房間後，若房間已關閉或租約過期，且呼叫者曾在房內，就重新啟用：
+    清掉殘留成員、`is_active = true`、`closed_at = null`、host 改成重新啟用的人
+    （前任 host 已不在房內），書名 / hash / `current_cfi` 保留。
+  - 其他人得到與房號不存在相同的 `P0002`，不會洩漏哪些關閉的房號是真的。
+  - 兩個前成員同時重啟會在房間列的 `FOR UPDATE` 上序列化，第二個看到的是已開啟的房間、正常加入。
+- **`available_room_codes(p_codes text[])`**：給最近房間清單用，回傳呼叫者進過、且尚未被清除的房號
+  （開著或關閉都算）；一次最多 50 個；對沒進過的房間一律不回答，不能拿來批次探測房號。
+- **限制**：migration 只能回填「目前的成員」與「每個房間最後的 host」。在這之前就已關閉的房間，
+  只有最後的 host 能重新啟用；同理，在這之前就離開、但仍有別人在讀的房間，
+  `available_room_codes` 不認得這個人，會從他的最近清單消失（重新用房號加入一次就會被記錄）。
+- **測試**：`supabase/tests/database/room_reopen.test.sql`（21 項：前成員重啟、陌生人被拒且不洩漏、
+  書與位置保留、host 轉移、第二個前成員正常加入、租約過期的房間、建立者被記錄、清除時連帶刪除、
+  `available_room_codes` 只對前成員回答、關閉的房間仍可用、被清除後不可用、上限 50）；
+  `test/home_screen_test.dart` → `a recent room that is gone says so and leaves the list`、
+  `rooms deleted while the app was closed are not listed`、`being offline does not empty the recent list`；
+  `test/local_store_test.dart` → `a room entered while the check is in flight is not pruned`
+
 ---
 
 ## 開放中
@@ -471,8 +548,10 @@
 - **檔案**：`lib/providers/reading_preferences_provider.dart`
 - **問題**：主題、字級、音量鍵翻頁都只存在記憶體裡，每次開 App 都回到預設。
   電子閱讀器使用者通常會調大字級，每次重設很煩。
-- **建議**：加 `shared_preferences`，在 `ReadingPreferencesNotifier` 建構時讀取、
-  每次 set 時寫入。這是新增依賴，所以沒有跟這次的樣式重做一起進來。
+- **建議**：#O 已經加了 `shared_preferences` 與 `LocalStore`，這項只剩在
+  `ReadingPreferencesNotifier` 建構時從 `localStoreProvider` 讀取、每次 set 時寫入。
+  這次沒有一起做，是因為使用者要的是 nickname 與最近房間，閱讀偏好的預設值與遷移
+  值得單獨確認。
 
 
 ### [ ] #K 新舊版本的 App 無法在同一個房間裡互通

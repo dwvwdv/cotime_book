@@ -6,9 +6,13 @@ import '../config/supabase_config.dart';
 import '../config/theme.dart';
 import '../providers/auth_provider.dart';
 import '../providers/book_provider.dart';
+import '../models/recent_room.dart';
+import '../models/room.dart';
 import '../providers/presence_provider.dart';
+import '../providers/recent_rooms_provider.dart';
 import '../providers/room_provider.dart';
 import '../widgets/paper.dart';
+import '../widgets/recent_rooms_list.dart';
 import '../widgets/room_code_input.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -28,6 +32,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   DateTime? _lastBackPress;
 
   @override
+  void initState() {
+    super.initState();
+    _nicknameController.text = ref.read(authProvider).nickname;
+  }
+
+  @override
   void dispose() {
     _nicknameController.dispose();
     _roomCodeController.dispose();
@@ -38,6 +48,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
     final roomState = ref.watch(roomProvider);
+    final recentRooms = ref.watch(recentRoomsProvider);
 
     // Feature 2: intercept hardware back on home screen → double-back to exit.
     return PopScope(
@@ -183,6 +194,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         icon: const Icon(Icons.login),
                         label: const Text('Join Room'),
                       ),
+                      if (recentRooms.isNotEmpty) ...[
+                        const SizedBox(height: 36),
+                        RecentRoomsList(
+                          rooms: recentRooms,
+                          enabled: !roomState.isLoading,
+                          onOpen: _openRecentRoom,
+                          onForget: (room) => ref
+                              .read(recentRoomsProvider.notifier)
+                              .remove(room.code),
+                        ),
+                      ],
                     ],
                   ],
 
@@ -243,38 +265,58 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _createRoom() async {
-    if (ref.read(roomProvider).isInRoom) {
-      _showError('Leave the active room before creating another one.');
-      return;
-    }
-    final nickname = _validateNickname();
-    if (nickname == null) return;
-
-    // Ensure authenticated
-    if (!ref.read(authProvider).isAuthenticated) {
-      await ref.read(authProvider.notifier).signInAnonymously();
-    }
-
-    ref.read(authProvider.notifier).setNickname(nickname);
-    final room = await ref.read(roomProvider.notifier).createRoom(nickname);
-    if (room != null && mounted) {
-      context.goNamed('lobby', pathParameters: {'roomCode': room.code});
-    }
+    final room = await _enterRoom(
+      'Leave the active room before creating another one.',
+      (nickname) => ref.read(roomProvider.notifier).createRoom(nickname),
+    );
+    if (room != null) _goToLobby(room);
   }
 
   Future<void> _joinRoom() async {
-    if (ref.read(roomProvider).isInRoom) {
-      _showError('Leave the active room before joining another one.');
-      return;
-    }
-    final nickname = _validateNickname();
-    if (nickname == null) return;
-
     final code = _roomCodeController.text.trim();
     if (code.length != 6) {
       _showError('Please enter a valid 6-character room code');
       return;
     }
+    final room = await _enterRoom(
+      'Leave the active room before joining another one.',
+      (nickname) => ref.read(roomProvider.notifier).joinRoom(code, nickname),
+    );
+    if (room != null && mounted) _goToLobby(room);
+  }
+
+  Future<void> _openRecentRoom(RecentRoom recent) async {
+    var gone = false;
+    final room = await _enterRoom(
+      'Leave the active room before joining another one.',
+      (nickname) async {
+        final result = await ref
+            .read(roomProvider.notifier)
+            .rejoinRoom(recent.code, nickname);
+        gone = result.gone;
+        return result.room;
+      },
+    );
+    if (!mounted) return;
+    if (gone) {
+      // A closed room would have been reopened, so this one has been deleted
+      // and its code is never reused: the entry could only fail again. The
+      // room error notice already says why it disappeared.
+      ref.read(recentRoomsProvider.notifier).remove(recent.code);
+    }
+    if (room != null && mounted) _goToLobby(room);
+  }
+
+  Future<Room?> _enterRoom(
+    String alreadyInRoomMessage,
+    Future<Room?> Function(String nickname) enter,
+  ) async {
+    if (ref.read(roomProvider).isInRoom) {
+      _showError(alreadyInRoomMessage);
+      return null;
+    }
+    final nickname = _validateNickname();
+    if (nickname == null) return null;
 
     // Ensure authenticated
     if (!ref.read(authProvider).isAuthenticated) {
@@ -282,10 +324,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
 
     ref.read(authProvider.notifier).setNickname(nickname);
-    final room = await ref.read(roomProvider.notifier).joinRoom(code, nickname);
-    if (room != null && mounted) {
-      context.goNamed('lobby', pathParameters: {'roomCode': room.code});
-    }
+    return enter(nickname);
+  }
+
+  void _goToLobby(Room room) {
+    context.goNamed('lobby', pathParameters: {'roomCode': room.code});
   }
 
   void _showError(String message) => showPaperMessage(context, message);

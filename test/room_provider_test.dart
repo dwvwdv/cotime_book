@@ -34,6 +34,59 @@ void main() {
       expect(notifier.state.currentRoom?.currentCfi, 'page-3');
     });
 
+    test('a recent room that is still open is joined, not recreated', () async {
+      final service = FakeRoomService()..nextRoom = testRoom(code: 'ABC234');
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      final result = await notifier.rejoinRoom('ABC234', 'Alice');
+
+      expect(result.room?.code, 'ABC234');
+      expect(result.gone, isFalse);
+      expect(service.createCalls, 0);
+      expect(notifier.state.currentRoom?.code, 'ABC234');
+    });
+
+    test('a recent room that is gone does not open a new room', () async {
+      // A new room would have a new code nobody else knows; the person asked
+      // to go back to the old one, not to start over.
+      final service = FakeRoomService()
+        ..joinError = const RoomNotFoundException('ABC234');
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      final result = await notifier.rejoinRoom('ABC234', 'Alice');
+
+      expect(result.room, isNull);
+      expect(result.gone, isTrue);
+      expect(service.createCalls, 0);
+      expect(notifier.state.currentRoom, isNull);
+      expect(notifier.state.error, 'Room ABC234 is no longer available.');
+    });
+
+    test('a failed rejoin that is not "gone" keeps the room listed', () async {
+      final service = FakeRoomService()
+        ..joinError = StateError('connection reset');
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      final result = await notifier.rejoinRoom('ABC234', 'Alice');
+
+      expect(result.room, isNull);
+      expect(result.gone, isFalse);
+    });
+
+    test('joining a closed room by code says so in words', () async {
+      final service = FakeRoomService()
+        ..joinError = const RoomNotFoundException('ABC234');
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      expect(await notifier.joinRoom('ABC234', 'Alice'), isNull);
+      expect(service.createCalls, 0);
+      expect(notifier.state.error, 'Room ABC234 is no longer available.');
+    });
+
     test('a dropped leave request is sent again', () async {
       // Regression: one failed leave RPC left the member in everyone else's
       // list until the server evicted them half an hour later.
@@ -548,14 +601,40 @@ class FakeRoomService extends RoomService {
   final List<int> bookExpectedRevisions = [];
   final List<String> cfiWrites = [];
 
+  Object? joinError;
+  final List<String> joinedCodes = [];
+  int createCalls = 0;
+
+  /// Null answers every code as available.
+  Set<String>? availableCodes;
+  Object? availabilityError;
+
   @override
-  Future<Room> createRoom({required String nickname}) async => nextRoom;
+  Future<Room> createRoom({required String nickname}) async {
+    createCalls++;
+    return nextRoom;
+  }
+
+  @override
+  Future<Set<String>> availableRoomCodes(List<String> codes) async {
+    final error = availabilityError;
+    if (error != null) throw error;
+    final available = availableCodes;
+    return available == null
+        ? codes.toSet()
+        : codes.where(available.contains).toSet();
+  }
 
   @override
   Future<Room> joinRoom({
     required String code,
     required String nickname,
-  }) async => nextRoom;
+  }) async {
+    joinedCodes.add(code);
+    final error = joinError;
+    if (error != null) throw error;
+    return nextRoom;
+  }
 
   @override
   Future<List<RoomMember>> getRoomMembers(String roomId) async {
