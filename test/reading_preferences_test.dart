@@ -34,6 +34,12 @@ void main() {
     expect(settings.flow, EpubFlow.paginated);
   });
 
+  test('a wide screen shows one page, not a two-page spread', () {
+    // A tablet in landscape would otherwise hold twice the text of a phone's
+    // page, and the room's pages would drift apart (issue #20).
+    expect(const ReadingPreferences().displaySettings.spread, EpubSpread.none);
+  });
+
   test('type size stays within a readable range', () {
     final notifier = ReadingPreferencesNotifier();
     notifier.setFontSize(4);

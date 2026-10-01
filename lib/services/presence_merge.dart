@@ -1,3 +1,5 @@
+import '../models/shared_page.dart';
+
 /// Collapses multiple device/connection metas into one logical room member.
 ///
 /// Supabase Presence is keyed per connection, so one logical user can appear
@@ -32,6 +34,14 @@ List<Map<String, dynamic>> mergePresenceUsers(
         .toList(growable: false);
     latest['is_reading'] = metas.any((meta) => meta['is_reading'] == true);
     latest['reader_ready'] = metas.any((meta) => meta['reader_ready'] == true);
+    // Every device this person reads on shows the same page, so the page has
+    // to fit all of them — not just the one that tracked last.
+    latest['page_fit'] = PageFit.combine(
+      metas
+          .where((meta) => meta['is_reading'] == true)
+          .map((meta) => PageFit.fromWire(meta['page_fit']))
+          .whereType<PageFit>(),
+    )?.toWire();
     latest['session_count'] = metas.length;
     merged.add(latest);
   }

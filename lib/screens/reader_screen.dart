@@ -7,12 +7,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../config/theme.dart';
 import '../models/page_sync_state.dart';
+import '../models/shared_page.dart';
 import '../providers/auth_provider.dart';
 import '../providers/book_provider.dart';
 import '../providers/page_sync_provider.dart';
 import '../providers/presence_provider.dart';
 import '../providers/reading_preferences_provider.dart';
 import '../providers/room_provider.dart';
+import '../services/shared_page_renderer.dart';
 import '../widgets/page_turn_input.dart';
 import '../widgets/paper.dart';
 import '../widgets/reader_members_sheet.dart';
@@ -25,6 +27,9 @@ import '../widgets/sync_status_bar.dart';
 /// is the one turning, moves one page and reports where it landed. Everything
 /// the viewer reports on its own — a re-layout after a resize, a font change —
 /// is local and never leaves this device.
+///
+/// The book is laid out on the room's [SharedPage], not on this screen, so a
+/// page holds the same text for every reader (issue #20).
 class ReaderScreen extends ConsumerStatefulWidget {
   final String roomCode;
 
@@ -48,8 +53,36 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// The shared position is known and the viewer can be created.
   bool _positionKnown = false;
 
-  /// Chapters loaded for the current viewer instance.
-  bool _viewerLoaded = false;
+  /// The current viewer instance has the book.
+  bool _chaptersLoaded = false;
+
+  /// The area the viewer has on this screen, from the last layout.
+  Size? _viewerSize;
+
+  /// What this screen and text size need, as last published in Presence.
+  PageFit? _ownFit;
+
+  /// The page the room lays the book out on, from every reader's fit.
+  SharedPage? _roomPage;
+
+  /// The page the current viewer instance is laid out on. Null until the
+  /// first layout lands.
+  SharedPage? _appliedPage;
+
+  /// A layout is being applied. Its relocations are re-layouts, not moves.
+  bool _layoutInFlight = false;
+  int _layoutGeneration = 0;
+  bool _layoutSyncScheduled = false;
+
+  /// The last layout did not reach the WebView; try it again.
+  bool _layoutOwed = false;
+  int _layoutAttempts = 0;
+  Timer? _layoutRetryTimer;
+
+  /// Loaded *and* on the room's page. Until the book is laid out like
+  /// everyone else's, a CFI from this viewer would mean a different page.
+  bool get _viewerLoaded =>
+      _chaptersLoaded && _appliedPage != null && !_layoutInFlight;
 
   /// Last page start the viewer reported. Null until it has displayed once.
   String? _lastLocalCfi;
@@ -132,6 +165,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   @override
   void dispose() {
     _displayTimer?.cancel();
+    _layoutRetryTimer?.cancel();
     if (!_leaving) {
       // The route went away without _leaveReader (the room was revoked, say).
       _leaving = true;
@@ -263,6 +297,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (!mounted || _leaving) return;
     final cfi = location.startCfi;
     _lastLocalCfi = cfi;
+    // The first render on this screen's own layout, or a re-layout onto the
+    // room's page: nothing is waiting on it, and the page is shown once the
+    // layout lands.
+    if (!_viewerLoaded) return;
 
     final turn = _pendingTurn;
     if (turn != null) {
@@ -303,9 +341,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   void _onChaptersLoaded() {
     if (!mounted || _leaving) return;
-    setState(() => _viewerLoaded = true);
-    if (_flushQueuedPosition()) return;
-    _publishReadiness();
+    setState(() => _chaptersLoaded = true);
+    _scheduleLayoutSync();
   }
 
   /// Shows a position that arrived while the viewer was still loading. Waits
@@ -334,7 +371,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     setState(() {
       _viewerKey++;
       _viewerInitialCfi = position.cfi.isEmpty ? null : position.cfi;
-      _viewerLoaded = false;
+      _chaptersLoaded = false;
+      // A new WebView starts on its own layout again.
+      _appliedPage = null;
+      _layoutInFlight = false;
+      _layoutGeneration++;
+      _layoutOwed = false;
+      _layoutAttempts = 0;
+      _layoutRetryTimer?.cancel();
       _lastLocalCfi = null;
       _displaysInFlight = 0;
       _displayingCfi = null;
@@ -343,6 +387,118 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     });
     _publishReadiness();
     return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // The shared page
+
+  /// Called on every layout with the viewer's area. Publishes what this
+  /// screen needs and works out which page the room is on.
+  void _updateRoomPage(
+    Size viewerSize,
+    PresenceState presence,
+    ReadingPreferences prefs,
+  ) {
+    _viewerSize = viewerSize;
+    final own = PageFit.of(viewerSize, fontSize: prefs.fontSize);
+    if (own != _ownFit) {
+      _ownFit = own;
+      final presenceNotifier = ref.read(presenceProvider.notifier);
+      // Not from inside a layout: it notifies listeners.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _leaving || _ownFit != own) return;
+        unawaited(
+          presenceNotifier.updatePageFit(own).catchError((Object _) {
+            // Re-sent with the next Presence update.
+          }),
+        );
+      });
+    }
+    _roomPage = SharedPage.resolve(
+      own: own,
+      onlineUsers: presence.onlineUsers,
+      presenceIsCurrent: presence.isConnected && presence.hasInitialSync,
+      previous: _roomPage,
+    );
+    if (_roomPage != _appliedPage || _layoutOwed) _scheduleLayoutSync();
+  }
+
+  /// A new layout moves every page break, so it waits for a moment when
+  /// nothing on this screen depends on the current ones.
+  bool get _canApplyLayout =>
+      mounted &&
+      !_leaving &&
+      _chaptersLoaded &&
+      !_layoutInFlight &&
+      !_isDisplaying &&
+      _pendingTurn == null &&
+      ref.read(pageSyncProvider).currentRequest == null;
+
+  void _scheduleLayoutSync() {
+    if (_layoutSyncScheduled) return;
+    _layoutSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _layoutSyncScheduled = false;
+      unawaited(_syncPageLayout());
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// Lays the book out on the room's page, then shows the room's position on
+  /// the new page breaks.
+  Future<void> _syncPageLayout() async {
+    final page = _roomPage;
+    final viewerSize = _viewerSize;
+    if (page == null ||
+        viewerSize == null ||
+        (page == _appliedPage && !_layoutOwed) ||
+        !_canApplyLayout) {
+      // A turn or a display in flight: the next build tries again.
+      return;
+    }
+    final generation = ++_layoutGeneration;
+    _layoutRetryTimer?.cancel();
+    setState(() => _layoutInFlight = true);
+    _publishReadiness();
+
+    var applied = false;
+    try {
+      applied = await SharedPageRenderer.apply(
+        _epubController,
+        page,
+        viewerSize,
+      );
+    } catch (_) {
+      applied = false;
+    }
+    // A rebuilt viewer or a newer layout owns the screen now.
+    if (!mounted || _leaving || generation != _layoutGeneration) return;
+
+    // Reading goes on even if the script could not run: a reader stuck on
+    // "loading" would leave the room without them. The page is retried.
+    setState(() {
+      _layoutInFlight = false;
+      _appliedPage = page;
+      _layoutOwed = false;
+    });
+    if (applied) {
+      _layoutAttempts = 0;
+    } else if (_layoutAttempts++ < 3) {
+      _layoutRetryTimer = Timer(const Duration(seconds: 2), () {
+        if (!mounted || _appliedPage != page) return;
+        _layoutOwed = true;
+        _scheduleLayoutSync();
+      });
+    }
+
+    // Every page break moved: back onto the room's page.
+    final cfi = _queuedCfi ?? _pageSync.position?.cfi ?? '';
+    if (cfi.isNotEmpty) {
+      _display(cfi);
+    } else {
+      _queuedCfi = null;
+      _publishReadiness();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -417,52 +573,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
                 // EPUB reader with gesture overlay
                 Expanded(
-                  child: Stack(
-                    children: [
-                      // Layer 1: EPUB viewer
-                      AbsorbPointer(
-                        absorbing: true,
-                        child: EpubViewer(
-                          key: ValueKey(_viewerKey),
-                          epubController: _epubController,
-                          epubSource: EpubSource.fromFile(bookState.bookFile!),
-                          displaySettings: prefs.displaySettings,
-                          initialCfi: _viewerInitialCfi,
-                          onChaptersLoaded: (_) => _onChaptersLoaded(),
-                          onRelocated: _onRelocated,
-                        ),
-                      ),
-
-                      // Layer 2: Gesture interceptor overlay
-                      if (_viewerLoaded)
-                        Positioned.fill(
-                          child: LayoutBuilder(
-                            builder: (context, constraints) => GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              // Tap zones are how e-readers turn pages; a
-                              // swipe on e-ink is slow to register and
-                              // easily read as a tap anyway.
-                              onTapUp: (details) => _requestTurnFromInput(
-                                pageTurnDirectionForTap(
-                                  dx: details.localPosition.dx,
-                                  width: constraints.maxWidth,
-                                ),
-                              ),
-                              onHorizontalDragEnd: (details) {
-                                final velocity = details.primaryVelocity;
-                                if (velocity == null) return;
-                                if (velocity < -200) {
-                                  _requestTurnFromInput(PageTurnDirection.next);
-                                } else if (velocity > 200) {
-                                  _requestTurnFromInput(
-                                    PageTurnDirection.previous,
-                                  );
-                                }
-                              },
-                            ),
-                          ),
-                        ),
-                    ],
+                  child: LayoutBuilder(
+                    builder: (context, viewerConstraints) {
+                      _updateRoomPage(
+                        viewerConstraints.biggest,
+                        presenceState,
+                        prefs,
+                      );
+                      return _buildViewer(bookState, prefs);
+                    },
                   ),
                 ),
 
@@ -473,6 +592,54 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildViewer(BookState bookState, ReadingPreferences prefs) {
+    return Stack(
+      children: [
+        // Layer 1: EPUB viewer
+        AbsorbPointer(
+          absorbing: true,
+          child: EpubViewer(
+            key: ValueKey(_viewerKey),
+            epubController: _epubController,
+            epubSource: EpubSource.fromFile(bookState.bookFile!),
+            displaySettings: prefs.displaySettings,
+            initialCfi: _viewerInitialCfi,
+            onChaptersLoaded: (_) => _onChaptersLoaded(),
+            onRelocated: _onRelocated,
+          ),
+        ),
+
+        // Layer 2: Gesture interceptor overlay
+        if (_viewerLoaded)
+          Positioned.fill(
+            child: LayoutBuilder(
+              builder: (context, constraints) => GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                // Tap zones are how e-readers turn pages; a
+                // swipe on e-ink is slow to register and
+                // easily read as a tap anyway.
+                onTapUp: (details) => _requestTurnFromInput(
+                  pageTurnDirectionForTap(
+                    dx: details.localPosition.dx,
+                    width: constraints.maxWidth,
+                  ),
+                ),
+                onHorizontalDragEnd: (details) {
+                  final velocity = details.primaryVelocity;
+                  if (velocity == null) return;
+                  if (velocity < -200) {
+                    _requestTurnFromInput(PageTurnDirection.next);
+                  } else if (velocity > 200) {
+                    _requestTurnFromInput(PageTurnDirection.previous);
+                  }
+                },
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -651,15 +818,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 Row(
                   children: [
                     OutlinedButton(
-                      onPressed:
-                          canChangeLayout &&
-                              prefs.fontSize > ReadingPreferences.minFontSize
-                          ? () => _applyLayoutPreference(
-                              (notifier) => notifier.setFontSize(
-                                prefs.fontSize -
-                                    ReadingPreferences.fontSizeStep,
-                              ),
-                            )
+                      // No reload: the new size goes out as this reader's
+                      // fit, and the room's page follows once no turn is
+                      // in flight.
+                      onPressed: prefs.fontSize > ReadingPreferences.minFontSize
+                          ? () => ref
+                                .read(readingPreferencesProvider.notifier)
+                                .setFontSize(
+                                  prefs.fontSize -
+                                      ReadingPreferences.fontSizeStep,
+                                )
                           : null,
                       child: const Text('A−', style: TextStyle(fontSize: 16)),
                     ),
@@ -671,19 +839,30 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       ),
                     ),
                     OutlinedButton(
-                      onPressed:
-                          canChangeLayout &&
-                              prefs.fontSize < ReadingPreferences.maxFontSize
-                          ? () => _applyLayoutPreference(
-                              (notifier) => notifier.setFontSize(
-                                prefs.fontSize +
-                                    ReadingPreferences.fontSizeStep,
-                              ),
-                            )
+                      // No reload: the new size goes out as this reader's
+                      // fit, and the room's page follows once no turn is
+                      // in flight.
+                      onPressed: prefs.fontSize < ReadingPreferences.maxFontSize
+                          ? () => ref
+                                .read(readingPreferencesProvider.notifier)
+                                .setFontSize(
+                                  prefs.fontSize +
+                                      ReadingPreferences.fontSizeStep,
+                                )
                           : null,
                       child: const Text('A+', style: TextStyle(fontSize: 22)),
                     ),
                   ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _textSizeNote(
+                    ownFontSize: prefs.fontSize.round(),
+                    othersFontSize: _largestFontSizeOfOthers(
+                      ref.watch(presenceProvider).onlineUsers,
+                    ),
+                  ),
+                  style: AppTheme.caption,
                 ),
                 const SizedBox(height: 24),
                 const SectionHeader(label: 'Turning pages'),
@@ -714,6 +893,21 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         ),
       ),
     );
+  }
+
+  int? _largestFontSizeOfOthers(List<Map<String, dynamic>> onlineUsers) {
+    final currentUserId = ref.read(authProvider).userId;
+    int? largest;
+    for (final user in onlineUsers) {
+      if (user['user_id'] == currentUserId || user['is_reading'] != true) {
+        continue;
+      }
+      final fit = PageFit.fromWire(user['page_fit']);
+      if (fit != null && (largest == null || fit.fontSize > largest)) {
+        largest = fit.fontSize;
+      }
+    }
+    return largest;
   }
 
   // Feature 3: Members panel showing who's reading and who left.
@@ -824,4 +1018,16 @@ class _ThemeOption extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Why the text may be larger than the size this reader picked.
+String _textSizeNote({required int ownFontSize, required int? othersFontSize}) {
+  const shared =
+      'Everyone sees the same page: it fits the smallest screen in the '
+      'room, at the largest text size anyone picked.';
+  if (othersFontSize != null && othersFontSize > ownFontSize) {
+    return 'Another reader picked $othersFontSize, so the room reads at '
+        '$othersFontSize. $shared';
+  }
+  return shared;
 }

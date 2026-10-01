@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cotime_book/models/shared_page.dart';
 import 'package:cotime_book/providers/presence_provider.dart';
 import 'package:cotime_book/services/realtime_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -42,6 +43,40 @@ void main() {
     expect(alice['is_reading'], isTrue);
     expect(alice['reader_ready'], isTrue);
   });
+
+  test(
+    'the room only sizes its page to readers who are looking at it',
+    () async {
+      final realtime = _RecordingRealtimeService();
+      final notifier = PresenceNotifier(realtime);
+      const fit = PageFit(width: 360, height: 640, fontSize: 20);
+
+      await notifier.joinRoom(
+        roomCode: 'ABC234',
+        userId: 'alice',
+        nickname: 'Alice',
+        avatarColorIndex: 1,
+      );
+      await notifier.updateIsReading(true);
+      await notifier.updatePageFit(fit);
+      expect(PageFit.fromWire(realtime.lastPresence['page_fit']), fit);
+
+      // In the background: not looking at the page, so not holding it small.
+      await notifier.setAppActive(false);
+      expect(realtime.lastPresence['page_fit'], isNull);
+      await notifier.setAppActive(true);
+      expect(PageFit.fromWire(realtime.lastPresence['page_fit']), fit);
+
+      // Back in the lobby: gone, and not brought back by the next update.
+      await notifier.updateIsReading(false);
+      expect(realtime.lastPresence['page_fit'], isNull);
+      await notifier.updateIsReading(true);
+      expect(realtime.lastPresence['page_fit'], isNull);
+
+      notifier.dispose();
+      await realtime.close();
+    },
+  );
 
   test('reader readiness is explicit and clears on reader exit', () async {
     final realtime = _RecordingRealtimeService();
@@ -243,6 +278,7 @@ class _DeferredConnectionRealtimeService extends RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    Map<String, dynamic>? pageFit,
   }) async {}
 
   @override
@@ -297,6 +333,7 @@ class _RecordingRealtimeService extends RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    Map<String, dynamic>? pageFit,
   }) async {
     _record(
       userId: userId,
@@ -304,6 +341,7 @@ class _RecordingRealtimeService extends RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
+      pageFit: pageFit,
     );
   }
 
@@ -316,6 +354,7 @@ class _RecordingRealtimeService extends RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    Map<String, dynamic>? pageFit,
   }) async {
     _record(
       userId: userId,
@@ -323,6 +362,7 @@ class _RecordingRealtimeService extends RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
+      pageFit: pageFit,
     );
   }
 
@@ -341,6 +381,7 @@ class _RecordingRealtimeService extends RealtimeService {
     required String? bookHash,
     required bool isReading,
     required bool readerReady,
+    required Map<String, dynamic>? pageFit,
   }) {
     lastPresence = {
       'user_id': userId,
@@ -348,6 +389,7 @@ class _RecordingRealtimeService extends RealtimeService {
       'book_hash': bookHash,
       'is_reading': isReading,
       'reader_ready': readerReady,
+      'page_fit': pageFit,
     };
   }
 }
