@@ -15,6 +15,9 @@ class ReadingPreferences {
   static const double fontSizeStep = 2;
 
   final ReadingTheme theme;
+
+  /// The smallest text this reader wants. The room reads at the largest size
+  /// anyone picked, so every page holds the same text (issue #20).
   final double fontSize;
 
   /// Volume keys as page-turn keys. Off by default: on a phone they are the
@@ -68,8 +71,14 @@ class ReadingPreferences {
   /// The theme has to be handed to the viewer itself. It used to be applied
   /// only to the Scaffold around it, so picking Night repainted the margins
   /// and left the page — the part being read — exactly as it was.
+  ///
+  /// [fontSize] is only where the viewer starts: the book is laid out on the
+  /// room's shared page once it loads (issue #20).
   EpubDisplaySettings get displaySettings => EpubDisplaySettings(
     flow: EpubFlow.paginated,
+    // One page, never a two-page spread: "auto" turns a wide screen into a
+    // spread, which would hold twice the text of everyone else's page.
+    spread: EpubSpread.none,
     snap: false,
     // flutter_epub_viewer 1.2.x otherwise installs its own Android
     // detectSwipe() handler even when snap is false, bypassing the consensus

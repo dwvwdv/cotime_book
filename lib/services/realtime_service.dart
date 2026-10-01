@@ -279,6 +279,7 @@ class RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    Map<String, dynamic>? pageFit,
   }) {
     final normalizedCode = roomCode.trim().toUpperCase();
     final normalizedTopicId = _normalizeTopicId(roomTopicId);
@@ -290,6 +291,7 @@ class RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
+      pageFit: pageFit,
     );
 
     return _serialize(() async {
@@ -491,6 +493,7 @@ class RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    Map<String, dynamic>? pageFit,
   }) {
     final payload = _buildPresencePayload(
       userId: userId,
@@ -500,6 +503,7 @@ class RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
+      pageFit: pageFit,
     );
 
     return _serialize(() async {
@@ -681,6 +685,7 @@ class RealtimeService {
     required String? bookHash,
     required bool isReading,
     required bool readerReady,
+    required Map<String, dynamic>? pageFit,
   }) {
     return {
       'user_id': userId,
@@ -690,6 +695,9 @@ class RealtimeService {
       'book_hash': hasBook ? bookHash : null,
       'is_reading': isReading,
       'reader_ready': readerReady,
+      // Changes only when the reader opens or the text size changes, so it
+      // can live in Presence (see _schedulePresenceTrack).
+      'page_fit': pageFit,
     };
   }
 

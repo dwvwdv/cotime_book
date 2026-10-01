@@ -402,9 +402,65 @@
   `a reader who dropped out is named while turns are held`、`the bar keeps one height in every state`。
   已用 mutation 驗證：拿掉 `requestPageTurn` 的等待閘門會讓測試失敗。
 
+### [x] #20 不同裝置同一頁的字數不同，翻幾頁之後頁數就對不上
+
+- **檔案**：`lib/models/shared_page.dart`、`lib/services/shared_page_style.dart`、
+  `lib/services/shared_page_renderer.dart`、`assets/reader/shared_page.js`、
+  `assets/fonts/literata/`、`lib/screens/reader_screen.dart`、
+  `lib/providers/presence_provider.dart`、`lib/services/presence_merge.dart`、
+  `lib/services/realtime_service.dart`、`lib/providers/reading_preferences_provider.dart`
+- **症狀**：兩台手機一起讀，畫面上「同一頁」的文字量不同（一台排到 "The"，另一台多出
+  好幾行）。之後每翻一頁，兩邊各自前進自己的一頁，很快就讀到不同地方：小螢幕的人
+  會漏掉一段文字，大螢幕的人會重看一段。
+- **原因**：#14 讓共識比對 `seq` 而不是 CFI，但「一頁」本身仍是各裝置自己排出來的。
+  epub.js 依它拿到的框與字型分頁，而每台裝置給它的都不一樣：
+  - 視窗大小不同（邏輯寬高、扣掉狀態列後的高度）；
+  - **系統字型不同**——書沒有指定字型時用的是系統預設字型
+    （截圖一台是 MiSans、一台是 Roboto），同寬的框也會在不同地方斷行；
+  - 每個人可以各自調字級；`spread: auto` 在寬螢幕上還會變成兩頁並排；
+  - `line-height: normal` 的行高取自實際畫那一行的字型，CJK 由各裝置自己的 CJK 字型畫。
+  requester 翻的是**自己的**下一頁，follower 只是 `display()` 它的起點 CFI，
+  於是每次翻頁都把 requester 的分頁強加給別人。
+  另外，`flutter_epub_viewer` 的 `customCss` 實際上送不進書裡：它的 `loadBook()`
+  在第一個章節渲染前又註冊了一次不含 `customCss` 的主題，把它蓋掉了。
+- **修法**：全房共用一個版面 `SharedPage`（頁框寬高＋字級），所有 reader 都在它上面排版。
+  - 每個 reader 在 Presence 放自己的 `page_fit`（viewer 可用區域與自己選的字級；
+    只在閱讀中且 App 在前景時公開）。房間的頁 = **最小的寬、最小的高、最大的字級**——
+    放得進每一台螢幕，也滿足要求最大字的人。一個人多台裝置時合併成同樣的規則。
+    Presence 斷線時頁只會為了自己縮小、不會因為「看起來有人走了」而變大。
+  - 統一字型與排版：書一律用內建的 Literata（OFL，以 data URI 注入，因為書的章節
+    不是從 App 的 origin 載入），固定 `line-height`，關掉依裝置而異的斷字、
+    CJK 標點擠壓與中英間距、Android 字級放大。CJK 落到各裝置的 serif 字型，
+    但 CJK 字都是一個 em 寬、行高固定，所以不影響斷行。`spread` 固定為 `none`。
+  - 套用方式：書載入後由 `SharedPageRenderer` 執行 `assets/reader/shared_page.js`
+    （`rendition.themes.default()` 讓之後渲染的章節也套用；`rendition.resize()` 用數字
+    而非 `100vw`）。**不用 CSS 縮放**：epub.js 用 `getBoundingClientRect()` 找頁首，
+    transform 會讓它算出偏掉的 CFI，交給別人就是錯的頁。所以大螢幕是同一頁加寬邊界。
+  - reader：版面還沒套上前 viewer 不算 loaded（不會被詢問、不能翻頁），
+    套用期間的 relocate 不算移動；套用完重新 `display()` 房間的位置。
+    版面只在沒有翻頁、沒有 display 進行中時才換（每個分頁點都會移動）。
+    script 跑不起來時照樣讓人讀（不擋住房間），並重試。
+  - 字級調整不再重建 viewer：改的是自己的 `page_fit`，房間的頁跟著變。
+    設定面板說明「大家看到同一頁」，以及別人選了更大的字時房間用的是多少。
+- **測試**：`test/shared_page_test.dart` →
+  `readers on different screens agree on one page`、`someone in the lobby does not shrink the page`、
+  `a fit that is missing or malformed is left out`、`a half-measured screen cannot squeeze the page to nothing`、
+  `one person reading on two devices gets a page that fits both`、
+  `the page does not grow because people seem to have left`、
+  `every face of the font ships with the app`、`the device's own fonts and line heights cannot take over`；
+  `test/presence_provider_test.dart` → `the room only sizes its page to readers who are looking at it`；
+  `test/reading_preferences_test.dart` → `a wide screen shows one page, not a two-page spread`。
+  已用 mutation 驗證：拿掉「只算閱讀中的人」與多裝置合併，各自會讓測試失敗。
+  - **實際排版**用 `tool/shared_page_check/check.js` 驗證（Chromium 跑套件內建的 epub.js、
+    App 的 `shared_page.js` 與 Dart 產生的樣式表；兩台「裝置」螢幕尺寸、DPR、系統字型、
+    載入字級都不同，翻完整本書比對每頁起點）：各自排版 1/120 頁一致，共享頁面 120/120。
+    只統一頁框、不統一字型時第 1 頁就分歧——字型那一半是必要的。CI 沒有跑它
+    （需要 Node + Playwright），改到排版相關程式時要手動跑。
+
 ### [x] #A 不同螢幕尺寸的裝置之間 CFI 對不起來
 
 - 由 #14 的重新設計解決：共識比對 `seq`，不比對 CFI 字串。
+  但「一頁的內容」仍依裝置而異，直到 #20 讓全房在同一個版面上排版。
 
 ### [x] #D reader 進場的頭幾毫秒會丟掉 page_turn 事件
 
@@ -533,6 +589,10 @@
 - **還缺的**：`EpubViewer` 需要真的 WebView，要測這個畫面得先把 viewer 抽成介面
   （像 `PageSyncTransport` 那樣注入），才能在測試裡驅動 `onChaptersLoaded` / `onRelocated`。
   在那之前，這個檔案的改動只能靠實機驗證。
+- #20 又加了一段只在這裡的狀態：版面套用（`_syncPageLayout`、`_layoutInFlight`、
+  `_appliedPage`）。版面怎麼算（`SharedPage`）與套上去之後是否一致（`check.js`）
+  都有驗證，但「套用期間的 relocate 被忽略、套完回到房間位置、翻頁中延後套用」
+  這段時序同樣只能靠實機。
 
 ### [ ] #B `copyWith` 預設會靜默清掉 `error`
 
@@ -574,6 +634,8 @@
 - **問題**：#14 / #16 換掉了 wire 協定（`page_turn_vote` / `page_turn_commit`、
   `transfer_request`、不帶 session id 的 `start_reading`）。舊版 App 送出的請求新版會忽略，
   反之亦然。
+- #20 再加了 Presence 的 `page_fit`：舊版不會送，新版就不會把它算進共享頁面，
+  舊版那台仍在自己的螢幕上排版，頁面會跟其他人漂移。
 - **為什麼先不動**：App 是 APK 發佈，沒有後端相容層可以做；協定版本協商的成本
   遠高於「請所有人更新」。若之後需要，可以在 Presence 加 `protocol` 欄位，
   lobby 對版本不同的成員顯示「請更新 App」。
@@ -609,3 +671,27 @@
 - **為什麼先不動**：只有兩筆、無使用者可見影響，而且還沒能重現是哪一條路徑。
   若之後變多，watchdog 應在重建前確認成員資格，或把 `Unauthorized` 當成「已不在房間」
   而停止重建並回到首頁。
+
+### [ ] #S 大螢幕上共享頁面不會放大
+
+- **檔案**：`assets/reader/shared_page.js`、`lib/services/shared_page_renderer.dart`
+- **現況**：#20 讓全房用同一個頁框，頁框取最小的螢幕。平板和手機一起讀時，平板顯示的是
+  手機大小的一頁加上很寬的邊界，字也是同樣大小。
+- **為什麼先不動**：最直接的 CSS `transform: scale()` 會讓 epub.js 算錯頁首 CFI
+  （已在 Chromium 實測：畫面一樣，但回報的起點偏了，交給別人就可能差一頁）。
+  可行方向是 WebView 本身的頁面縮放（viewport `initial-scale` 或
+  `InAppWebViewSettings`），它不影響 `getBoundingClientRect()`；但 Android WebView 在
+  `supportZoom: false`、`loadWithOverviewMode` 下對動態 viewport 的行為需要實機確認，
+  沒有裝置可以驗證前不改。
+
+### [ ] #T 內建字型沒有涵蓋的文字仍用各裝置的字型
+
+- **檔案**：`lib/services/shared_page_style.dart`
+- **問題**：Literata 只帶了 latin / latin-ext / cyrillic / greek。CJK 落到系統 serif 字型
+  不影響斷行（全形、行高固定），但泰文、阿拉伯文、希伯來文、天城文等比例字型
+  在不同裝置上寬度不同，這類書仍可能逐頁漂移。書自己內嵌的字型也會被蓋掉
+  （`font-family` 對所有元素 `!important`）。
+- **為什麼先不動**：目前的使用者讀的是中文與英文書。要涵蓋就得每種文字各帶一套字型，
+  或只在書沒有內嵌字型時才覆蓋——兩者都需要確認需求再做。
+- 另外，`flutter_epub_viewer` 的 `customCss` 送不進書（見 #20 原因），之後升級套件時
+  若修好了，可以考慮改回用它，但 `shared_page.js` 仍需要負責頁框。

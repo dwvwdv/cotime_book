@@ -57,6 +57,12 @@ supabase/
      （issue #19）。新增「離開」路徑時要記得送出明確的離開訊號，否則會讓別人白等一分鐘。
    - reader 畫面不決定房間在哪一頁：它只顯示 shared position，以及在自己是 requester
      時翻一頁並回報落點。
+   - **「一頁」的內容也是全房共用的**（issue #20）。每個 reader 都在同一個 `SharedPage`
+     （最小的頁框、最大的字級，由 Presence 的 `page_fit` 算出）上、用內建字型與固定行高排版，
+     由 `assets/reader/shared_page.js` 在書載入後套用。不要讓書回到用本機視窗或系統字型排版，
+     也不要用 CSS transform 縮放頁面——epub.js 會因此算錯頁首 CFI。
+     改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，跑
+     `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致。
    改這個檔案前先讀 `test/page_sync_service_test.dart`——它用多 client 的 `FakeRoom`
    把遺失訊息、同時翻頁、斷線等情況都釘住了。
 
@@ -97,7 +103,8 @@ supabase/
      snackbar 用 `showPaperMessage()`、bottom sheet 用 `showPaperSheet()`。
    - 不要半透明與陰影；用 1.5px 的線分隔。
    - **viewer 周圍的 chrome 必須固定高度。** 任何改變 `EpubViewer` 尺寸的東西都會讓
-     epub.js 重新分頁、改掉本機 CFI（見 issue #13）。
+     epub.js 重新分頁、改掉本機 CFI（見 issue #13）；
+     而 viewer 的可用區域就是自己的 `page_fit`，它一變，全房都要重新排版（issue #20）。
 
 ## 指令
 

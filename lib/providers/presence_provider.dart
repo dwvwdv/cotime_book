@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/shared_page.dart';
 import '../services/realtime_service.dart';
 
 export '../services/presence_merge.dart' show mergePresenceUsers;
@@ -76,6 +77,7 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
   String? _currentBookHash;
   bool _currentIsReading = false;
   bool _currentReaderReady = false;
+  PageFit? _currentPageFit;
   bool _isAppActive = true;
   bool _hasPendingJoinAnnouncement = false;
   Timer? _joinAnnouncementRetryTimer;
@@ -158,6 +160,7 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
         bookHash: bookHash,
         isReading: _isAppActive && isReading,
         readerReady: _isAppActive && readerReady,
+        pageFit: _publishedPageFit,
       );
     } catch (error) {
       state = state.copyWith(
@@ -178,9 +181,25 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
     _currentIsReading = isReading;
     // Entering Reader does not mean the EPUB viewer can turn pages yet.
     // Only the chapters-loaded hook may set reader_ready=true.
-    if (!isReading) _currentReaderReady = false;
+    if (!isReading) {
+      _currentReaderReady = false;
+      // Out of the book: not holding anyone's page to this screen any more.
+      _currentPageFit = null;
+    }
     await _updatePresence();
   }
+
+  /// What this reader's screen and text size need from the shared page.
+  Future<void> updatePageFit(PageFit? fit) async {
+    if (_currentPageFit == fit) return;
+    _currentPageFit = fit;
+    await _updatePresence();
+  }
+
+  /// A reader in the background is not looking at the page; like `is_reading`,
+  /// its fit is withheld until it comes back.
+  Map<String, dynamic>? get _publishedPageFit =>
+      _isAppActive && _currentIsReading ? _currentPageFit?.toWire() : null;
 
   Future<void> updateReaderReady(bool readerReady) async {
     if (_currentReaderReady == readerReady) return;
@@ -262,6 +281,7 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
       bookHash: _currentBookHash,
       isReading: _isAppActive && _currentIsReading,
       readerReady: _isAppActive && _currentReaderReady,
+      pageFit: _publishedPageFit,
     );
   }
 
@@ -288,6 +308,7 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
     _currentBookHash = null;
     _currentIsReading = false;
     _currentReaderReady = false;
+    _currentPageFit = null;
     _isAppActive = true;
   }
 

@@ -58,3 +58,7 @@ flutter:
 
   assets:
     - assets/icon/
+    # The shared page (issue #20): the font every reader's book is set in,
+    # and the script that lays the book out on the room's page.
+    - assets/fonts/literata/
+    - assets/reader/
