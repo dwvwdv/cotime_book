@@ -59,6 +59,15 @@ supabase/
    `PageSyncState.error` 會在 `defaultErrorAutoClearDelay` 後自動回到 idle。
    任何新加的錯誤狀態都要有清除路徑——永久橫幅會被使用者讀成「App 壞了」。
 
+6. **UI 是為電子紙（e-ink）設計的。** 很大一部分使用者用的是電子閱讀器，不是手機。
+   設計系統叫 Paper，定義在 `lib/config/theme.dart`，共用元件在 `lib/widgets/paper.dart`：
+   - 狀態不靠顏色傳達（面板是灰階）——用字重、實心/空心、黑白反轉、文字標籤。
+   - 不要動畫：不用 `CircularProgressIndicator`（改成「Loading...」之類的文字）、
+     snackbar 用 `showPaperMessage()`、bottom sheet 用 `showPaperSheet()`。
+   - 不要半透明與陰影；用 1.5px 的線分隔。
+   - **viewer 周圍的 chrome 必須固定高度。** 任何改變 `EpubViewer` 尺寸的東西都會讓
+     epub.js 重新分頁、改掉本機 CFI（見 issue #13）。
+
 ## 指令
 
 ```bash
