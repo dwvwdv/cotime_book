@@ -81,38 +81,38 @@ class RoomNotifier extends StateNotifier<RoomState> {
   }) : _onSessionRevoked = onSessionRevoked,
        super(const RoomState());
 
-  Future<Room?> createRoom(String nickname) async {
-    final operationGeneration = ++_roomSessionGeneration;
-    _resetMemberTracking();
-    state = state.copyWith(isLoading: true, error: null);
-    try {
-      final room = await _roomService.createRoom(nickname: nickname);
-      final members = await _roomService.getRoomMembers(room.id);
-      if (_roomSessionGeneration != operationGeneration) return null;
-      state = state.copyWith(
-        currentRoom: room,
-        members: members,
-        isLoading: false,
-      );
-      _startHeartbeat(room.id);
-      return room;
-    } catch (e) {
-      if (_roomSessionGeneration == operationGeneration) {
-        state = state.copyWith(isLoading: false, error: e.toString());
-      }
-      return null;
-    }
+  Future<Room?> createRoom(String nickname) {
+    return _enterRoom(() => _roomService.createRoom(nickname: nickname));
   }
 
-  Future<Room?> joinRoom(String code, String nickname) async {
+  Future<Room?> joinRoom(String code, String nickname) {
+    return _enterRoom(
+      () => _roomService.joinRoom(code: code, nickname: nickname),
+    );
+  }
+
+  /// Goes back to a room from the recent list.
+  ///
+  /// Room codes are reserved forever, so a room that has since closed cannot
+  /// be reopened under its old code. The person tapped it to read again, so
+  /// they get a new room rather than a dead end; the caller can tell from the
+  /// returned code that it is not the one they asked for.
+  Future<Room?> rejoinRoom(String code, String nickname) {
+    return _enterRoom(() async {
+      try {
+        return await _roomService.joinRoom(code: code, nickname: nickname);
+      } on RoomNotFoundException {
+        return _roomService.createRoom(nickname: nickname);
+      }
+    });
+  }
+
+  Future<Room?> _enterRoom(Future<Room> Function() enter) async {
     final operationGeneration = ++_roomSessionGeneration;
     _resetMemberTracking();
     state = state.copyWith(isLoading: true, error: null);
     try {
-      final room = await _roomService.joinRoom(
-        code: code,
-        nickname: nickname,
-      );
+      final room = await enter();
       final members = await _roomService.getRoomMembers(room.id);
       if (_roomSessionGeneration != operationGeneration) return null;
       state = state.copyWith(

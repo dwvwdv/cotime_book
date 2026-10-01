@@ -430,6 +430,51 @@
 
 - 由 #16 解決：收書沒有失敗終態，元件顯示的是「正在做什麼」。
 
+### [x] #O 每次打開 App 都要重新輸入 Nickname
+
+- **檔案**：`lib/providers/auth_provider.dart`、`lib/services/local_store.dart`、`lib/main.dart`
+- **症狀**：匿名 session 會跨重啟保留，但 nickname 欄位每次都是空的，進房前一定要重打。
+- **原因**：nickname 只存在 `AuthState` 的記憶體裡，App 沒有任何本機儲存。
+- **修法**：新增 `shared_preferences` 依賴與 `LocalStore`（`localStoreProvider`，
+  `main()` 用 SharedPreferences 覆寫；預設是純記憶體，讓測試不需要 plugin）。
+  `AuthNotifier` 建構時讀出上次的 nickname，`setNickname()` 時寫回；首頁欄位用它預填。
+  plugin 載入失敗時退回記憶體，不會讓 App 起不來。
+- **測試**：`test/local_store_test.dart` → `is remembered across launches`；
+  `test/home_screen_test.dart` → `the nickname from last time is already filled in`
+
+### [x] #P Room code 欄位跳出中文輸入法
+
+- **檔案**：`lib/widgets/room_code_input.dart`
+- **症狀**：點 Room code 時鍵盤沿用上一次的輸入法（多半是注音／拼音），
+  字母會進組字區變成候選字，要手動切英文。
+- **修法**：`keyboardType: TextInputType.visiblePassword`，並關掉 autocorrect / suggestions。
+  這是唯一一個 Android 各家 IME 與 iOS（對應 ASCII-capable 鍵盤）都會改給英文配置的型別；
+  大寫仍由 `UpperCaseTextFormatter` 處理。
+- **測試**：`test/home_screen_test.dart` → `the room code field asks for an English keyboard`
+
+### [x] #Q 沒有辦法快速回到之前的房間
+
+- **檔案**：`lib/providers/recent_rooms_provider.dart`、`lib/widgets/recent_rooms_list.dart`、
+  `lib/providers/room_provider.dart`（`rejoinRoom`）、`lib/services/room_service.dart`
+- **功能**：首頁的「Recent rooms」列出最近 8 個進過的房間（房號、書名、上次進入日期），
+  點一下直接進房，旁邊的 × 可以移除。
+- **設計**：
+  - 紀錄由 `recentRoomsProvider` 監聽 `roomProvider.currentRoom` 寫入，而不是由按鈕寫入——
+    create / join / 最近房間三條路徑都會被記到，lobby 選書後書名也會跟著更新。
+    這個 provider 由首頁第一次 watch 後常駐（非 autoDispose）；App 一律從首頁啟動，
+    若之後加入直接開 lobby 的 deep link，要記得在啟動時先 read 它。
+  - room code 永久保留不重用（`room_code_reservations`），關掉的房間無法用原房號重開。
+    所以 `rejoinRoom()` 先 join，收到 `RoomNotFoundException`（RPC 的 `P0002`）就改成
+    create 新房間，首頁提示新房號並把舊紀錄移除。
+  - `join_room` 的 `P0002` 現在轉成 `RoomNotFoundException`，手動輸入不存在的房號時
+    錯誤訊息是人話（「Room ABC234 has closed or does not exist.」）而不是 PostgrestException。
+  - 存檔裡壞掉的條目會被略過，不會讓整份清單或首頁壞掉。
+- **測試**：`test/local_store_test.dart`（排序、去重、上限、書名保留、移除、壞資料）；
+  `test/room_provider_test.dart` → `a recent room that has closed opens a new room instead`、
+  `joining a closed room by code says so in words`；
+  `test/home_screen_test.dart` → `tapping a recent room goes straight back in`、
+  `a recent room that has closed is replaced by a new one`
+
 ---
 
 ## 開放中
@@ -471,8 +516,10 @@
 - **檔案**：`lib/providers/reading_preferences_provider.dart`
 - **問題**：主題、字級、音量鍵翻頁都只存在記憶體裡，每次開 App 都回到預設。
   電子閱讀器使用者通常會調大字級，每次重設很煩。
-- **建議**：加 `shared_preferences`，在 `ReadingPreferencesNotifier` 建構時讀取、
-  每次 set 時寫入。這是新增依賴，所以沒有跟這次的樣式重做一起進來。
+- **建議**：#O 已經加了 `shared_preferences` 與 `LocalStore`，這項只剩在
+  `ReadingPreferencesNotifier` 建構時從 `localStoreProvider` 讀取、每次 set 時寫入。
+  這次沒有一起做，是因為使用者要的是 nickname 與最近房間，閱讀偏好的預設值與遷移
+  值得單獨確認。
 
 
 ### [ ] #K 新舊版本的 App 無法在同一個房間裡互通

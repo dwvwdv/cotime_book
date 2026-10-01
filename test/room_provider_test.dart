@@ -34,6 +34,46 @@ void main() {
       expect(notifier.state.currentRoom?.currentCfi, 'page-3');
     });
 
+    test('a recent room that is still open is joined, not recreated', () async {
+      final service = FakeRoomService()..nextRoom = testRoom(code: 'ABC234');
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      final room = await notifier.rejoinRoom('ABC234', 'Alice');
+
+      expect(room?.code, 'ABC234');
+      expect(service.createCalls, 0);
+      expect(notifier.state.currentRoom?.code, 'ABC234');
+    });
+
+    test('a recent room that has closed opens a new room instead', () async {
+      // Codes are never reused, so the old room can't come back; tapping it
+      // must still leave the person in a room rather than on an error.
+      final service = FakeRoomService()
+        ..joinError = const RoomNotFoundException('ABC234')
+        ..createdRoom = testRoom(id: 'room-b', code: 'XYZ789');
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      final room = await notifier.rejoinRoom('ABC234', 'Alice');
+
+      expect(service.joinedCodes, ['ABC234']);
+      expect(room?.code, 'XYZ789');
+      expect(notifier.state.currentRoom?.code, 'XYZ789');
+      expect(notifier.state.error, isNull);
+    });
+
+    test('joining a closed room by code says so in words', () async {
+      final service = FakeRoomService()
+        ..joinError = const RoomNotFoundException('ABC234');
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      expect(await notifier.joinRoom('ABC234', 'Alice'), isNull);
+      expect(service.createCalls, 0);
+      expect(notifier.state.error, 'Room ABC234 has closed or does not exist.');
+    });
+
     test('a dropped leave request is sent again', () async {
       // Regression: one failed leave RPC left the member in everyone else's
       // list until the server evicted them half an hour later.
@@ -548,14 +588,27 @@ class FakeRoomService extends RoomService {
   final List<int> bookExpectedRevisions = [];
   final List<String> cfiWrites = [];
 
+  Object? joinError;
+  Room? createdRoom;
+  final List<String> joinedCodes = [];
+  int createCalls = 0;
+
   @override
-  Future<Room> createRoom({required String nickname}) async => nextRoom;
+  Future<Room> createRoom({required String nickname}) async {
+    createCalls++;
+    return createdRoom ?? nextRoom;
+  }
 
   @override
   Future<Room> joinRoom({
     required String code,
     required String nickname,
-  }) async => nextRoom;
+  }) async {
+    joinedCodes.add(code);
+    final error = joinError;
+    if (error != null) throw error;
+    return nextRoom;
+  }
 
   @override
   Future<List<RoomMember>> getRoomMembers(String roomId) async {

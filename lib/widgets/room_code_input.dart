@@ -18,6 +18,14 @@ class RoomCodeInput extends StatelessWidget {
     return TextField(
       controller: controller,
       maxLength: AppConstants.roomCodeLength,
+      // Codes are Latin letters and digits only. A plain text field opens
+      // whatever keyboard was last used, which for most of our readers is a
+      // Chinese IME: letters go into a composing buffer and come out as
+      // candidates. visiblePassword is the one input type both Android IMEs
+      // and iOS (ASCII-capable) answer with an English layout.
+      keyboardType: TextInputType.visiblePassword,
+      autocorrect: false,
+      enableSuggestions: false,
       textCapitalization: TextCapitalization.characters,
       textAlign: TextAlign.center,
       style: const TextStyle(

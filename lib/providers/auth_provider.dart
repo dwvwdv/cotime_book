@@ -1,8 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../services/local_store.dart';
 import '../services/supabase_service.dart';
+import 'local_store_provider.dart';
 
 final authProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
-  return AuthNotifier();
+  return AuthNotifier(ref.read(localStoreProvider));
 });
 
 class AuthState {
@@ -36,7 +38,16 @@ class AuthState {
 }
 
 class AuthNotifier extends StateNotifier<AuthState> {
-  AuthNotifier() : super(const AuthState());
+  final LocalStore _store;
+
+  // The nickname is the only part of the identity a person types, and the
+  // anonymous session already survives a restart. Asking for it again on
+  // every launch made the app feel like it had forgotten them.
+  AuthNotifier([LocalStore? store]) : this._(store ?? LocalStore());
+
+  AuthNotifier._(LocalStore store)
+    : _store = store,
+      super(AuthState(nickname: store.nickname));
 
   Future<void> signInAnonymously() async {
     state = state.copyWith(isLoading: true, error: null);
@@ -56,6 +67,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   void setNickname(String nickname) {
     state = state.copyWith(nickname: nickname);
+    _store.saveNickname(nickname);
   }
 
   Future<void> checkExistingSession() async {

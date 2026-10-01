@@ -22,6 +22,17 @@ class RoomSessionChangedException implements Exception {
   String toString() => 'Room state changed before the update could finish';
 }
 
+/// The code no longer names a room anyone can enter: it was never issued, or
+/// the room has closed. Codes are reserved forever, so this is permanent.
+class RoomNotFoundException implements Exception {
+  final String code;
+
+  const RoomNotFoundException(this.code);
+
+  @override
+  String toString() => 'Room $code has closed or does not exist.';
+}
+
 class RoomRevisionConflictException implements Exception {
   final Room currentRoom;
 
@@ -55,13 +66,20 @@ class RoomService {
       throw Exception('Not authenticated');
     }
 
-    final roomData = await _database.rpc('join_room', params: {
-      'p_code': code.toUpperCase(),
-      'p_nickname': nickname,
-      'p_avatar_color_index': Random.secure().nextInt(8),
-    }).single();
+    try {
+      final roomData = await _database.rpc('join_room', params: {
+        'p_code': code.toUpperCase(),
+        'p_nickname': nickname,
+        'p_avatar_color_index': Random.secure().nextInt(8),
+      }).single();
 
-    return Room.fromJson(roomData);
+      return Room.fromJson(roomData);
+    } on PostgrestException catch (error) {
+      if (error.code == 'P0002') {
+        throw RoomNotFoundException(code.toUpperCase());
+      }
+      rethrow;
+    }
   }
 
   Future<List<RoomMember>> getRoomMembers(String roomId) async {
