@@ -46,8 +46,8 @@ void main() {
       expect(notifier.state.currentRoom?.code, 'ABC234');
     });
 
-    test('a recent room that has closed opens a new room instead', () async {
-      // Codes are never reused, so the old room can't come back; tapping it
+    test('a recent room that is gone opens a new room instead', () async {
+      // Purged rooms can't come back and codes are never reused; tapping one
       // must still leave the person in a room rather than on an error.
       final service = FakeRoomService()
         ..joinError = const RoomNotFoundException('ABC234')

@@ -463,9 +463,9 @@
     create / join / 最近房間三條路徑都會被記到，lobby 選書後書名也會跟著更新。
     這個 provider 由首頁第一次 watch 後常駐（非 autoDispose）；App 一律從首頁啟動，
     若之後加入直接開 lobby 的 deep link，要記得在啟動時先 read 它。
-  - room code 永久保留不重用（`room_code_reservations`），關掉的房間無法用原房號重開。
-    所以 `rejoinRoom()` 先 join，收到 `RoomNotFoundException`（RPC 的 `P0002`）就改成
-    create 新房間，首頁提示新房號並把舊紀錄移除。
+  - `rejoinRoom()` 先 join：已關閉的房間由伺服器重新啟用（見 #R）；只有房間已被清除
+    （關閉超過 30 天）或這個帳號從沒進過時才會收到 `RoomNotFoundException`（RPC 的 `P0002`），
+    這時改成 create 新房間，首頁提示新房號並把舊紀錄移除（room code 永不重用，舊房號回不來）。
   - `join_room` 的 `P0002` 現在轉成 `RoomNotFoundException`，手動輸入不存在的房號時
     錯誤訊息是人話（「Room ABC234 has closed or does not exist.」）而不是 PostgrestException。
   - 存檔裡壞掉的條目會被略過，不會讓整份清單或首頁壞掉。
@@ -474,6 +474,26 @@
   `joining a closed room by code says so in words`；
   `test/home_screen_test.dart` → `tapping a recent room goes straight back in`、
   `a recent room that has closed is replaced by a new one`
+
+### [x] #R 已關閉的房間無法重新啟用
+
+- **檔案**：`supabase/migrations/20261001120000_reopen_closed_rooms.sql`
+- **症狀**：大家離開（或 24 小時沒活動）後房間就關了；從「Recent rooms」點回去只會開一個新房號，
+  要重新把房號傳給所有人，書與上次的位置也都沒了——即使關閉的房間列還在資料庫裡保留 30 天。
+- **原因**：`join_room` 把任何非 active 的房間都當成不存在。
+- **修法**：
+  - 新增 `cotime_book_private.room_participants`（room_id, user_id），由 `room_members` 的
+    AFTER INSERT trigger 記錄，所以 create / join 以及之後任何進房路徑都會被記到；
+    房間被清除時 cascade 一起刪掉。API 角色沒有任何權限。
+  - `join_room` 在鎖住房間後，若房間已關閉或租約過期，且呼叫者曾在房內，就重新啟用：
+    清掉殘留成員、`is_active = true`、`closed_at = null`、host 改成重新啟用的人
+    （前任 host 已不在房內），書名 / hash / `current_cfi` 保留。
+  - 其他人得到與房號不存在相同的 `P0002`，不會洩漏哪些關閉的房號是真的。
+  - 兩個前成員同時重啟會在房間列的 `FOR UPDATE` 上序列化，第二個看到的是已開啟的房間、正常加入。
+- **限制**：migration 只能回填「目前的成員」與「每個房間最後的 host」。在這之前就已關閉的房間，
+  只有最後的 host 能重新啟用；其他人點回去會開新房。
+- **測試**：`supabase/tests/database/room_reopen.test.sql`（16 項：前成員重啟、陌生人被拒且不洩漏、
+  書與位置保留、host 轉移、第二個前成員正常加入、租約過期的房間、建立者被記錄、清除時連帶刪除）
 
 ---
 

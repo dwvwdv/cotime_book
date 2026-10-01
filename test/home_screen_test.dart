@@ -139,7 +139,7 @@ void main() {
     await leave(tester);
   });
 
-  testWidgets('a recent room that has closed is replaced by a new one', (
+  testWidgets('a recent room that is gone is replaced by a new one', (
     tester,
   ) async {
     rooms
@@ -155,7 +155,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(visitedLobbies, ['XYZ789']);
-    expect(find.textContaining('Room ABC234 has closed'), findsOneWidget);
+    expect(find.textContaining('Room ABC234 is no longer available'), findsOneWidget);
     await leave(tester);
     expect(store.recentRooms.map((r) => r.code), ['XYZ789']);
   });

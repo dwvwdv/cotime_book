@@ -293,13 +293,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
     if (room == null || !mounted) return;
     if (room.code != recent.code) {
-      // The old room closed and its code can never come back, so the entry
-      // would only fail again next time.
+      // The old room is gone for good (a closed room would have been reopened)
+      // and its code is never reused, so the entry would only fail again.
       ref.read(recentRoomsProvider.notifier).remove(recent.code);
       showPaperMessage(
         context,
-        'Room ${recent.code} has closed, so a new room ${room.code} '
-        'was created. Share the new code with the others.',
+        'Room ${recent.code} is no longer available, so a new room '
+        '${room.code} was created. Share the new code with the others.',
         duration: const Duration(seconds: 6),
       );
     }

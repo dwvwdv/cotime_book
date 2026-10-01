@@ -93,10 +93,12 @@ class RoomNotifier extends StateNotifier<RoomState> {
 
   /// Goes back to a room from the recent list.
   ///
-  /// Room codes are reserved forever, so a room that has since closed cannot
-  /// be reopened under its old code. The person tapped it to read again, so
-  /// they get a new room rather than a dead end; the caller can tell from the
-  /// returned code that it is not the one they asked for.
+  /// join_room itself reopens a closed room for anyone who was in it, so this
+  /// only falls back when the room is really gone: purged after 30 days
+  /// closed, or this account was never a member. Codes are never reused, so
+  /// the old one can't be recreated; the person tapped it to read again, so
+  /// they get a new room rather than a dead end, and the caller can tell from
+  /// the returned code that it is not the one they asked for.
   Future<Room?> rejoinRoom(String code, String nickname) {
     return _enterRoom(() async {
       try {
