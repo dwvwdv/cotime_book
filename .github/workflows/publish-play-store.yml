@@ -1,0 +1,301 @@
+name: Publish to Google Play
+
+on:
+  workflow_dispatch:
+    inputs:
+      track:
+        description: '發布軌道'
+        required: true
+        type: choice
+        options:
+          - internal
+          - alpha
+          - beta
+          - production
+        default: internal
+      inAppUpdatePriority:
+        description: '強制更新優先級（5 = 強制更新，0 = 不強制）'
+        required: true
+        type: choice
+        options:
+          - '0'
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+          - '5'
+        default: '0'
+      version_code:
+        description: '指定版本碼（留空則自動從 pubspec.yaml 讀取）'
+        required: false
+        type: string
+        default: ''
+      skip_build:
+        description: '跳過編譯（版本碼已存在 Google Play，直接發佈）'
+        required: false
+        type: boolean
+        default: false
+      release_status:
+        description: '發布狀態（App 尚未通過首次審核前只能用 draft）'
+        required: true
+        type: choice
+        options:
+          - completed
+          - draft
+        default: completed
+      release_notes:
+        description: 'Play 商店更新說明（選填，≤500 字元，zh-TW 與 en-US 共用）'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Build & Publish to Play Store
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from pubspec.yaml
+        id: get_version
+        env:
+          INPUT_CODE: ${{ inputs.version_code }}
+        run: |
+          PUBSPEC_VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: /v/')
+          PUBSPEC_CODE=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
+          if [ -n "$INPUT_CODE" ]; then
+            if ! [[ "$INPUT_CODE" =~ ^[0-9]+$ ]]; then
+              echo "Error: version_code must be a positive integer, got: '$INPUT_CODE'"
+              exit 1
+            fi
+            VERSION_CODE="$INPUT_CODE"
+            VERSION="${PUBSPEC_VERSION%+*}（指定版本碼 ${VERSION_CODE}）"
+          else
+            VERSION_CODE="$PUBSPEC_CODE"
+            VERSION="$PUBSPEC_VERSION"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "VERSION_CODE=${VERSION_CODE}" >> $GITHUB_OUTPUT
+          echo "Detected version: ${VERSION} (code: ${VERSION_CODE})"
+
+      - name: Set up Java
+        if: ${{ !inputs.skip_build }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        if: ${{ !inputs.skip_build }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.4'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        if: ${{ !inputs.skip_build }}
+        run: flutter pub get
+
+      - name: Generate app icons
+        if: ${{ !inputs.skip_build }}
+        run: dart run flutter_launcher_icons
+
+      - name: Analyze code
+        if: ${{ !inputs.skip_build }}
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run tests
+        if: ${{ !inputs.skip_build }}
+        run: flutter test
+
+      # 少了 keystore，Gradle 會退回 debug key 簽章，上傳時才被 Play 拒收；
+      # 少了 Supabase 憑證，AAB 照樣上傳成功、用掉版本碼，裝起來卻連不上房間。
+      # 兩種都在編譯前擋下。
+      - name: Check required secrets
+        if: ${{ !inputs.skip_build }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          MISSING=""
+          [ -z "$KEYSTORE_BASE64" ] && MISSING="$MISSING KEYSTORE_BASE64"
+          [ -z "$SUPABASE_URL" ] && MISSING="$MISSING SUPABASE_URL"
+          [ -z "$SUPABASE_ANON_KEY" ] && MISSING="$MISSING SUPABASE_ANON_KEY"
+          if [ -n "$MISSING" ]; then
+            echo "Error: missing secrets:$MISSING"
+            exit 1
+          fi
+
+      - name: Decode and setup keystore
+        if: ${{ !inputs.skip_build }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/release-key.jks
+          cat > android/key.properties << EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=release-key.jks
+          EOF
+
+      - name: Build App Bundle (AAB)
+        if: ${{ !inputs.skip_build }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          VERSION_CODE: ${{ steps.get_version.outputs.VERSION_CODE }}
+        run: |
+          flutter build appbundle --release \
+            --build-number="$VERSION_CODE" \
+            --dart-define=SUPABASE_URL="$SUPABASE_URL" \
+            --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
+
+      - name: Prepare Play Store release notes
+        env:
+          NOTES: ${{ inputs.release_notes }}
+        run: |
+          mkdir -p whatsnew
+          if [ "$(printf '%s' "$NOTES" | wc -m)" -gt 500 ]; then
+            echo "Error: release_notes exceeds Play Store's 500-character limit"
+            exit 1
+          fi
+          if [ -n "$NOTES" ]; then
+            printf '%s' "$NOTES" > whatsnew/whatsnew-zh-TW
+            printf '%s' "$NOTES" > whatsnew/whatsnew-en-US
+            echo "Release notes written ($(printf '%s' "$NOTES" | wc -m) chars)"
+          else
+            echo "No release_notes found, skipping"
+          fi
+
+      - name: Upload to Google Play
+        if: ${{ !inputs.skip_build }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.SERVICE_ACCOUNT_JSON }}
+          packageName: com.lazyrhythm.cotime_book
+          releaseFiles: build/app/outputs/bundle/release/app-release.aab
+          track: ${{ inputs.track }}
+          inAppUpdatePriority: ${{ inputs.inAppUpdatePriority }}
+          status: ${{ inputs.release_status }}
+          whatsNewDirectory: whatsnew
+
+      - name: Set up Python
+        if: ${{ inputs.skip_build }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Promote existing version code to track
+        if: ${{ inputs.skip_build }}
+        env:
+          SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
+          VERSION_CODE: ${{ steps.get_version.outputs.VERSION_CODE }}
+          TRACK: ${{ inputs.track }}
+          PRIORITY: ${{ inputs.inAppUpdatePriority }}
+          RELEASE_STATUS: ${{ inputs.release_status }}
+        run: |
+          python -m pip install google-api-python-client google-auth -q
+
+          python << 'PYEOF'
+          import json, os, sys
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+
+          package_name = 'com.lazyrhythm.cotime_book'
+          version_code = int(os.environ['VERSION_CODE'])
+          track = os.environ['TRACK']
+          priority = int(os.environ['PRIORITY'])
+          release_status = os.environ['RELEASE_STATUS']
+
+          credentials = service_account.Credentials.from_service_account_info(
+              json.loads(os.environ['SERVICE_ACCOUNT_JSON']),
+              scopes=['https://www.googleapis.com/auth/androidpublisher']
+          )
+          service = build('androidpublisher', 'v3', credentials=credentials)
+
+          edit = service.edits().insert(packageName=package_name, body={}).execute()
+          edit_id = edit['id']
+          print(f"Created edit: {edit_id}")
+
+          release_body = {
+              'versionCodes': [str(version_code)],
+              'status': release_status,
+              'inAppUpdatePriority': priority,
+          }
+
+          notes_file = 'whatsnew/whatsnew-zh-TW'
+          if os.path.exists(notes_file):
+              with open(notes_file) as f:
+                  notes = f.read().strip()
+              if notes:
+                  release_body['releaseNotes'] = [
+                      {'language': 'zh-TW', 'text': notes},
+                      {'language': 'en-US', 'text': notes},
+                  ]
+                  print(f"Added release notes ({len(notes)} chars)")
+
+          service.edits().tracks().update(
+              packageName=package_name,
+              editId=edit_id,
+              track=track,
+              body={'releases': [release_body]}
+          ).execute()
+          print(f"Updated track '{track}' with version code {version_code}")
+
+          service.edits().commit(packageName=package_name, editId=edit_id).execute()
+          print("Edit committed successfully")
+          PYEOF
+
+      - name: Send Telegram notification
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          STATUS="${{ job.status }}"
+          TRACK="${{ inputs.track }}"
+          RELEASE_STATUS="${{ inputs.release_status }}"
+          PRIORITY="${{ inputs.inAppUpdatePriority }}"
+          VERSION="${{ steps.get_version.outputs.VERSION }}"
+          VERSION_CODE="${{ steps.get_version.outputs.VERSION_CODE }}"
+          SKIP_BUILD="${{ inputs.skip_build }}"
+
+          if [ "$STATUS" = "success" ]; then
+            EMOJI="✅"
+            MSG="發布成功"
+          else
+            EMOJI="❌"
+            MSG="發布失敗"
+          fi
+
+          if [ "$SKIP_BUILD" = "true" ]; then
+            MODE="（直接發佈，跳過編譯）"
+            VERSION_LINE="版本碼：${VERSION_CODE}"
+          else
+            MODE=""
+            VERSION_LINE="版本：${VERSION}"
+          fi
+
+          curl --ipv4 --connect-timeout 10 --max-time 30 --fail-with-body -s -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${EMOJI} ${MSG}${MODE}
+          ${VERSION_LINE}
+          App：CoTime Book
+          軌道：${TRACK}（${RELEASE_STATUS}）
+          優先級：${PRIORITY}$([ "$PRIORITY" = "5" ] && echo "（強制更新）" || echo "")
+          Commit：${GITHUB_SHA::7}
+          Action：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        continue-on-error: true
