@@ -96,6 +96,8 @@
   但現在訊息會指名是誰（見 #7）。
 - **測試**：`test/page_sync_service_test.dart` →
   `a participant who never opened the reader stops blocking once offline`
+- **後續**：#14 拿掉了凍結的參與者名單，這條測試隨之移除；「不在 reader 的人不擋翻頁」
+  現在由 `someone in the lobby or still loading never blocks a turn` 守著。
 
 ### [x] #7 錯誤訊息把 protocol 代碼直接丟給使用者
 
@@ -106,9 +108,10 @@
 - **修法**：
   - `describeCancelReason()` 把 wire reason 轉成人話（wire 上仍傳原始代碼）。
   - quorum 失敗訊息會指名還沒 ready 的人：「Waiting for Bob to become ready」。
-- **測試**：`test/page_sync_service_test.dart` →
-  `the quorum failure names the reader that is holding it up`、
-  `presence sync cancels when a required reader becomes unready`
+- **測試**（#14 之後）：`test/page_sync_service_test.dart` →
+  `cancel reasons are never shown as protocol codes`、
+  `an unanswered request times out and names who it waited for`、
+  `declining names the reader and releases everyone`
 
 ### [x] #8 `_recoverAuthoritativePosition` 可能無限輪詢並凍結 reader
 
@@ -182,68 +185,148 @@
 - **測試**：`test/reader_members_sheet_test.dart` →
   `the members panel follows people coming and going while open`
 
+### [x] #14 翻頁一直卡在第一頁（重新設計翻頁協定）
+
+- **檔案**：`lib/services/page_sync_service.dart`、`lib/models/page_sync_state.dart`、
+  `lib/screens/reader_screen.dart`、`lib/services/presence_merge.dart`
+- **症狀**：兩個人一起讀，按下一頁永遠被取消（「readers were out of sync」），
+  整個房間停在第一頁。修了好幾輪都會以別的形式回來。
+- **原因**：就是 #A，而且比當初記錄的嚴重。舊協定要求 follower 的 `_currentCfi`
+  與 `request.fromCfi` **字串完全相等**，但 CFI 是 epub.js 依本機分頁算出來的——
+  螢幕尺寸、字級、甚至一次 resize 都會讓同一頁得到不同字串。#A 以為「成功一次之後
+  就會收斂」，但收斂只發生在**成功**之後；兩台不同尺寸的裝置第一次就失敗，
+  失敗不會改變任何人的 CFI，於是之後每一次都失敗。圍繞這個字串比對又長出了
+  ack / complete / persisting / authoritative recovery 等九個互相牽動的旗標
+  （#5、#8、#9、#13、#H 都是它的分支）。
+- **修法（重新設計）**：
+  - 房間的頁面是 `SharedPosition(seq, cfi)`。**大家比對的是 `seq`**（只在翻頁 commit 時
+    +1 的整數），CFI 只拿來 `display()`。本機 relocate 永遠不會改動共享位置。
+  - requester 是**唯一的協調者**：`request → vote(accept/decline) → 本機翻頁 → commit(seq+1, cfi)`。
+    follower 只投票、只跟隨 commit，不再因為「自己對房間的看法不同」而取消別人的請求。
+  - 每個 reader 把 `page_seq` / `page_cfi` 放進 Presence。漏掉的 commit、晚進來的人、
+    斷線重連的人，全都是「採用 reader 中最新的位置」而收斂——不需要回資料庫重試。
+  - 存活性明確化：requester 等待期間每 8 秒 re-broadcast 請求（遺失的請求會被補上、
+    遺失的 vote 會重送）；follower 25 秒沒聽到就放掉；requester 離開 reader 時其他人立即放掉。
+  - 只有「在 reader 裡且書已載入」的人會被詢問。在 lobby、背景、載入中的人不會擋住房間。
+  - 兩人同時按同方向翻頁：以 `(fromSeq, requestId)` 決定勝者，輸的一方自動同意勝者，
+    只翻一頁。
+  - 資料庫寫入降為 best-effort（`RoomNotifier.saveReadingPosition`），只給「之後才打開書的人」用；
+    寫入失敗不再卡住或回滾翻頁。
+  - reader 不再需要 reading session id 與凍結的參與者名單（#6 那類「永遠擋住 quorum」的
+    根源一起移除）；任何持有書的成員都可以隨時 Join Reading。
+- **測試**：`test/page_sync_service_test.dart`（多 client 的 `FakeRoom`，broadcast 與 Presence 共享）→
+  `readers on different screens keep turning pages together`、
+  `a reader who opens the book late lands on the room's page`、
+  `a lost commit still reaches the follower through Presence`、
+  `a lost vote is sent again when the requester nudges`、
+  `two readers pressing next together turn exactly one page`、
+  `a dropped connection does not let the requester turn alone` 等 22 條。
+  已用 mutation 驗證：拿掉 Presence 位置吸收、vote 重送、self-presence 守衛、
+  同意圖自動同意、requester 離開釋放，各自都會讓至少一條測試失敗。
+
+### [x] #15 使用者退出房間後，其他人仍一直看到他在房間裡
+
+- **檔案**：`lib/screens/room_lobby_screen.dart`、`lib/providers/room_provider.dart`、
+  `lib/widgets/member_list.dart`
+- **症狀**：有人按離開房間，其他客戶端的成員列表裡他還在（有時還顯示 Online）。
+- **原因**（三條路徑，任何一條都會讓名單停在舊狀態）：
+  1. **從 reader 回到 lobby 時完全沒有重讀名單。** lobby 只在「Presence 的 user ID 集合變化」
+     時重讀，而重新進入 lobby 時 Presence 沒有變化——在 reader 期間離開的人永遠留在列表裡，
+     連 online overlay 都是舊的。
+  2. **離開的廣播比 leave RPC 早送**（Realtime 授權需要成員資格還在），對方等 200ms 讀一次；
+     行動網路上 RPC 常常超過 200ms，讀到的還是舊名單。之後唯一的修正來源是 Presence，
+     而 Presence 事件也可能錯過。
+  3. **leave RPC 失敗**時本機照樣清掉狀態，但 DB 成員列保留，要等 30 分鐘的 stale 驅逐。
+  另外，Start Reading 要求「所有 DB 成員都在線且有書」，所以一個 App 被殺掉的成員
+  會把整個房間鎖住 30 分鐘以上。
+- **修法**：
+  - lobby 一進入就以 Presence 重讀 DB 名單與房間，之後每 `rosterRefreshInterval`（15 秒）
+    自行對帳一次——錯過任何訊號都會在下一輪收斂。
+  - 收到 `leaving` 後在 300ms / 1.5s / 4s 各讀一次，涵蓋 RPC 尚未 commit 的情況。
+  - `RoomNotifier.leaveRoom()` 失敗時重試一次（leave 是冪等的）。
+  - 成員列表在線者排前面，離線者標示「Away — not connected」。
+  - `LobbyReadiness` 取代 `hasExactReadyBookRoster`：host 有書就能開始；有人在讀時任何
+    持書成員都能 Join Reading；還在收書的人只會被點名，不會擋住別人。
+- **測試**：`test/room_lobby_screen_test.dart` →
+  `a member who left while you were away is gone when the lobby opens`、
+  `the lobby keeps re-reading the roster on its own`、
+  `a leave announced before its commit is read again`、
+  `a member whose app is gone does not lock the room out`；
+  `test/room_provider_test.dart` → `a dropped leave request is sent again`。
+  三條 lobby 測試都已用 mutation 驗證（拿掉進入時重讀 / 定時對帳 / 多次重讀會各自失敗）。
+
+### [x] #16 收書卡住後整個房間卡死，無法再開始（重新設計傳輸）
+
+- **檔案**：`lib/services/file_transfer_service.dart`、`lib/models/transfer_state.dart`、
+  `lib/providers/book_provider.dart`、`lib/widgets/transfer_progress_widget.dart`
+- **症狀**：傳書時如果接收端卡住，lobby 永遠停在「Receiving book...」，
+  Share Book 按鈕變成「Loading...」且無法按，Start Reading 也開不了。只能退出房間。
+- **原因**：
+  - 傳輸是**一次性 push**：寄件者把每個 chunk broadcast 一次就結束。Realtime broadcast
+    不保證送達（rate limit、斷線、App 在背景），掉一個 chunk 就永遠湊不齊；
+    逾時之後狀態變成 failed，但後續 chunk 會用殘缺的 buffer 重新開始，永遠完成不了。
+  - **晚加入的成員根本收不到**：沒有任何人會再送一次（`transfer_request` 事件有宣告但沒人處理）。
+  - `prepareForSharedBook` 把 `BookState.isLoading` 設成 true 當作「收書中」，
+    而 Share Book 按鈕用 `isLoading` 決定是否 disable——收書卡住，分享按鈕就永遠鎖住。
+    `sendBook` 也會在「有傳輸進行中」時拒絕。
+  - failed 狀態被 widget 藏起來（#I），使用者只看到永遠的「Receiving book...」。
+- **修法（receiver 驅動）**：
+  - 任何 Presence 裡 `ready_book_hashes` 含這本書的人都能提供它。
+  - 收書端缺什麼就向一位持有者要那些 chunk（`transfer_request {sender_id, missing}`），
+    進度停滯就再要一次並**輪替持有者**；沒有持有者在線就等，持有者一上線（Presence）立刻要。
+    hash 不符就整本丟掉重要。**沒有任何終止狀態**——收書只會越來越接近完成。
+  - 持有者用單一 send queue 服務請求，多人同時要書時共用同一輪 broadcast。
+  - 初次分享仍然 push 給所有人，只是變成快速路徑。
+  - `isLoading` 只代表「正在選檔」；收書與分享互不阻擋，分享新書會直接取代進行中的傳輸。
+  - 進度元件改成 waiting / transferring / completed，並以文字說明正在做什麼
+    （「Asking Alice for the book...」「Waiting for someone with the book to come online...」）。
+- **測試**：`test/file_transfer_service_test.dart` →
+  `a receiver that missed the whole push asks and gets the book`、
+  `a member who joins after the share still receives the book`、
+  `only the lost chunks are asked for again`、
+  `a stalled holder is replaced by another one`、
+  `a damaged book is thrown away and asked for again`、
+  `a stalled receive never blocks sharing another book`。
+
+### [x] #A 不同螢幕尺寸的裝置之間 CFI 對不起來
+
+- 由 #14 的重新設計解決：共識比對 `seq`，不比對 CFI 字串。
+
+### [x] #D reader 進場的頭幾毫秒會丟掉 page_turn 事件
+
+- 不再造成問題：遺失的請求會被 requester 的 nudge 補上，遺失的 commit 由 Presence 位置補上。
+  （`RealtimeService` 的 controller 仍是 lazy 建立；broadcast stream 沒有 listener 時本來就會丟事件，
+  提早建立 controller 也不會緩衝。）
+
+### [x] #F App 短暫 inactive 就會把 `is_reading` 打掉
+
+- **檔案**：`lib/app.dart`
+- **修法**：`AppLifecycleState.inactive`（下拉通知列、系統對話框、轉場）直接忽略，
+  只對 resumed / paused / hidden / detached 反應。
+
+### [x] #G 同一使用者多個 reader session 的 readiness 是 OR 合併的
+
+- 症狀已不存在：新協定裡 follower 不會因為自己沒 ready 而拒絕請求（只有 requester
+  需要 viewer ready），所以「合併結果說 ready、某台裝置說沒 ready」不會再取消翻頁。
+  合併規則本身未改。
+
+### [x] #I 傳輸失敗的狀態永遠不會顯示
+
+- 由 #16 解決：收書沒有失敗終態，元件顯示的是「正在做什麼」。
+
 ---
 
 ## 開放中
 
-### [ ] #A 不同螢幕尺寸的裝置之間 CFI 對不起來（設計層級，優先）
-
-- **檔案**：`lib/screens/reader_screen.dart`、`lib/services/page_sync_service.dart`
-- **問題**：`onRelocated` 第一次回報的 `location.startCfi` 是 epub.js 依**實際分頁**
-  算出來的，取決於視窗大小、字級與 flow 設定。兩台螢幕尺寸不同的手機在同一頁會得到
-  不同的 CFI 字串。而 `_isValidIncomingRequest()` 要求
-  `_currentCfi == request.fromCfi` **字串完全相等**，所以跨尺寸裝置的第一次翻頁
-  會被 follower 打回 `invalid_or_stale_request`。
-- **為什麼不是每次都爆**：翻頁成功後 follower 會透過 `_displayingTargetCfi` 採用
-  requester 的 targetCfi，之後大家的 `_currentCfi` 就一致了。所以只有
-  **進 reader 後的第一次**、以及任何一次 `_rebuildViewer()`（換主題、CFI 變更）之後
-  會踩到。
-- **可能的修法**：
-  1. reading session 開始時由 host 廣播一個 anchor CFI，所有人 `display(cfi:)` 到那裡，
-     並像 follower 一樣把 anchor 當成自己的 `_currentCfi`（而不是採用本機 startCfi）。
-  2. 或者把相等性判斷從「字串相等」放寬成「spine index 相同」，只用 CFI 字串做顯示。
-- **注意**：這會動到 consensus 的核心判斷，必須先補測試再改。
-- **相關**：#13 修掉了「狀態列高度變化造成 resize」這個觸發點。閱讀設定裡的
-  主題與字級仍然會 `_rebuildViewer()`，字級改變更是一定會讓分頁結果不同——
-  在 #A 修好之前，改完字級後的第一次翻頁仍可能被打回一次。
-
-### [ ] #H reader_screen.dart 沒有任何測試
+### [~] #H reader_screen.dart 沒有任何測試
 
 - **檔案**：`lib/screens/reader_screen.dart`
-- **問題**：這個檔案是整個 App 狀態最多的地方（`_isReaderReady`、`_displayingTargetCfi`、
-  `_pendingAuthoritativeCfiSync`、`_recoveringAuthoritativePosition`、`_isStoppingPageSync`
-  互相牽動），但完全沒有測試。這次 PR 的 code review 找出 10 個問題，其中 7 個在這個檔案，
-  而且全都是同一種形狀：「某個地方發布 readiness 時漏掉了一個條件」。
-- **已做的緩解**：readiness 改成由 `_isReadyForTurns` 單一推導、
-  透過 `_publishReadiness()` 單一發布，呼叫端只改 state 不再自己算值——
-  讓「漏掉條件」這類 bug 在結構上不可能發生。
-  （進入 / 離開 reader 的 lifecycle 路徑仍保留顯式的 await 順序，那是刻意的。）
-- **還缺的**：`EpubViewer` 需要真的 WebView 才能跑，所以要測這個畫面得先把
-  viewer 抽成介面（像 `PageSyncTransport` 那樣注入），才能在測試裡驅動
-  `onChaptersLoaded` / `onRelocated`。在那之前，這個檔案的改動只能靠實機驗證。
-
-### [ ] #G 同一使用者多個 reader session 的 readiness 是 OR 合併的
-
-- **檔案**：`lib/services/presence_merge.dart`
-- **問題**：`mergePresenceUsers` 用 `metas.any(...)` 合併 `reader_ready`。
-  如果同一個 user_id 同時有兩個都在讀的 session（真的兩台裝置），其中一台還在載入，
-  合併結果仍然是 ready。其他人的 quorum 把這個 user 算進去、發出請求，
-  那台還沒 ready 的裝置卻會在 `_isValidIncomingRequest` 把它打回票 → 翻頁被取消。
-- **為什麼現在不改**：
-  - OR 對**目前實際會發生**的情況是正確的：重連後殘留的舊 meta 帶著
-    `reader_ready: true`，那是同一個人同一個閱讀狀態，OR 剛好處理對
-    （這正是 #2 修掉的那個 bug）。改成 AND 反而會讓「斷線瞬間殘留一筆
-    `reader_ready: false`」重新變成阻塞。
-  - 真正的多裝置情境在這個 App 幾乎不會發生：auth 是匿名的，每次安裝就是一個新的
-    user_id，兩台裝置不會共用同一個 user_id。
-  - 這個問題的根源跟 **#A 是同一個**：per-connection 的狀態被硬塞進 per-user 的
-    quorum。要修就得一起修，不能只動合併規則。
-- **如果要修**：`reader_ready` 改成「所有 `is_reading == true` 的 meta 都 ready」
-  （沒有任何 reading meta 時為 false），而 `is_reading` 維持 OR。
-  這比「挑一個 canonical session」更正確，但會需要改
-  `test/presence_provider_test.dart` 裡
-  `mergePresenceUsers deduplicates sessions by user_id` 的預期值——
-  那個測試目前把「lobby 的 session 帶著 stale `reader_ready: true`」也算成 ready。
+- **現況**：#14 把共識與收斂邏輯全部移進 `PageSyncService`（有完整的多 client 測試），
+  reader 只剩「顯示 shared position」與「requester 翻一頁後回報落點」兩件事，
+  狀態從九個互相牽動的旗標減為 `_viewerLoaded` / `_isDisplaying` / `_pendingTurn` 等少數幾個。
+- **還缺的**：`EpubViewer` 需要真的 WebView，要測這個畫面得先把 viewer 抽成介面
+  （像 `PageSyncTransport` 那樣注入），才能在測試裡驅動 `onChaptersLoaded` / `onRelocated`。
+  在那之前，這個檔案的改動只能靠實機驗證。
 
 ### [ ] #B `copyWith` 預設會靜默清掉 `error`
 
@@ -256,15 +339,6 @@
 - **影響**：目前沒有明顯的使用者可見 bug（錯誤本來就短命），但很容易誤用。
 - **建議**：統一成 `error ?? this.error` + 顯式的 `clearError` 旗標，並逐一檢查呼叫點。
 
-### [ ] #D reader 進場的頭幾毫秒會丟掉 page_turn 事件
-
-- **檔案**：`lib/services/realtime_service.dart`
-- **問題**：channel 建立時就對所有 `roomEvents` 註冊 callback，但事件是丟進
-  `_broadcastControllers[event]?.add(payload)`——controller 只在
-  `broadcastStream(event)` 第一次被呼叫時才建立。從進入 reader 到
-  `PageSyncService.initialize()` 之間抵達的 `page_turn_*` 事件會被靜默丟棄。
-- **建議**：在 `joinRoom()` 時就把所有 `roomEvents` 的 controller 建好。
-
 ### [ ] #E Realtime topic 同時接受 room code 與 channel_id
 
 - **檔案**：`supabase/migrations/20260812120002_harden_room_lifecycle.sql`
@@ -276,25 +350,6 @@
   `PresenceNotifier.joinRoom` 的 `roomTopicId` 參數也已經備好，只是 lobby 沒傳），
   然後把 code-based topic 從授權函式拿掉；要嘛就把 `channel_id` 這條路徑刪掉。
 
-### [ ] #F App 短暫 inactive 就會把 `is_reading` 打掉
-
-- **檔案**：`lib/app.dart`、`lib/providers/presence_provider.dart`
-- **問題**：`didChangeAppLifecycleState` 把 `resumed` 以外的狀態都視為不活躍。
-  Android 在下拉通知列、跳系統彈窗、甚至某些轉場時都會送 `inactive`，
-  於是 Presence 瞬間變成 `is_reading: false`，同房其他人若正好在 confirming 階段
-  就會被取消翻頁。
-- **建議**：只對 `paused` / `detached` 反應，或對 `inactive` 加一個短去抖動。
-
-### [ ] #I 傳輸失敗的狀態永遠不會顯示
-
-- **檔案**：`lib/widgets/transfer_progress_widget.dart`
-- **問題**：開頭的守衛是 `!isActive && status != completed` 就 `SizedBox.shrink()`，
-  而 `failed` 不算 active，所以下面那段顯示 `errorMessage` 的分支是死碼。
-  收書失敗時 lobby 只會停在「Receiving book...」。
-- **為什麼先不動**：直接讓 failed 顯示出來會變成一個沒有清除路徑的永久錯誤
-  （違反 CLAUDE.md 第 5 條）。要修得先決定它怎麼收斂——例如下一次 `book_shared`
-  或重試時清掉，或像 `PageSyncState.error` 一樣計時自動清除。
-
 ### [ ] #J 閱讀偏好不會保存
 
 - **檔案**：`lib/providers/reading_preferences_provider.dart`
@@ -303,3 +358,32 @@
 - **建議**：加 `shared_preferences`，在 `ReadingPreferencesNotifier` 建構時讀取、
   每次 set 時寫入。這是新增依賴，所以沒有跟這次的樣式重做一起進來。
 
+
+### [ ] #K 新舊版本的 App 無法在同一個房間裡互通
+
+- **檔案**：`lib/services/page_sync_service.dart`、`lib/services/file_transfer_service.dart`、
+  `lib/screens/room_lobby_screen.dart`
+- **問題**：#14 / #16 換掉了 wire 協定（`page_turn_vote` / `page_turn_commit`、
+  `transfer_request`、不帶 session id 的 `start_reading`）。舊版 App 送出的請求新版會忽略，
+  反之亦然。
+- **為什麼先不動**：App 是 APK 發佈，沒有後端相容層可以做；協定版本協商的成本
+  遠高於「請所有人更新」。若之後需要，可以在 Presence 加 `protocol` 欄位，
+  lobby 對版本不同的成員顯示「請更新 App」。
+
+### [ ] #L App 被直接殺掉的成員，最多 40 分鐘仍顯示為「Away」
+
+- **檔案**：`supabase/migrations/20260812120002_harden_room_lifecycle.sql`
+  （`cleanup_expired_rooms` 的 `p_member_stale_after` 預設 30 分鐘，cron 每 10 分鐘）
+- **問題**：沒有走 leave 流程的成員只能靠伺服器驅逐。#15 之後他們不再擋住任何事
+  （排在列表底部、標示 Away），但仍然佔一列。
+- **為什麼先不動**：縮短門檻要同時改 heartbeat 間隔（目前 5 分鐘、且在背景時暫停），
+  否則把 App 切到背景幾分鐘的人會被踢出房間。這是產品取捨，而且需要 migration 與 pgTAP，
+  應該單獨一個 PR。
+
+### [ ] #M 傳書仍然走 Realtime broadcast
+
+- **檔案**：`lib/services/file_transfer_service.dart`
+- **問題**：#16 讓傳輸可以自我修復，但 10MB 的書仍是約 320 個 broadcast（每 100ms 一個），
+  受 Realtime 的訊息配額限制，大房間或付費方案以外可能很慢。
+- **建議**：若可以接受書檔經過伺服器，改用 Supabase Storage（上傳一次、各自 HTTP 下載，
+  RLS 依房間成員授權）。這牽涉到儲存成本與版權／隱私的產品決定，所以沒有在這次改。

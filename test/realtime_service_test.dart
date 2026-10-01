@@ -26,11 +26,12 @@ void main() {
     expect(
       RealtimeService.roomEvents,
       containsAll([
-        'page_position_commit',
-        'page_position_persisting',
-        'page_position_ack',
-        'page_turn_complete',
-        'reading_session_leave',
+        'page_turn_request',
+        'page_turn_vote',
+        'page_turn_commit',
+        'page_turn_cancel',
+        'book_chunk',
+        'transfer_request',
         'membership_changed',
         'room_closed',
       ]),

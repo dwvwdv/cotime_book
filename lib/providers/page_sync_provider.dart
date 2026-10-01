@@ -17,20 +17,20 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
   StreamSubscription<PageSyncState>? _subscription;
   int _lifecycleGeneration = 0;
 
-  void Function(PageTurnCommand command)? onPageTurn;
-  void Function(PagePositionCommit commit)? onPositionCommit;
-  void Function(String targetCfi, bool positionWasCommitted)?
-      onPositionRecovery;
+  void Function(PageTurnCommand command)? onExecuteTurn;
+  void Function(SharedPosition position)? onPositionChanged;
+  void Function(String requestId)? onTurnAbandoned;
 
   PageSyncNotifier() : super(const PageSyncState.idle());
+
+  SharedPosition? get position => _service?.position;
 
   Future<void> initialize({
     required RealtimeService realtimeService,
     required String currentUserId,
     required String currentNickname,
-    required String readingSessionId,
-    required Set<String> expectedParticipantUserIds,
-    String? initialCfi,
+    required SharedPosition initialPosition,
+    required Future<void> Function(SharedPosition position) publishPosition,
   }) async {
     final generation = ++_lifecycleGeneration;
     await _stopResources(clearCallbacks: false);
@@ -38,19 +38,18 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     state = const PageSyncState.idle();
 
     final service = PageSyncService(
-      transport: RealtimePageSyncTransport(realtimeService),
+      transport: RealtimePageSyncTransport(
+        realtimeService,
+        publishPosition: publishPosition,
+      ),
       currentUserId: currentUserId,
       currentNickname: currentNickname,
-      readingSessionId: readingSessionId,
-      expectedParticipantUserIds: expectedParticipantUserIds,
+      initialPosition: initialPosition,
     );
     _service = service;
-    service.onPageTurn = (command) => onPageTurn?.call(command);
-    service.onPositionCommit = (commit) => onPositionCommit?.call(commit);
-    service.onPositionRecovery = (targetCfi, positionWasCommitted) {
-      onPositionRecovery?.call(targetCfi, positionWasCommitted);
-    };
-    service.updateReaderContext(isReady: false, currentCfi: initialCfi);
+    service.onExecuteTurn = (command) => onExecuteTurn?.call(command);
+    service.onPositionChanged = (position) => onPositionChanged?.call(position);
+    service.onTurnAbandoned = (requestId) => onTurnAbandoned?.call(requestId);
 
     _subscription = service.stateStream.listen((syncState) {
       if (mounted && identical(_service, service)) state = syncState;
@@ -58,19 +57,10 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     service.initialize();
   }
 
-  void updateReaderContext({required bool isReady, String? currentCfi}) {
-    _service?.updateReaderContext(isReady: isReady, currentCfi: currentCfi);
-  }
+  void setViewerReady(bool isReady) => _service?.setViewerReady(isReady);
 
-  Future<bool> requestPageTurn({
-    required PageTurnDirection direction,
-    String? fromCfi,
-  }) async {
-    return await _service?.requestPageTurn(
-          direction: direction,
-          fromCfi: fromCfi,
-        ) ??
-        false;
+  Future<bool> requestPageTurn({required PageTurnDirection direction}) async {
+    return await _service?.requestPageTurn(direction: direction) ?? false;
   }
 
   Future<bool> confirmPageTurn() async {
@@ -81,38 +71,19 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     await _service?.declinePageTurn();
   }
 
-  Future<bool> commitPagePosition(String targetCfi) async {
-    return await _service?.commitPagePosition(targetCfi) ?? false;
+  SharedPosition? completeTurn(String requestId, String targetCfi) {
+    return _service?.completeTurn(requestId, targetCfi);
   }
 
-  Future<bool> acknowledgePagePosition(String targetCfi) async {
-    return await _service?.acknowledgePagePosition(targetCfi) ?? false;
-  }
-
-  void reportPositionPersistenceFailure({
-    required String requestId,
-    required Object error,
-  }) {
-    _service?.reportPositionPersistenceFailure(
-      requestId: requestId,
-      error: error,
-    );
-  }
-
-  Future<bool> beginPositionPersistence(String requestId) async {
-    return await _service?.beginPositionPersistence(requestId) ?? false;
-  }
-
-  bool isRequestActive(String requestId) {
-    return _service?.isRequestActive(requestId) ?? false;
-  }
-
-  Future<void> leaveReadingSession() async {
-    await _service?.leaveReadingSession();
-  }
+  void abandonTurn(String requestId) => _service?.abandonTurn(requestId);
 
   Future<void> stop({bool clearCallbacks = true}) async {
     _lifecycleGeneration++;
+    try {
+      await _service?.leave();
+    } catch (_) {
+      // Leaving must not be held up by a failed withdrawal broadcast.
+    }
     await _stopResources(clearCallbacks: clearCallbacks);
   }
 
@@ -124,9 +95,9 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     await subscription?.cancel();
     await service?.dispose();
     if (clearCallbacks) {
-      onPageTurn = null;
-      onPositionCommit = null;
-      onPositionRecovery = null;
+      onExecuteTurn = null;
+      onPositionChanged = null;
+      onTurnAbandoned = null;
     }
     if (mounted) state = const PageSyncState.idle();
   }
@@ -138,9 +109,9 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     unawaited(_service?.dispose());
     _subscription = null;
     _service = null;
-    onPageTurn = null;
-    onPositionCommit = null;
-    onPositionRecovery = null;
+    onExecuteTurn = null;
+    onPositionChanged = null;
+    onTurnAbandoned = null;
     super.dispose();
   }
 }

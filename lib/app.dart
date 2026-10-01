@@ -33,6 +33,10 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // `inactive` is a notification shade, a permission dialog, a transition:
+    // the reader is still looking at the page. Treating it as leaving dropped
+    // the reader out of the page-turn quorum for a moment and cancelled turns.
+    if (state == AppLifecycleState.inactive) return;
     final isActive = state == AppLifecycleState.resumed;
     // Backgrounding is not leaving a room. Presence becomes transiently
     // unavailable and the database lease stops renewing until resume.

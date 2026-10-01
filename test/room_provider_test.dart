@@ -8,6 +8,20 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('RoomNotifier', () {
+    test('a dropped leave request is sent again', () async {
+      // Regression: one failed leave RPC left the member in everyone else's
+      // list until the server evicted them half an hour later.
+      final service = FakeRoomService()..leaveFailures = 1;
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.joinRoom('ABC234', 'Alice');
+      await notifier.leaveRoom();
+
+      expect(service.leaveCalls, 2);
+      expect(notifier.state.currentRoom, isNull);
+    });
+
     test('revoked heartbeat clears local room session and runs teardown', () async {
       final service = FakeRoomService()..heartbeatError =
           const RoomSessionRevokedException('membership expired');
@@ -576,8 +590,16 @@ class FakeRoomService extends RoomService {
     );
   }
 
+  int leaveFailures = 0;
+  int leaveCalls = 0;
+
   @override
   Future<Map<String, dynamic>> leaveRoom({required String roomId}) async {
+    leaveCalls++;
+    if (leaveFailures > 0) {
+      leaveFailures--;
+      throw StateError('connection reset');
+    }
     return {'left': true};
   }
 }

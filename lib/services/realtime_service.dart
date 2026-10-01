@@ -121,18 +121,12 @@ class _SupabaseRoomRealtimeChannel implements RoomRealtimeChannel {
 class RealtimeService {
   static const roomEvents = <String>[
     'page_turn_request',
-    'page_turn_confirm',
-    'page_turn_execute',
+    'page_turn_vote',
+    'page_turn_commit',
     'page_turn_cancel',
-    'page_position_persisting',
-    'page_position_commit',
-    'page_position_ack',
-    'page_turn_complete',
-    'reading_session_leave',
     'book_shared',
     'book_chunk',
     'transfer_request',
-    'transfer_accept',
     'start_reading',
     'membership_changed',
     'room_closed',
@@ -193,6 +187,8 @@ class RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    int? pageSeq,
+    String? pageCfi,
   }) {
     final normalizedCode = roomCode.trim().toUpperCase();
     final normalizedTopicId = _normalizeTopicId(roomTopicId);
@@ -204,6 +200,8 @@ class RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
+      pageSeq: pageSeq,
+      pageCfi: pageCfi,
     );
 
     return _serialize(() async {
@@ -328,6 +326,8 @@ class RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
+    int? pageSeq,
+    String? pageCfi,
   }) {
     final payload = _buildPresencePayload(
       userId: userId,
@@ -337,6 +337,8 @@ class RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
+      pageSeq: pageSeq,
+      pageCfi: pageCfi,
     );
 
     return _serialize(() async {
@@ -458,6 +460,8 @@ class RealtimeService {
     required String? bookHash,
     required bool isReading,
     required bool readerReady,
+    required int? pageSeq,
+    required String? pageCfi,
   }) {
     return {
       'user_id': userId,
@@ -467,6 +471,11 @@ class RealtimeService {
       'book_hash': hasBook ? bookHash : null,
       'is_reading': isReading,
       'reader_ready': readerReady,
+      // Only a reader holds a shared position; see PageSyncService.
+      if (isReading && pageSeq != null && pageCfi != null) ...{
+        'page_seq': pageSeq,
+        'page_cfi': pageCfi,
+      },
     };
   }
 

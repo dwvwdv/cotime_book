@@ -3,8 +3,8 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:uuid/uuid.dart';
 import '../config/theme.dart';
+import '../models/room_member.dart';
 import '../models/transfer_state.dart';
 import '../providers/auth_provider.dart';
 import '../providers/book_provider.dart';
@@ -16,6 +16,23 @@ import '../widgets/room_code_display.dart';
 import '../widgets/transfer_progress_widget.dart';
 
 class RoomLobbyScreen extends ConsumerStatefulWidget {
+  /// How often the lobby re-reads the member list on its own.
+  ///
+  /// Every other refresh is triggered by a signal — a Presence change, a
+  /// join or leave broadcast — and a signal can be missed: the lobby was not
+  /// on screen, the broadcast was dropped, the read raced the leave RPC. This
+  /// is what guarantees a departed member eventually disappears anyway.
+  static const rosterRefreshInterval = Duration(seconds: 15);
+
+  /// A leave is announced *before* the leave RPC (Realtime authorization
+  /// needs the membership to still exist), so a single read can land before
+  /// the commit. Read again until it must have landed.
+  static const leaveRefreshDelays = [
+    Duration(milliseconds: 300),
+    Duration(milliseconds: 1500),
+    Duration(seconds: 4),
+  ];
+
   final String roomCode;
 
   const RoomLobbyScreen({super.key, required this.roomCode});
@@ -25,6 +42,7 @@ class RoomLobbyScreen extends ConsumerStatefulWidget {
 }
 
 class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
+  Timer? _rosterRefreshTimer;
   StreamSubscription? _transferSub;
   StreamSubscription? _bookSharedSub;
   StreamSubscription? _startReadingSub;
@@ -131,49 +149,17 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
             );
           });
 
-      // Feature 3: Listen for start_reading broadcast → navigate all members to reader.
+      // The host pulls everyone in the lobby into the reader.
       _startReadingSub = realtimeService
           .broadcastStream('start_reading')
           .listen((payload) {
             if (!mounted || _isNavigatingToReader) return;
-            final currentRoomState = ref.read(roomProvider);
-            final currentRoom = currentRoomState.currentRoom;
+            final currentRoom = ref.read(roomProvider).currentRoom;
             if (currentRoom == null ||
                 payload['initiated_by'] != currentRoom.hostUserId) {
               return;
             }
-            final sessionId = payload['session_id'];
-            final rawParticipantUserIds = payload['participant_user_ids'];
-            if (sessionId is! String ||
-                sessionId.isEmpty ||
-                rawParticipantUserIds is! List) {
-              return;
-            }
-            final participantUserIds = rawParticipantUserIds
-                .whereType<String>()
-                .toSet();
-            final roomMemberUserIds = currentRoomState.members
-                .map((member) => member.userId)
-                .toSet();
-            if (participantUserIds.length != rawParticipantUserIds.length ||
-                participantUserIds.length != roomMemberUserIds.length ||
-                !participantUserIds.containsAll(roomMemberUserIds)) {
-              _showError('The reading session roster is out of date.');
-              return;
-            }
-            if (currentRoom.currentBookHash == null ||
-                !ref
-                    .read(bookProvider.notifier)
-                    .hasBook(currentRoom.currentBookHash!)) {
-              _showError('The shared book is not ready on this device.');
-              return;
-            }
-            ref.read(roomProvider.notifier).beginReadingSession(
-              sessionId: sessionId,
-              participantUserIds: participantUserIds,
-            );
-            _isNavigatingToReader = true;
-            context.goNamed('reader', pathParameters: {'roomCode': room.code});
+            _enterReader(fromHost: true);
           });
 
       // Install application listeners before channel subscription. A fast
@@ -208,6 +194,16 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
         }),
       );
 
+      // Coming back from the reader (or from Home) the cached roster is
+      // whatever it was when this screen last listened, and Presence will not
+      // fire again just because the lobby reappeared.
+      unawaited(_refreshRoster());
+      _rosterRefreshTimer?.cancel();
+      _rosterRefreshTimer = Timer.periodic(
+        RoomLobbyScreen.rosterRefreshInterval,
+        (_) => unawaited(_refreshRoster()),
+      );
+
       if (mounted) setState(() => _isInitializing = false);
     } catch (error) {
       if (mounted) {
@@ -232,6 +228,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
 
   @override
   void dispose() {
+    _rosterRefreshTimer?.cancel();
     unawaited(_cancelScreenSubscriptions());
     super.dispose();
   }
@@ -254,12 +251,20 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
   Future<void> _refreshMembersAfterMembershipSignal({
     bool waitForCommit = true,
   }) async {
-    // The leaving client must broadcast before its membership is deleted so
-    // Realtime RLS still authorizes the send. Give the following leave RPC a
-    // short window to commit, then read the authoritative database state.
-    if (waitForCommit) {
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+    if (!waitForCommit) {
+      await _refreshRoster();
+      return;
     }
+    var elapsed = Duration.zero;
+    for (final delay in RoomLobbyScreen.leaveRefreshDelays) {
+      await Future<void>.delayed(delay - elapsed);
+      elapsed = delay;
+      if (!mounted) return;
+      await _refreshRoster();
+    }
+  }
+
+  Future<void> _refreshRoster() async {
     if (!mounted) return;
     final roomNotifier = ref.read(roomProvider.notifier);
     await Future.wait<void>([
@@ -315,19 +320,16 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
         activeRoom.currentBookHash != null &&
         ref.read(bookProvider.notifier).hasBook(activeRoom.currentBookHash!);
 
-    final canStartReading = _canStartReading(
-      roomState: roomState,
-      presenceState: presenceState,
-      hasLocalBook: hasCurrentBook,
-      currentBookHash: activeRoom.currentBookHash,
-    );
-
     final isHost = roomState.isHost;
-    final startHint = !isHost
-        ? 'The host starts the reading session.'
-        : canStartReading
-        ? null
-        : 'Everyone needs to be online with the book before you start.';
+    final lobby = LobbyReadiness.from(
+      members: roomState.members,
+      onlineUsers: presenceState.onlineUsers,
+      currentUserId: authState.userId,
+      currentBookHash: activeRoom.currentBookHash,
+      hasLocalBook: hasCurrentBook,
+      isHost: isHost,
+      isConnected: presenceState.isConnected,
+    );
 
     // Feature 2: hardware back → leave room properly.
     return PopScope(
@@ -400,9 +402,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                         Expanded(
                           child: OutlinedButton.icon(
                             onPressed:
-                                _isLeaving ||
-                                    bookState.isLoading ||
-                                    _transferState.isActive
+                                _isLeaving || bookState.isLoading
                                 ? null
                                 : _shareBook,
                             icon: const Icon(Icons.upload_file),
@@ -414,20 +414,26 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: ElevatedButton.icon(
-                            onPressed: _isLeaving || !canStartReading
+                            onPressed: _isLeaving || !lobby.canOpenReader
                                 ? null
-                                : _startReading,
+                                : lobby.isHostStart
+                                ? _startReading
+                                : () => _enterReader(fromHost: false),
                             icon: const Icon(Icons.auto_stories_outlined),
-                            label: const Text('Start Reading'),
+                            label: Text(
+                              lobby.isHostStart
+                                  ? 'Start Reading'
+                                  : 'Join Reading',
+                            ),
                           ),
                         ),
                       ],
                     ),
                     // A disabled button with no reason reads as broken.
-                    if (startHint != null) ...[
+                    if (lobby.hint != null) ...[
                       const SizedBox(height: 8),
                       Text(
-                        startHint,
+                        lobby.hint!,
                         style: AppTheme.caption,
                         textAlign: TextAlign.center,
                       ),
@@ -466,62 +472,36 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       _showError('Only the room host can start reading.');
       return;
     }
-    final currentHash = currentRoom.currentBookHash;
-    final isReady = _canStartReading(
-      roomState: ref.read(roomProvider),
-      presenceState: ref.read(presenceProvider),
-      hasLocalBook:
-          currentHash != null &&
-          ref.read(bookProvider.notifier).hasBook(currentHash),
-      currentBookHash: currentHash,
-    );
-    if (!isReady) {
-      _showError('Wait until every room member is online with this book.');
-      return;
-    }
     try {
-      final participantUserIds = ref
-          .read(roomProvider)
-          .members
-          .map((member) => member.userId)
-          .toList()
-        ..sort();
       await realtimeService.broadcast(
         event: 'start_reading',
-        payload: {
-          'room_code': widget.roomCode,
-          'initiated_by': currentUserId,
-          'session_id': const Uuid().v4(),
-          'participant_user_ids': participantUserIds,
-        },
+        payload: {'room_code': widget.roomCode, 'initiated_by': currentUserId},
       );
-      // Broadcast is configured with self=true. The single listener above
-      // performs navigation for host and guests, avoiding host double-nav.
+      // Broadcast is configured with self=true; the listener navigates the
+      // host too, so there is one path into the reader.
     } catch (error) {
       if (mounted) _showError('Unable to start reading: $error');
     }
   }
 
-  bool _canStartReading({
-    required RoomState roomState,
-    required PresenceState presenceState,
-    required bool hasLocalBook,
-    required String? currentBookHash,
-  }) {
-    if (!roomState.isHost ||
-        !hasLocalBook ||
-        !presenceState.isConnected ||
-        !presenceState.hasInitialSync ||
-        currentBookHash == null ||
-        roomState.members.isEmpty) {
-      return false;
+  /// Opens the reader on this device. Anyone with the book can go in at any
+  /// time: the page they land on comes from whoever is already reading.
+  void _enterReader({required bool fromHost}) {
+    if (!mounted || _isNavigatingToReader || _isLeaving) return;
+    final room = ref.read(roomProvider).currentRoom;
+    final bookHash = room?.currentBookHash;
+    if (room == null ||
+        bookHash == null ||
+        !ref.read(bookProvider.notifier).hasBook(bookHash)) {
+      _showError(
+        fromHost
+            ? 'Reading has started. You can join as soon as the book arrives.'
+            : 'The book is not on this device yet.',
+      );
+      return;
     }
-
-    return hasExactReadyBookRoster(
-      memberUserIds: roomState.members.map((member) => member.userId),
-      onlineUsers: presenceState.onlineUsers,
-      currentBookHash: currentBookHash,
-    );
+    _isNavigatingToReader = true;
+    context.goNamed('reader', pathParameters: {'roomCode': room.code});
   }
 
   Widget _buildRouteError(String message) {
@@ -652,29 +632,98 @@ class _BookCard extends StatelessWidget {
   }
 }
 
-/// Fail closed while a membership refresh is catching up with Presence. Every
-/// online logical user must be a DB room member, and every DB member must be
-/// online with the exact shared book before the host can freeze the roster.
-bool hasExactReadyBookRoster({
-  required Iterable<String> memberUserIds,
-  required Iterable<Map<String, dynamic>> onlineUsers,
-  required String currentBookHash,
-}) {
-  final memberIds = memberUserIds.toSet();
-  final onlineById = {
-    for (final user in onlineUsers)
-      if (user['user_id'] is String) user['user_id'] as String: user,
-  };
-  if (memberIds.length != onlineById.length ||
-      !memberIds.every(onlineById.containsKey)) {
-    return false;
-  }
+/// What the lobby's reading button does, and why it is disabled when it is.
+///
+/// The old rule required every database member to be online with the book
+/// before the host could start. A member whose app had crashed stays in the
+/// database until the server evicts them, and one whose transfer stalled never
+/// got the book, so either one locked the whole room out of reading. Now
+/// nobody else can hold this reader back: the host starts when the host has
+/// the book, anyone with the book can join a session already running, and the
+/// hint names who is still missing it.
+class LobbyReadiness {
+  final bool canOpenReader;
 
-  return memberIds.every((userId) {
-    final presence = onlineById[userId]!;
-    final readyHashes = presence['ready_book_hashes'];
-    return presence['has_book'] == true &&
-        readyHashes is List &&
-        readyHashes.contains(currentBookHash);
+  /// The button starts a session for the room (host) rather than joining one.
+  final bool isHostStart;
+  final String? hint;
+
+  const LobbyReadiness({
+    required this.canOpenReader,
+    required this.isHostStart,
+    required this.hint,
   });
+
+  factory LobbyReadiness.from({
+    required List<RoomMember> members,
+    required List<Map<String, dynamic>> onlineUsers,
+    required String? currentUserId,
+    required String? currentBookHash,
+    required bool hasLocalBook,
+    required bool isHost,
+    required bool isConnected,
+  }) {
+    final someoneReading = onlineUsers.any(
+      (user) =>
+          user['user_id'] != currentUserId && user['is_reading'] == true,
+    );
+    final isHostStart = isHost;
+
+    if (currentBookHash == null) {
+      return LobbyReadiness(
+        canOpenReader: false,
+        isHostStart: isHostStart,
+        hint: isHost
+            ? 'Share a book to start reading.'
+            : 'Waiting for someone to share a book.',
+      );
+    }
+    if (!hasLocalBook) {
+      return LobbyReadiness(
+        canOpenReader: false,
+        isHostStart: isHostStart,
+        hint: 'The book is on its way to this device.',
+      );
+    }
+    if (!isConnected) {
+      return LobbyReadiness(
+        canOpenReader: false,
+        isHostStart: isHostStart,
+        hint: 'Connecting to the room...',
+      );
+    }
+    if (!isHost && !someoneReading) {
+      return const LobbyReadiness(
+        canOpenReader: false,
+        isHostStart: false,
+        hint: 'The host starts the reading session.',
+      );
+    }
+
+    final onlineById = {
+      for (final user in onlineUsers)
+        if (user['user_id'] is String) user['user_id'] as String: user,
+    };
+    final stillReceiving = members
+        .where((member) => member.userId != currentUserId)
+        .where((member) {
+          final presence = onlineById[member.userId];
+          if (presence == null) return false;
+          final hashes = presence['ready_book_hashes'];
+          return !(hashes is List && hashes.contains(currentBookHash));
+        })
+        .map((member) => member.nickname)
+        .toList()
+      ..sort();
+
+    return LobbyReadiness(
+      canOpenReader: true,
+      isHostStart: isHostStart,
+      hint: stillReceiving.isEmpty
+          ? null
+          : '${stillReceiving.join(', ')} '
+                '${stillReceiving.length == 1 ? 'is' : 'are'} still receiving '
+                'the book and can join when it arrives.',
+    );
+  }
 }

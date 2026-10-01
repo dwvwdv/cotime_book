@@ -20,12 +20,19 @@ abstract interface class PageSyncTransport {
     required String event,
     required Map<String, dynamic> payload,
   });
+
+  /// Advertises this reader's shared position in its Presence meta.
+  Future<void> publishPosition(SharedPosition position);
 }
 
 class RealtimePageSyncTransport implements PageSyncTransport {
   final RealtimeService _realtimeService;
+  final Future<void> Function(SharedPosition position) _publishPosition;
 
-  const RealtimePageSyncTransport(this._realtimeService);
+  const RealtimePageSyncTransport(
+    this._realtimeService, {
+    required Future<void> Function(SharedPosition position) publishPosition,
+  }) : _publishPosition = publishPosition;
 
   @override
   Stream<Map<String, dynamic>> broadcastStream(String event) =>
@@ -46,10 +53,43 @@ class RealtimePageSyncTransport implements PageSyncTransport {
   }) {
     return _realtimeService.broadcast(event: event, payload: payload);
   }
+
+  @override
+  Future<void> publishPosition(SharedPosition position) =>
+      _publishPosition(position);
 }
 
+/// Everyone-must-agree page turning.
+///
+/// ```
+/// requester: request ──▶ (votes) ──▶ turn locally ──▶ commit(seq+1, cfi)
+/// others:        confirm/decline ──────────────────────▶ display(cfi)
+/// ```
+///
+/// Design rules, each one the answer to a way the previous protocol got stuck:
+///
+/// * **Readers agree on [SharedPosition.seq], never on CFI strings.** A CFI is
+///   a product of local pagination, so two devices on the same page disagree
+///   about it. Equality on CFIs rejected almost every turn between different
+///   screens and nothing ever brought them back together.
+/// * **The requester is the only coordinator.** Followers vote and follow the
+///   commit; they never cancel a request because *their* view of the room
+///   differs from the requester's.
+/// * **Every reader advertises its position in Presence.** A lost commit, a
+///   reader that re-enters, a reader that reconnects: all of them converge by
+///   adopting the newest position anyone in the reader holds. Nothing has to
+///   be retried against the database to recover.
+/// * **Liveness is explicit.** The requester re-broadcasts its request while it
+///   waits; a follower that stops hearing it drops it. No request can outlive
+///   its requester, and a lost vote is re-sent on the next nudge.
+/// * **Only readers who are in the reader with the book loaded are asked.**
+///   Someone in the lobby, or whose app is in the background, never blocks the
+///   room; they catch up from Presence when they come back.
 class PageSyncService {
-  static const _maxClockSkew = Duration(seconds: 5);
+  static const requestEvent = 'page_turn_request';
+  static const voteEvent = 'page_turn_vote';
+  static const commitEvent = 'page_turn_commit';
+  static const cancelEvent = 'page_turn_cancel';
 
   /// How long a failure stays on screen before the bar returns to idle.
   ///
@@ -58,182 +98,171 @@ class PageSyncService {
   /// a permanently stuck reader even though page turns still work.
   static const defaultErrorAutoClearDelay = Duration(seconds: 6);
 
+  /// Answering is a person finishing their page, so this is generous.
+  static const defaultRequestTimeout = Duration(minutes: 2);
+  static const defaultNudgeInterval = Duration(seconds: 8);
+  static const defaultFollowerLiveness = Duration(seconds: 25);
+  static const defaultTurnTimeout = Duration(seconds: 8);
+
+  static const _maxRememberedRequestIds = 200;
+
   final PageSyncTransport _transport;
   final String _currentUserId;
   final String _currentNickname;
-  final String _readingSessionId;
-  final Set<String> _sessionParticipantUserIds;
-  final Set<String> _expectedParticipantUserIds;
   final Uuid _uuid;
   final Duration _requestTimeout;
+  final Duration _nudgeInterval;
+  final Duration _followerLiveness;
+  final Duration _turnTimeout;
   final Duration _errorAutoClearDelay;
 
   final _stateController = StreamController<PageSyncState>.broadcast();
   final List<StreamSubscription<Map<String, dynamic>>> _subscriptions = [];
-  final Set<String> _handledExecuteIds = {};
-  final Set<String> _handledCommitIds = {};
-  final Set<String> _handledCompleteIds = {};
-  final Set<String> _executeInFlightIds = {};
-  final Set<String> _ackInFlightIds = {};
-  final Set<String> _sentAckIds = {};
-  final Set<String> _completeInFlightIds = {};
-  final Set<String> _seenRequestIds = {};
-  final Set<String> _enteredReaderParticipantIds = {};
-  final Set<String> _explicitlyLeftParticipantUserIds = {};
 
-  Timer? _timeoutTimer;
+  /// Requests that are over for this client. A delayed copy or a nudge of one
+  /// must not bring it back.
+  final _finishedRequestIds = <String>{};
+
+  /// Requests this reader agreed to, so a nudge can re-send a lost vote.
+  final _acceptedRequestIds = <String>{};
+
+  Timer? _requestTimeoutTimer;
+  Timer? _nudgeTimer;
+  Timer? _livenessTimer;
+  Timer? _turnTimer;
   Timer? _errorAutoClearTimer;
+
   PageSyncState _state = const PageSyncState.idle();
+  SharedPosition _position;
   bool _initialized = false;
   bool _disposed = false;
   bool _presenceSynchronized = false;
-  bool _readerReady = false;
-  String? _currentCfi;
-  PagePositionCommit? _positionCommit;
-  final Set<String> _positionAckUserIds = {};
+  bool _viewerReady = false;
 
-  void Function(PageTurnCommand command)? onPageTurn;
-  void Function(PagePositionCommit commit)? onPositionCommit;
-  void Function(String targetCfi, bool positionWasCommitted)?
-      onPositionRecovery;
+  /// Requester only: move the viewer one page, then call [completeTurn].
+  void Function(PageTurnCommand command)? onExecuteTurn;
+
+  /// The room moved to a page this reader is not displaying.
+  void Function(SharedPosition position)? onPositionChanged;
+
+  /// A turn handed to [onExecuteTurn] will not be completed; the reader should
+  /// go back to [position].
+  void Function(String requestId)? onTurnAbandoned;
 
   PageSyncService({
     required PageSyncTransport transport,
     required String currentUserId,
     required String currentNickname,
-    required String readingSessionId,
-    required Set<String> expectedParticipantUserIds,
+    SharedPosition initialPosition = const SharedPosition.start(),
     Uuid uuid = const Uuid(),
-    Duration requestTimeout = const Duration(seconds: 30),
+    Duration requestTimeout = defaultRequestTimeout,
+    Duration nudgeInterval = defaultNudgeInterval,
+    Duration followerLiveness = defaultFollowerLiveness,
+    Duration turnTimeout = defaultTurnTimeout,
     Duration errorAutoClearDelay = defaultErrorAutoClearDelay,
   }) : _transport = transport,
        _currentUserId = currentUserId,
        _currentNickname = currentNickname,
-       _readingSessionId = readingSessionId,
-       _sessionParticipantUserIds = {
-         ...expectedParticipantUserIds,
-         currentUserId,
-       },
-       _expectedParticipantUserIds = Set.of(expectedParticipantUserIds)
-         ..add(currentUserId),
+       _position = initialPosition,
        _uuid = uuid,
        _requestTimeout = requestTimeout,
+       _nudgeInterval = nudgeInterval,
+       _followerLiveness = followerLiveness,
+       _turnTimeout = turnTimeout,
        _errorAutoClearDelay = errorAutoClearDelay;
 
   Stream<PageSyncState> get stateStream => _stateController.stream;
   PageSyncState get currentState => _state;
+  SharedPosition get position => _position;
+  bool get isPresenceSynchronized => _presenceSynchronized;
 
   void initialize() {
     if (_initialized || _disposed) return;
     _initialized = true;
 
     _subscriptions.addAll([
-      _transport
-          .broadcastStream('page_turn_request')
-          .listen(_onPageTurnRequest),
-      _transport
-          .broadcastStream('page_turn_confirm')
-          .listen(_onPageTurnConfirm),
-      _transport
-          .broadcastStream('page_turn_execute')
-          .listen(_onPageTurnExecute),
-      _transport.broadcastStream('page_turn_cancel').listen(_onPageTurnCancel),
-      _transport
-          .broadcastStream('page_position_persisting')
-          .listen(_onPositionPersisting),
-      _transport
-          .broadcastStream('page_position_commit')
-          .listen(_onPagePositionCommit),
-      _transport
-          .broadcastStream('page_position_ack')
-          .listen(_onPagePositionAck),
-      _transport
-          .broadcastStream('page_turn_complete')
-          .listen(_onPageTurnComplete),
-      _transport
-          .broadcastStream('reading_session_leave')
-          .listen(_onReadingSessionLeave),
-      _transport.presenceStream.listen(_onPresenceChange),
+      _transport.broadcastStream(requestEvent).listen(_onRequest),
+      _transport.broadcastStream(voteEvent).listen(_onVote),
+      _transport.broadcastStream(commitEvent).listen(_onCommit),
+      _transport.broadcastStream(cancelEvent).listen(_onCancel),
+      _transport.presenceStream.listen(_onPresence),
     ]);
 
-    _presenceSynchronized = _transport.getOnlineUsers().any(
-      (user) => user['user_id'] == _currentUserId,
-    );
+    final users = _transport.getOnlineUsers();
+    _presenceSynchronized = _isSelfPresent(users);
+    // A reader entering mid-session starts from the database, which may be a
+    // page behind whoever is already reading.
+    _absorbPresencePositions(users);
+    unawaited(_publishPosition());
     _updateState(const PageSyncState.idle());
   }
 
-  void updateReaderContext({required bool isReady, String? currentCfi}) {
+  /// Whether this reader's viewer can take part right now: loaded and not in
+  /// the middle of moving. It only gates what *this* client starts; it never
+  /// cancels a request someone else is running.
+  void setViewerReady(bool isReady) {
     if (_disposed) return;
-    _readerReady = isReady;
-    if (currentCfi != null && currentCfi.isNotEmpty) {
-      _currentCfi = currentCfi;
-    }
-
-    final request = _state.currentRequest;
-    if (request != null &&
-        _state.status != SyncStatus.turning &&
-        (!isReady || _currentCfi != request.fromCfi)) {
-      unawaited(_cancelRequest(request, 'reader_became_unready'));
-    }
+    _viewerReady = isReady;
   }
 
-  Future<bool> requestPageTurn({
-    required PageTurnDirection direction,
-    String? fromCfi,
-  }) async {
+  Future<bool> requestPageTurn({required PageTurnDirection direction}) async {
     if (_disposed || !_initialized) return false;
     if (_state.status != SyncStatus.idle || _state.currentRequest != null) {
       return false;
     }
-
-    final sourceCfi = fromCfi ?? _currentCfi;
-    if (!_readerReady || sourceCfi == null || sourceCfi.isEmpty) {
-      _setError('Reader is not ready yet');
-      return false;
-    }
-    if (_currentCfi != sourceCfi) {
-      _setError('Page changed before the request could start');
+    if (!_viewerReady) {
+      _setError('The book is still loading');
       return false;
     }
 
-    final quorum = _buildReadyReaderQuorum();
-    if (quorum.error != null) {
-      _setError(quorum.error!);
+    final users = _transport.getOnlineUsers();
+    if (!_presenceSynchronized && _isSelfPresent(users)) {
+      _presenceSynchronized = true;
+    }
+    if (!_presenceSynchronized) {
+      // Without a Presence view this client cannot know who else is reading,
+      // and a turn taken now would skip their consent.
+      _setError('Still connecting to the room');
       return false;
     }
+    // Someone is already further on: go there instead of turning from a page
+    // the room has left.
+    if (_absorbPresencePositions(users)) return false;
 
     final request = PageTurnRequest(
-      sessionId: _readingSessionId,
       requestId: _uuid.v4(),
       requestedByUserId: _currentUserId,
       requestedByNickname: _currentNickname,
       direction: direction,
-      fromCfi: sourceCfi,
+      fromSeq: _position.seq,
       requestedAt: DateTime.now().toUtc(),
       confirmedUserIds: {_currentUserId},
-      requiredUserIds: quorum.userIds,
+      requiredUserIds: {..._readyReaderIds(users), _currentUserId},
     );
-    _seenRequestIds.add(request.requestId);
+
+    if (request.isConsensusReached) {
+      // Reading alone: there is nobody to ask.
+      _execute(request);
+      return true;
+    }
 
     _updateState(
       PageSyncState(status: SyncStatus.requesting, currentRequest: request),
     );
-    _startTimeout(request.requestId);
+    _startRequesterTimers(request);
 
     try {
       await _transport.broadcast(
-        event: 'page_turn_request',
+        event: requestEvent,
         payload: request.toJson(),
       );
-    } catch (error) {
-      _failRequest(request, 'Could not request a page turn: $error');
+    } catch (_) {
+      if (_isCurrent(request)) {
+        _finishRequest(request, error: 'Could not reach the other readers');
+      }
       return false;
     }
-
-    if (request.isConsensusReached) {
-      await _executePageTurn(request);
-    }
-    return _state.currentRequest?.requestId == request.requestId;
+    return _isCurrent(request);
   }
 
   Future<bool> confirmPageTurn() async {
@@ -241,202 +270,114 @@ class PageSyncService {
     if (_disposed ||
         request == null ||
         _state.status != SyncStatus.confirming ||
-        !request.requiredUserIds.contains(_currentUserId) ||
-        !_readerReady ||
-        _currentCfi != request.fromCfi) {
-      if (request != null && _currentCfi != request.fromCfi) {
-        await _cancelRequest(request, 'stale_page_position');
+        !request.requiredUserIds.contains(_currentUserId)) {
+      return false;
+    }
+
+    // Move to waiting before the send so a double tap cannot vote twice.
+    _acceptedRequestIds.add(request.requestId);
+    _updateState(
+      PageSyncState(
+        status: SyncStatus.waiting,
+        currentRequest: request.copyWith(
+          confirmedUserIds: {...request.confirmedUserIds, _currentUserId},
+        ),
+      ),
+    );
+
+    try {
+      await _sendVote(request, accept: true);
+      return true;
+    } catch (_) {
+      _acceptedRequestIds.remove(request.requestId);
+      if (_isCurrent(request)) {
+        // Keep the request: the reader can simply answer again.
+        _updateState(
+          PageSyncState(
+            status: SyncStatus.confirming,
+            currentRequest: request,
+            errorMessage: 'Could not send your answer. Try again.',
+          ),
+        );
       }
       return false;
     }
-
-    try {
-      await _transport.broadcast(
-        event: 'page_turn_confirm',
-        payload: {'request_id': request.requestId, 'user_id': _currentUserId},
-      );
-    } catch (error) {
-      _failRequest(request, 'Could not confirm the page turn: $error');
-      return false;
-    }
-
-    final current = _state.currentRequest;
-    if (current == null || current.requestId != request.requestId) return false;
-    final updated = current.copyWith(
-      confirmedUserIds: {...current.confirmedUserIds, _currentUserId},
-    );
-    _updateState(
-      PageSyncState(status: SyncStatus.waiting, currentRequest: updated),
-    );
-    _checkConsensus(updated);
-    return true;
   }
 
   Future<void> declinePageTurn() async {
     final request = _state.currentRequest;
     if (_disposed ||
         request == null ||
-        !request.requiredUserIds.contains(_currentUserId)) {
+        request.requestedByUserId == _currentUserId ||
+        (_state.status != SyncStatus.confirming &&
+            _state.status != SyncStatus.waiting)) {
       return;
     }
-    await _cancelRequest(request, 'declined_by_$_currentNickname');
-  }
-
-  /// Called by the requester after its programmatic page turn relocates.
-  Future<bool> commitPagePosition(String targetCfi) async {
-    final request = _state.currentRequest;
-    if (_disposed ||
-        request == null ||
-        request.requestedByUserId != _currentUserId ||
-        _state.status != SyncStatus.turning ||
-        !_handledExecuteIds.contains(request.requestId) ||
-        targetCfi.isEmpty) {
-      return false;
-    }
-
-    final commit = PagePositionCommit(
-      requestId: request.requestId,
-      requestedByUserId: request.requestedByUserId,
-      direction: request.direction,
-      fromCfi: request.fromCfi,
-      targetCfi: targetCfi,
-    );
-
+    _finishRequest(request);
     try {
-      await _transport.broadcast(
-        event: 'page_position_commit',
-        payload: commit.toJson(),
-      );
-    } catch (error) {
-      _startTimeout(request.requestId);
-      _updateState(
-        _state.copyWith(
-          errorMessage: 'Page saved, but synchronization failed; retrying: $error',
-        ),
-      );
-      return false;
-    }
-
-    _applyPositionCommit(commit);
-    return true;
-  }
-
-  void reportPositionPersistenceFailure({
-    required String requestId,
-    required Object error,
-  }) {
-    final request = _state.currentRequest;
-    if (_disposed ||
-        request == null ||
-        request.requestId != requestId ||
-        !_handledExecuteIds.contains(requestId)) {
-      return;
-    }
-    _startTimeout(requestId);
-    _updateState(
-      _state.copyWith(
-        errorMessage: 'Page moved, but saving failed; retrying: $error',
-      ),
-    );
-  }
-
-  /// Database page writes are not safely cancellable: an HTTP timeout does not
-  /// prove the server transaction was rolled back. Pause the protocol timeout
-  /// while the sole writer waits for an unambiguous database result.
-  Future<bool> beginPositionPersistence(String requestId) async {
-    final request = _state.currentRequest;
-    if (_disposed ||
-        request == null ||
-        request.requestId != requestId ||
-        request.requestedByUserId != _currentUserId ||
-        _state.status != SyncStatus.turning ||
-        !_handledExecuteIds.contains(requestId)) {
-      return false;
-    }
-    final payload = {
-      'request_id': requestId,
-      'requested_by_user_id': _currentUserId,
-    };
-    try {
-      await _transport.broadcast(
-        event: 'page_position_persisting',
-        payload: payload,
+      await _sendVote(
+        request,
+        accept: false,
+        reason: 'declined_by_$_currentNickname',
       );
     } catch (_) {
-      await _cancelRequest(request, 'persistence_coordination_failed');
-      return false;
-    }
-    _applyPositionPersisting(payload);
-    return _state.currentRequest?.requestId == requestId;
-  }
-
-  bool isRequestActive(String requestId) {
-    return !_disposed && _state.currentRequest?.requestId == requestId;
-  }
-
-  Future<void> leaveReadingSession() async {
-    if (_disposed || !_initialized) return;
-    final payload = {
-      'session_id': _readingSessionId,
-      'user_id': _currentUserId,
-    };
-    try {
-      await _transport.broadcast(
-        event: 'reading_session_leave',
-        payload: payload,
-      );
-    } finally {
-      _onReadingSessionLeave(payload);
+      // The requester still times out, and stops nudging a reader who has
+      // dropped the request locally.
     }
   }
 
-  /// Acknowledges that this reader has actually displayed the committed CFI.
+  /// Requester only: the viewer landed on [targetCfi] after [onExecuteTurn].
   ///
-  /// The request remains locked until every required reader acknowledges and
-  /// the requester broadcasts a final completion event. This prevents a fast
-  /// client from starting another turn while a slower client is still moving.
-  Future<bool> acknowledgePagePosition(String targetCfi) async {
+  /// Returns the new shared position for the caller to persist, or null if the
+  /// turn is no longer current.
+  SharedPosition? completeTurn(String requestId, String targetCfi) {
     final request = _state.currentRequest;
-    final commit = _positionCommit;
     if (_disposed ||
         request == null ||
-        commit == null ||
-        request.requestId != commit.requestId ||
+        request.requestId != requestId ||
         _state.status != SyncStatus.turning ||
-        !request.requiredUserIds.contains(_currentUserId) ||
-        !_readerReady ||
-        _currentCfi != targetCfi ||
-        commit.targetCfi != targetCfi) {
-      return false;
+        targetCfi.isEmpty) {
+      return null;
     }
-    if (_sentAckIds.contains(request.requestId)) return true;
-    if (!_ackInFlightIds.add(request.requestId)) return true;
 
-    try {
-      await _transport.broadcast(
-        event: 'page_position_ack',
-        payload: {
-          'request_id': request.requestId,
-          'user_id': _currentUserId,
-          'target_cfi': targetCfi,
-        },
-      );
-      _sentAckIds.add(request.requestId);
-      _applyPositionAck(
-        requestId: request.requestId,
-        userId: _currentUserId,
-        targetCfi: targetCfi,
-      );
-      return true;
-    } catch (error) {
-      _failRequest(request, 'Could not acknowledge the new page: $error');
-      return false;
-    } finally {
-      _ackInFlightIds.remove(request.requestId);
+    final next = SharedPosition(seq: request.fromSeq + 1, cfi: targetCfi);
+    _position = next;
+    _finishRequest(request);
+    unawaited(_broadcastCommit(request, next));
+    unawaited(_publishPosition());
+    return next;
+  }
+
+  /// Requester only: the viewer could not move (first or last page, or the
+  /// viewer was rebuilt underneath the turn).
+  void abandonTurn(String requestId, {String reason = 'turn_failed'}) {
+    final request = _state.currentRequest;
+    if (_disposed ||
+        request == null ||
+        request.requestId != requestId ||
+        _state.status != SyncStatus.turning) {
+      return;
+    }
+    _finishRequest(request, error: describeCancelReason(reason));
+    unawaited(_broadcastCancelQuietly(request, reason));
+    onTurnAbandoned?.call(requestId);
+  }
+
+  /// Leaves the reader. A request this client owns is withdrawn so nobody else
+  /// waits for it; anything else is resolved by Presence.
+  Future<void> leave() async {
+    final request = _state.currentRequest;
+    if (_disposed || request == null) return;
+    _finishRequest(request);
+    if (request.requestedByUserId == _currentUserId) {
+      await _broadcastCancelQuietly(request, 'requester_left');
     }
   }
 
-  void _onPageTurnRequest(Map<String, dynamic> payload) {
+  // ---------------------------------------------------------------------------
+  // Incoming events
+
+  void _onRequest(Map<String, dynamic> payload) {
     if (_disposed) return;
 
     final PageTurnRequest incoming;
@@ -445,687 +386,458 @@ class PageSyncService {
     } on FormatException {
       return;
     }
+    // Realtime is configured with self: true.
+    if (incoming.requestedByUserId == _currentUserId) return;
+    if (_finishedRequestIds.contains(incoming.requestId)) return;
 
     final current = _state.currentRequest;
-    if (current?.requestId == incoming.requestId) return;
-    if (!_seenRequestIds.add(incoming.requestId)) return;
-    if (incoming.requestedByUserId == _currentUserId && current == null) return;
-
-    if (!_isValidIncomingRequest(incoming)) {
-      unawaited(_broadcastCancel(incoming, 'invalid_or_stale_request'));
+    if (current?.requestId == incoming.requestId) {
+      // A nudge: the requester is still waiting.
+      if (current!.requestedByUserId != _currentUserId) {
+        _startLivenessTimer(current);
+      }
+      if (_acceptedRequestIds.contains(incoming.requestId)) {
+        // The vote may have been lost; answering again is idempotent.
+        unawaited(_sendVoteQuietly(incoming, accept: true));
+      }
       return;
     }
+
+    // The request may come from a page this reader has not reached yet.
+    _absorbPresencePositions(_transport.getOnlineUsers());
+    if (incoming.fromSeq < _position.seq) {
+      if (incoming.requiredUserIds.contains(_currentUserId)) {
+        // Tell the requester it is behind; it catches up from Presence.
+        unawaited(
+          _sendVoteQuietly(incoming, accept: false, reason: 'out_of_sync'),
+        );
+      }
+      return;
+    }
+    // Not asked: this reader joined after the request and follows the commit.
+    if (!incoming.requiredUserIds.contains(_currentUserId)) return;
 
     if (current == null) {
-      _adoptIncomingRequest(incoming);
+      _adoptIncoming(incoming);
+      return;
+    }
+    // This reader's own turn is already moving; it makes the other stale.
+    if (_state.status == SyncStatus.turning) return;
+
+    if (!_wins(incoming, over: current)) {
+      if (current.requestedByUserId == _currentUserId) {
+        // Make sure the competing requester hears about the winner.
+        unawaited(_broadcastRequestQuietly(current));
+      }
       return;
     }
 
-    // Once execution starts it is the deterministic winner. Before that, every
-    // state uses the lexicographically lower UUID, not arrival order.
-    final currentWins =
-        _state.status == SyncStatus.turning ||
-        current.requestId.compareTo(incoming.requestId) < 0;
-    if (currentWins) {
-      unawaited(_rebroadcastRequest(current));
+    // Two people pressing "next" at once want the same thing; the one that
+    // loses the tie-break should not then have to tap again.
+    final sameIntent =
+        current.direction == incoming.direction &&
+        (current.requestedByUserId == _currentUserId ||
+            _acceptedRequestIds.contains(current.requestId));
+    if (current.requestedByUserId == _currentUserId) {
+      unawaited(_broadcastCancelQuietly(current, 'superseded'));
+    }
+    _finishRequest(current);
+    _adoptIncoming(incoming, autoAccept: sameIntent);
+  }
+
+  void _onVote(Map<String, dynamic> payload) {
+    if (_disposed) return;
+    final requestId = payload['request_id'];
+    final userId = payload['user_id'];
+    final accept = payload['accept'];
+    if (requestId is! String || userId is! String || accept is! bool) return;
+
+    final request = _state.currentRequest;
+    if (request == null ||
+        request.requestId != requestId ||
+        !request.requiredUserIds.contains(userId)) {
       return;
     }
 
-    _cancelTimeout();
-    _adoptIncomingRequest(incoming);
-  }
-
-  bool _isValidIncomingRequest(PageTurnRequest request) {
-    if (request.sessionId != _readingSessionId ||
-        !_readerReady ||
-        _currentCfi != request.fromCfi) {
-      return false;
-    }
-    final age = DateTime.now().toUtc().difference(request.requestedAt);
-    if (age > _requestTimeout || age < -_maxClockSkew) return false;
-    if (request.requiredUserIds.isEmpty ||
-        !request.requiredUserIds.contains(request.requestedByUserId) ||
-        !request.requiredUserIds.contains(_currentUserId)) {
-      return false;
+    if (accept) {
+      final updated = request.copyWith(
+        confirmedUserIds: {...request.confirmedUserIds, userId},
+      );
+      _updateState(_state.copyWith(currentRequest: updated));
+      _checkConsensus(updated);
+      return;
     }
 
-    final quorum = _buildReadyReaderQuorum();
-    if (quorum.error != null) return false;
-    return request.requiredUserIds.length == quorum.userIds.length &&
-        request.requiredUserIds.every(quorum.userIds.contains);
+    // Followers wait for the requester's cancel; only the coordinator decides.
+    if (request.requestedByUserId != _currentUserId ||
+        _state.status != SyncStatus.requesting) {
+      return;
+    }
+    final reason = payload['reason'] is String
+        ? payload['reason'] as String
+        : 'declined';
+    _finishRequest(request, error: describeCancelReason(reason));
+    unawaited(_broadcastCancelQuietly(request, reason));
+    if (reason == 'out_of_sync') {
+      _absorbPresencePositions(_transport.getOnlineUsers());
+    }
   }
 
-  void _adoptIncomingRequest(PageTurnRequest request) {
-    _updateState(
-      PageSyncState(
-        status: request.requestedByUserId == _currentUserId
-            ? SyncStatus.requesting
-            : SyncStatus.confirming,
-        currentRequest: request,
-      ),
-    );
-    _startTimeout(request.requestId);
-    _checkConsensus(request);
+  void _onCommit(Map<String, dynamic> payload) {
+    if (_disposed) return;
+    final seq = payload['seq'];
+    final cfi = payload['cfi'];
+    final requestId = payload['request_id'];
+    if (seq is! int || seq < 0 || cfi is! String || cfi.isEmpty) return;
+    if (requestId is String) _rememberFinished(requestId);
+
+    _adoptRemotePosition(SharedPosition(seq: seq, cfi: cfi));
   }
 
-  void _onPageTurnConfirm(Map<String, dynamic> payload) {
+  void _onCancel(Map<String, dynamic> payload) {
     if (_disposed) return;
     final requestId = payload['request_id'];
     final userId = payload['user_id'];
     if (requestId is! String || userId is! String) return;
 
-    final current = _state.currentRequest;
-    if (current == null ||
-        current.requestId != requestId ||
-        !current.requiredUserIds.contains(userId) ||
-        !_isReadyReaderOnline(userId, _transport.getOnlineUsers())) {
+    final request = _state.currentRequest;
+    if (request == null || request.requestId != requestId) {
+      // Arrived before the request (or a nudge of it): never adopt it now.
+      _rememberFinished(requestId);
+      return;
+    }
+    if (userId != request.requestedByUserId || userId == _currentUserId) {
       return;
     }
 
-    final updated = current.copyWith(
-      confirmedUserIds: {...current.confirmedUserIds, userId},
+    final reason = payload['reason'] is String
+        ? payload['reason'] as String
+        : 'cancelled';
+    // Losing a tie-break is not news to the reader whose answer moved over to
+    // the winner.
+    _finishRequest(
+      request,
+      error: reason == 'superseded' ? null : describeCancelReason(reason),
     );
-    _updateState(_state.copyWith(currentRequest: updated, clearError: true));
+  }
+
+  void _onPresence(Map<String, dynamic> _) {
+    if (_disposed) return;
+    final users = _transport.getOnlineUsers();
+    final selfPresent = _isSelfPresent(users);
+    if (selfPresent) _presenceSynchronized = true;
+
+    _absorbPresencePositions(users);
+
+    // An empty or partial view during a reconnect is not evidence that anyone
+    // left. Pruning on it would let a requester turn alone.
+    final request = _state.currentRequest;
+    if (request == null || !selfPresent) return;
+
+    if (request.requestedByUserId != _currentUserId) {
+      if (!_isReading(request.requestedByUserId, users)) {
+        _finishRequest(
+          request,
+          error: '${request.requestedByNickname} left the book',
+        );
+      }
+      return;
+    }
+
+    if (_state.status != SyncStatus.requesting) return;
+    final stillReading = request.requiredUserIds
+        .where((id) => id == _currentUserId || _isReading(id, users))
+        .toSet();
+    if (stillReading.length == request.requiredUserIds.length) return;
+    final updated = request.copyWith(requiredUserIds: stillReading);
+    _updateState(_state.copyWith(currentRequest: updated));
     _checkConsensus(updated);
   }
 
-  void _onPageTurnExecute(Map<String, dynamic> payload) {
-    if (_disposed) return;
-    final requestId = payload['request_id'];
-    final requestedByUserId = payload['requested_by_user_id'];
-    final direction = pageTurnDirectionFromWire(payload['direction']);
-    final current = _state.currentRequest;
+  // ---------------------------------------------------------------------------
+  // Transitions
 
-    if (requestId is! String ||
-        requestedByUserId is! String ||
-        direction == null ||
-        current == null ||
-        current.requestId != requestId ||
-        current.requestedByUserId != requestedByUserId ||
-        current.direction != direction ||
-        !current.isConsensusReached) {
-      return;
-    }
-
-    if (!_isRequestQuorumStillReady(current)) {
-      unawaited(_cancelRequest(current, 'required_reader_not_ready'));
-      return;
-    }
-
-    _applyExecute(current);
-  }
-
-  void _applyExecute(PageTurnRequest request) {
-    if (_disposed || !_handledExecuteIds.add(request.requestId)) return;
-    _startTimeout(request.requestId);
+  void _adoptIncoming(PageTurnRequest request, {bool autoAccept = false}) {
     _updateState(
-      PageSyncState(status: SyncStatus.turning, currentRequest: request),
+      PageSyncState(status: SyncStatus.confirming, currentRequest: request),
     );
-    onPageTurn?.call(
-      PageTurnCommand(
-        requestId: request.requestId,
-        direction: request.direction,
-        fromCfi: request.fromCfi,
-        isRequester: request.requestedByUserId == _currentUserId,
-      ),
-    );
-  }
-
-  void _onPagePositionCommit(Map<String, dynamic> payload) {
-    if (_disposed) return;
-    final requestId = payload['request_id'];
-    final requestedByUserId = payload['requested_by_user_id'];
-    final direction = pageTurnDirectionFromWire(payload['direction']);
-    final fromCfi = payload['from_cfi'];
-    final targetCfi = payload['target_cfi'];
-    final current = _state.currentRequest;
-
-    if (requestId is! String ||
-        requestedByUserId is! String ||
-        direction == null ||
-        fromCfi is! String ||
-        targetCfi is! String ||
-        targetCfi.isEmpty ||
-        current == null ||
-        current.requestId != requestId ||
-        current.requestedByUserId != requestedByUserId ||
-        current.direction != direction ||
-        current.fromCfi != fromCfi ||
-        !_handledExecuteIds.contains(requestId)) {
-      return;
-    }
-
-    _applyPositionCommit(
-      PagePositionCommit(
-        requestId: requestId,
-        requestedByUserId: requestedByUserId,
-        direction: direction,
-        fromCfi: fromCfi,
-        targetCfi: targetCfi,
-      ),
-    );
-  }
-
-  void _onPositionPersisting(Map<String, dynamic> payload) {
-    _applyPositionPersisting(payload);
-  }
-
-  void _applyPositionPersisting(Map<String, dynamic> payload) {
-    if (_disposed) return;
-    final requestId = payload['request_id'];
-    final requestedByUserId = payload['requested_by_user_id'];
-    final request = _state.currentRequest;
-    if (requestId is! String ||
-        requestedByUserId is! String ||
-        request == null ||
-        request.requestId != requestId ||
-        request.requestedByUserId != requestedByUserId ||
-        _state.status != SyncStatus.turning ||
-        !_handledExecuteIds.contains(requestId)) {
-      return;
-    }
-    _cancelTimeout();
-    _updateState(_state.copyWith(clearError: true));
-  }
-
-  void _applyPositionCommit(PagePositionCommit commit) {
-    if (_disposed || !_handledCommitIds.add(commit.requestId)) return;
-    _positionCommit = commit;
-    _positionAckUserIds.clear();
-    _startTimeout(commit.requestId);
-    _updateState(
-      PageSyncState(
-        status: SyncStatus.turning,
-        currentRequest: _state.currentRequest,
-      ),
-    );
-    onPositionCommit?.call(commit);
-  }
-
-  void _onPagePositionAck(Map<String, dynamic> payload) {
-    final requestId = payload['request_id'];
-    final userId = payload['user_id'];
-    final targetCfi = payload['target_cfi'];
-    if (requestId is! String || userId is! String || targetCfi is! String) {
-      return;
-    }
-    _applyPositionAck(
-      requestId: requestId,
-      userId: userId,
-      targetCfi: targetCfi,
-    );
-  }
-
-  void _applyPositionAck({
-    required String requestId,
-    required String userId,
-    required String targetCfi,
-  }) {
-    if (_disposed) return;
-    final request = _state.currentRequest;
-    final commit = _positionCommit;
-    if (request == null ||
-        commit == null ||
-        request.requestId != requestId ||
-        commit.requestId != requestId ||
-        commit.targetCfi != targetCfi ||
-        !request.requiredUserIds.contains(userId)) {
-      return;
-    }
-
-    _positionAckUserIds.add(userId);
-    _checkDisplayCompletion(request, commit);
-  }
-
-  void _checkDisplayCompletion(
-    PageTurnRequest request,
-    PagePositionCommit commit,
-  ) {
-    if (request.requestedByUserId == _currentUserId &&
-        request.requiredUserIds.every(_positionAckUserIds.contains)) {
-      unawaited(_completePageTurn(request, commit));
-    }
-  }
-
-  Future<void> _completePageTurn(
-    PageTurnRequest request,
-    PagePositionCommit commit,
-  ) async {
-    if (_handledCompleteIds.contains(request.requestId) ||
-        !_completeInFlightIds.add(request.requestId)) {
-      return;
-    }
-    try {
-      await _transport.broadcast(
-        event: 'page_turn_complete',
-        payload: {
-          ...commit.toJson(),
-          'completed_by_user_id': request.requestedByUserId,
-        },
-      );
-      _applyPageTurnComplete(request, commit);
-    } catch (error) {
-      _failRequest(request, 'Could not complete the page turn: $error');
-    } finally {
-      _completeInFlightIds.remove(request.requestId);
-    }
-  }
-
-  void _onPageTurnComplete(Map<String, dynamic> payload) {
-    if (_disposed) return;
-    final requestId = payload['request_id'];
-    final requestedByUserId = payload['requested_by_user_id'];
-    final completedByUserId = payload['completed_by_user_id'];
-    final direction = pageTurnDirectionFromWire(payload['direction']);
-    final fromCfi = payload['from_cfi'];
-    final targetCfi = payload['target_cfi'];
-    final request = _state.currentRequest;
-    final commit = _positionCommit;
-
-    if (requestId is! String ||
-        requestedByUserId is! String ||
-        completedByUserId is! String ||
-        direction == null ||
-        fromCfi is! String ||
-        targetCfi is! String ||
-        request == null ||
-        commit == null ||
-        request.requestId != requestId ||
-        request.requestedByUserId != requestedByUserId ||
-        requestedByUserId != completedByUserId ||
-        request.direction != direction ||
-        request.fromCfi != fromCfi ||
-        commit.targetCfi != targetCfi) {
-      return;
-    }
-
-    _applyPageTurnComplete(request, commit);
-  }
-
-  void _applyPageTurnComplete(
-    PageTurnRequest request,
-    PagePositionCommit commit,
-  ) {
-    if (_disposed || !_handledCompleteIds.add(request.requestId)) return;
-    _cancelTimeout();
-    _currentCfi = commit.targetCfi;
-    _clearActivePositionState(request.requestId);
-    _updateState(const PageSyncState.idle());
-  }
-
-  void _onPageTurnCancel(Map<String, dynamic> payload) {
-    if (_disposed) return;
-    final requestId = payload['request_id'];
-    final userId = payload['user_id'];
-    final current = _state.currentRequest;
-    if (requestId is! String ||
-        userId is! String ||
-        current == null ||
-        current.requestId != requestId ||
-        !current.requiredUserIds.contains(userId)) {
-      return;
-    }
-
-    _cancelTimeout();
-    final reason = payload['reason'] as String? ?? 'cancelled';
-    _failRequest(current, describeCancelReason(reason));
-  }
-
-  void _onPresenceChange(Map<String, dynamic> event) {
-    if (_disposed) return;
-    final eventType = event['event'];
-    if (eventType == 'sync') {
-      _presenceSynchronized = true;
-    }
-    if (eventType != 'leave' && eventType != 'sync') return;
-
-    final current = _state.currentRequest;
-    final onlineUsers = _transport.getOnlineUsers();
-    _syncParticipantRoster(onlineUsers);
-    if (eventType == 'leave') {
-      final departedReaders = _enteredReaderParticipantIds.where((userId) {
-        return !_isReadingParticipantOnline(userId, onlineUsers);
-      }).toSet();
-      _enteredReaderParticipantIds.removeAll(departedReaders);
-      _expectedParticipantUserIds.removeAll(departedReaders);
-    }
-    // A participant who never opened the reader was previously unremovable: it
-    // stayed in the quorum even after disconnecting from the room entirely,
-    // which blocked every later page turn for everyone else. Presence absence
-    // is observed identically by all clients, so pruning on it keeps the
-    // rosters convergent. Re-entry is restored by _syncParticipantRoster.
-    _expectedParticipantUserIds.removeAll(
-      _expectedParticipantUserIds.where((userId) {
-        return userId != _currentUserId && !_isInRoom(userId, onlineUsers);
-      }).toSet(),
-    );
-    if (current == null) return;
-    final isExecuting = _handledExecuteIds.contains(current.requestId);
-    final remainingRequired = current.requiredUserIds.where((userId) {
-      return isExecuting
-          ? _isReadingParticipantOnline(userId, onlineUsers)
-          : _isReadyReaderOnline(userId, onlineUsers);
-    }).toSet();
-    if (remainingRequired.length == current.requiredUserIds.length) return;
-    if (eventType == 'sync') {
-      unawaited(_cancelRequest(current, 'required_reader_not_ready'));
-      return;
-    }
-    if (remainingRequired.isEmpty ||
-        !remainingRequired.contains(current.requestedByUserId)) {
-      unawaited(_cancelRequest(current, 'requester_left'));
-      return;
-    }
-
-    final updated = current.copyWith(requiredUserIds: remainingRequired);
-    _updateState(_state.copyWith(currentRequest: updated, clearError: true));
-    final commit = _positionCommit;
-    if (commit != null && commit.requestId == updated.requestId) {
-      _checkDisplayCompletion(updated, commit);
-    } else {
-      _checkConsensus(updated);
-    }
-  }
-
-  void _onReadingSessionLeave(Map<String, dynamic> payload) {
-    if (_disposed || payload['session_id'] != _readingSessionId) return;
-    final userId = payload['user_id'];
-    if (userId is! String || !_sessionParticipantUserIds.contains(userId)) {
-      return;
-    }
-    _explicitlyLeftParticipantUserIds.add(userId);
-    _expectedParticipantUserIds.remove(userId);
-    _enteredReaderParticipantIds.remove(userId);
-
-    final current = _state.currentRequest;
-    if (current == null || !current.requiredUserIds.contains(userId)) return;
-    if (current.requestedByUserId == userId) {
-      unawaited(_cancelRequest(current, 'requester_left_reading_session'));
-      return;
-    }
-
-    final remainingRequired = Set<String>.from(current.requiredUserIds)
-      ..remove(userId);
-    if (remainingRequired.isEmpty ||
-        !remainingRequired.contains(current.requestedByUserId)) {
-      unawaited(_cancelRequest(current, 'reading_session_ended'));
-      return;
-    }
-    final updated = current.copyWith(requiredUserIds: remainingRequired);
-    _updateState(_state.copyWith(currentRequest: updated, clearError: true));
-    final commit = _positionCommit;
-    if (commit != null && commit.requestId == updated.requestId) {
-      _checkDisplayCompletion(updated, commit);
-    } else {
-      _checkConsensus(updated);
-    }
+    _startLivenessTimer(request);
+    if (autoAccept) unawaited(confirmPageTurn());
   }
 
   void _checkConsensus(PageTurnRequest request) {
-    if (!request.isConsensusReached ||
-        request.requestedByUserId != _currentUserId ||
-        _executeInFlightIds.contains(request.requestId) ||
-        _handledExecuteIds.contains(request.requestId)) {
+    if (request.requestedByUserId != _currentUserId ||
+        _state.status != SyncStatus.requesting ||
+        !request.isConsensusReached) {
       return;
     }
-    if (!_isRequestQuorumStillReady(request)) {
-      unawaited(_cancelRequest(request, 'required_reader_not_ready'));
-      return;
-    }
-    unawaited(_executePageTurn(request));
+    _execute(request);
   }
 
-  Future<void> _executePageTurn(PageTurnRequest request) async {
-    if (!_executeInFlightIds.add(request.requestId)) return;
+  void _execute(PageTurnRequest request) {
+    _cancelRequestTimers();
     _updateState(
       PageSyncState(status: SyncStatus.turning, currentRequest: request),
     );
-
-    try {
-      await _transport.broadcast(
-        event: 'page_turn_execute',
-        payload: {
-          'request_id': request.requestId,
-          'requested_by_user_id': request.requestedByUserId,
-          'direction': pageTurnDirectionToWire(request.direction),
-        },
-      );
-      // Realtime is configured with self:true. If the echo arrived while send
-      // was awaited, this is a no-op; otherwise this provides the one local run.
-      _applyExecute(request);
-    } catch (error) {
-      _failRequest(request, 'Could not execute the page turn: $error');
-    } finally {
-      _executeInFlightIds.remove(request.requestId);
-    }
-  }
-
-  Future<void> _cancelRequest(PageTurnRequest request, String reason) async {
-    try {
-      await _broadcastCancel(request, reason);
-    } catch (error) {
-      _failRequest(request, 'Could not cancel the page turn: $error');
+    final handler = onExecuteTurn;
+    if (handler == null) {
+      abandonTurn(request.requestId);
       return;
     }
-    if (_state.currentRequest?.requestId == request.requestId) {
-      _failRequest(request, describeCancelReason(reason));
-    }
+    _turnTimer = Timer(_turnTimeout, () {
+      abandonTurn(request.requestId);
+    });
+    handler(
+      PageTurnCommand(
+        requestId: request.requestId,
+        direction: request.direction,
+      ),
+    );
   }
 
-  Future<void> _broadcastCancel(PageTurnRequest request, String reason) {
+  /// Moves to [candidate] if it is newer than what this reader holds.
+  bool _adoptRemotePosition(SharedPosition candidate) {
+    if (!candidate.isNewerThan(_position)) return false;
+    _position = candidate;
+
+    final request = _state.currentRequest;
+    if (request != null && request.fromSeq < candidate.seq) {
+      final wasTurning =
+          request.requestedByUserId == _currentUserId &&
+          _state.status == SyncStatus.turning;
+      if (request.requestedByUserId == _currentUserId) {
+        unawaited(_broadcastCancelQuietly(request, 'superseded'));
+      }
+      _finishRequest(request);
+      if (wasTurning) onTurnAbandoned?.call(request.requestId);
+    }
+
+    unawaited(_publishPosition());
+    onPositionChanged?.call(candidate);
+    return true;
+  }
+
+  bool _absorbPresencePositions(List<Map<String, dynamic>> users) {
+    SharedPosition? newest;
+    for (final user in users) {
+      if (user['user_id'] == _currentUserId || user['is_reading'] != true) {
+        continue;
+      }
+      final position = SharedPosition.fromPresence(user);
+      if (position == null) continue;
+      if (newest == null || position.isNewerThan(newest)) newest = position;
+    }
+    return newest != null && _adoptRemotePosition(newest);
+  }
+
+  /// Ends [request] locally, optionally leaving a message on the bar.
+  void _finishRequest(PageTurnRequest request, {String? error}) {
+    _rememberFinished(request.requestId);
+    _acceptedRequestIds.remove(request.requestId);
+    if (!_isCurrent(request)) return;
+    _cancelRequestTimers();
+    _updateState(
+      error == null ? const PageSyncState.idle() : PageSyncState.error(error),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Timers
+
+  void _startRequesterTimers(PageTurnRequest request) {
+    _cancelRequestTimers();
+    _requestTimeoutTimer = Timer(_requestTimeout, () {
+      final current = _state.currentRequest;
+      if (_disposed || current?.requestId != request.requestId) return;
+      _finishRequest(current!, error: _timeoutMessage(current));
+      unawaited(_broadcastCancelQuietly(current, 'timeout'));
+    });
+    _nudgeTimer = Timer.periodic(_nudgeInterval, (_) {
+      final current = _state.currentRequest;
+      if (_disposed ||
+          current?.requestId != request.requestId ||
+          _state.status != SyncStatus.requesting) {
+        return;
+      }
+      unawaited(_broadcastRequestQuietly(current!));
+    });
+  }
+
+  void _startLivenessTimer(PageTurnRequest request) {
+    _livenessTimer?.cancel();
+    _livenessTimer = Timer(_followerLiveness, () {
+      final current = _state.currentRequest;
+      if (_disposed || current?.requestId != request.requestId) return;
+      _finishRequest(current!, error: 'The page turn request expired');
+    });
+  }
+
+  void _cancelRequestTimers() {
+    _requestTimeoutTimer?.cancel();
+    _requestTimeoutTimer = null;
+    _nudgeTimer?.cancel();
+    _nudgeTimer = null;
+    _livenessTimer?.cancel();
+    _livenessTimer = null;
+    _turnTimer?.cancel();
+    _turnTimer = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Wire
+
+  Future<void> _sendVote(
+    PageTurnRequest request, {
+    required bool accept,
+    String? reason,
+  }) {
     return _transport.broadcast(
-      event: 'page_turn_cancel',
+      event: voteEvent,
       payload: {
         'request_id': request.requestId,
         'user_id': _currentUserId,
-        'reason': reason,
+        'accept': accept,
+        if (reason != null) 'reason': reason,
       },
     );
   }
 
-  Future<void> _rebroadcastRequest(PageTurnRequest request) async {
+  Future<void> _sendVoteQuietly(
+    PageTurnRequest request, {
+    required bool accept,
+    String? reason,
+  }) async {
+    try {
+      await _sendVote(request, accept: accept, reason: reason);
+    } catch (_) {
+      // The next nudge asks again.
+    }
+  }
+
+  Future<void> _broadcastRequestQuietly(PageTurnRequest request) async {
     try {
       await _transport.broadcast(
-        event: 'page_turn_request',
+        event: requestEvent,
         payload: request.toJson(),
       );
     } catch (_) {
-      // The original request still has its timeout. A failed convergence hint
-      // must not replace valid local state with an unrelated network error.
+      // The next nudge tries again; the timeout bounds the whole request.
     }
   }
 
-  _ReadyReaderQuorum _buildReadyReaderQuorum() {
-    final users = _transport.getOnlineUsers();
-    final hasCurrentPresence = users.any(
-      (user) => user['user_id'] == _currentUserId,
-    );
-    if (!_presenceSynchronized && hasCurrentPresence) {
-      _presenceSynchronized = true;
-    }
-    if (!_presenceSynchronized || !hasCurrentPresence) {
-      return const _ReadyReaderQuorum.error(
-        'Waiting for room presence to synchronize',
+  Future<void> _broadcastCancelQuietly(
+    PageTurnRequest request,
+    String reason,
+  ) async {
+    try {
+      await _transport.broadcast(
+        event: cancelEvent,
+        payload: {
+          'request_id': request.requestId,
+          'user_id': _currentUserId,
+          'reason': reason,
+        },
       );
+    } catch (_) {
+      // Followers stop hearing nudges and drop the request on their own.
     }
+  }
 
-    _syncParticipantRoster(users);
-    final usersById = {
+  Future<void> _broadcastCommit(
+    PageTurnRequest request,
+    SharedPosition position,
+  ) async {
+    try {
+      await _transport.broadcast(
+        event: commitEvent,
+        payload: {
+          'request_id': request.requestId,
+          'user_id': _currentUserId,
+          'seq': position.seq,
+          'cfi': position.cfi,
+        },
+      );
+    } catch (_) {
+      // Presence carries the same position; the commit is only the fast path.
+    }
+  }
+
+  Future<void> _publishPosition() async {
+    if (_disposed) return;
+    try {
+      await _transport.publishPosition(_position);
+    } catch (_) {
+      // Re-sent with the next Presence update; the commit covers the gap.
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+
+  /// Readers who are in the book with it loaded. Lobby members and readers
+  /// whose app is in the background are not asked.
+  Set<String> _readyReaderIds(List<Map<String, dynamic>> users) {
+    return {
       for (final user in users)
-        if (user['user_id'] is String) user['user_id'] as String: user,
+        if (user['user_id'] is String &&
+            user['user_id'] != _currentUserId &&
+            user['is_reading'] == true &&
+            user['reader_ready'] == true)
+          user['user_id'] as String,
     };
-    final readyUserIds = <String>{};
-    final unreadyUserIds = <String>[];
-    for (final userId in _expectedParticipantUserIds) {
-      final user = usersById[userId];
-      final isReady = user != null &&
-          user['is_reading'] == true &&
-          user['reader_ready'] == true &&
-          (userId != _currentUserId || _readerReady);
-      if (isReady) {
-        readyUserIds.add(userId);
-      } else {
-        // The participant roster is frozen by the start-reading event. A
-        // slower client stays pending even while it still reports lobby state.
-        unreadyUserIds.add(userId);
-      }
-    }
-
-    if (unreadyUserIds.isNotEmpty) {
-      return _ReadyReaderQuorum.error(
-        _unreadyReaderMessage(unreadyUserIds, usersById),
-      );
-    }
-    if (!readyUserIds.contains(_currentUserId)) {
-      return const _ReadyReaderQuorum.error(
-        'This reader is not present and ready',
-      );
-    }
-    return _ReadyReaderQuorum(readyUserIds);
   }
 
-  /// Names the readers still holding up the quorum.
-  ///
-  /// "Waiting for every reader to become ready" gives the user nothing to act
-  /// on when one participant is stuck in the lobby; naming them does.
-  String _unreadyReaderMessage(
-    List<String> unreadyUserIds,
-    Map<String, Map<String, dynamic>> usersById,
-  ) {
-    if (unreadyUserIds.length == 1 &&
-        unreadyUserIds.single == _currentUserId) {
-      return 'Waiting for this reader to become ready';
-    }
-    final names = unreadyUserIds
-        .where((userId) => userId != _currentUserId)
-        .map((userId) {
-          final nickname = usersById[userId]?['nickname'];
-          return nickname is String && nickname.trim().isNotEmpty
-              ? nickname.trim()
-              : null;
-        })
-        .whereType<String>()
-        .toList()
-      ..sort();
-    if (names.isEmpty || names.length != unreadyUserIds.length) {
-      return 'Waiting for every reader to become ready';
-    }
-    return 'Waiting for ${names.join(', ')} to become ready';
-  }
-
-  /// Restores every session participant that is present on the room channel.
-  ///
-  /// Absence is the only thing that removes a participant from the quorum, so
-  /// presence has to put them back — otherwise a temporary disconnect would
-  /// shrink the roster permanently and clients would disagree about the quorum
-  /// for every later page turn in the session.
-  ///
-  /// Being on the channel is enough; the participant does not have to be in
-  /// the reader. A participant waiting in the lobby blocks turns whether or
-  /// not their connection happened to blip, which is the same rule applied to
-  /// one that never disconnected at all.
-  void _syncParticipantRoster(List<Map<String, dynamic>> users) {
-    for (final user in users) {
-      final userId = user['user_id'];
-      if (userId is! String ||
-          !_sessionParticipantUserIds.contains(userId) ||
-          _explicitlyLeftParticipantUserIds.contains(userId)) {
-        continue;
-      }
-      _expectedParticipantUserIds.add(userId);
-      if (user['is_reading'] == true) {
-        _enteredReaderParticipantIds.add(userId);
-      }
-    }
-  }
-
-  bool _isReadyReaderOnline(String userId, List<Map<String, dynamic>> users) {
-    return users.any((user) {
-      if (user['user_id'] != userId || user['is_reading'] != true) return false;
-      if (userId == _currentUserId) return _readerReady;
-      return user['reader_ready'] == true;
-    });
-  }
-
-  bool _isReadingParticipantOnline(
-    String userId,
-    List<Map<String, dynamic>> users,
-  ) {
+  bool _isReading(String userId, List<Map<String, dynamic>> users) {
     return users.any(
       (user) => user['user_id'] == userId && user['is_reading'] == true,
     );
   }
 
-  /// Present on the room channel at all, whether reading or still in the lobby.
-  bool _isInRoom(String userId, List<Map<String, dynamic>> users) {
-    return users.any((user) => user['user_id'] == userId);
+  bool _isSelfPresent(List<Map<String, dynamic>> users) {
+    return users.any((user) => user['user_id'] == _currentUserId);
   }
 
-  bool _isRequestQuorumStillReady(PageTurnRequest request) {
-    final quorum = _buildReadyReaderQuorum();
-    return quorum.error == null &&
-        request.requiredUserIds.length == quorum.userIds.length &&
-        request.requiredUserIds.every(quorum.userIds.contains) &&
-        _readerReady &&
-        _currentCfi == request.fromCfi;
+  /// A request from a later page always wins; otherwise the lower id does.
+  bool _wins(PageTurnRequest candidate, {required PageTurnRequest over}) {
+    if (candidate.fromSeq != over.fromSeq) {
+      return candidate.fromSeq > over.fromSeq;
+    }
+    return candidate.winsOver(over);
   }
 
-  void _startTimeout(String requestId) {
-    _cancelTimeout();
-    _timeoutTimer = Timer(_requestTimeout, () {
-      if (_disposed || _state.currentRequest?.requestId != requestId) return;
-      final request = _state.currentRequest!;
-      unawaited(_sendTimeoutCancel(request));
-      _failRequest(request, 'Page turn timed out');
-    });
-  }
+  bool _isCurrent(PageTurnRequest request) =>
+      !_disposed && _state.currentRequest?.requestId == request.requestId;
 
-  Future<void> _sendTimeoutCancel(PageTurnRequest request) async {
-    try {
-      await _broadcastCancel(request, 'timeout');
-    } catch (_) {
-      // Timeout already moved the local state to a safe idle error state.
+  void _rememberFinished(String requestId) {
+    _finishedRequestIds.remove(requestId);
+    _finishedRequestIds.add(requestId);
+    while (_finishedRequestIds.length > _maxRememberedRequestIds) {
+      _finishedRequestIds.remove(_finishedRequestIds.first);
     }
   }
 
-  void _cancelTimeout() {
-    _timeoutTimer?.cancel();
-    _timeoutTimer = null;
+  String _timeoutMessage(PageTurnRequest request) {
+    final users = _transport.getOnlineUsers();
+    final names =
+        request.pendingUserIds
+            .map((id) {
+              for (final user in users) {
+                if (user['user_id'] == id && user['nickname'] is String) {
+                  final nickname = (user['nickname'] as String).trim();
+                  if (nickname.isNotEmpty) return nickname;
+                }
+              }
+              return null;
+            })
+            .whereType<String>()
+            .toList()
+          ..sort();
+    if (names.isEmpty) return describeCancelReason('timeout');
+    return 'Page turn timed out waiting for ${names.join(', ')}';
   }
 
   void _setError(String message) {
-    _cancelTimeout();
     _updateState(PageSyncState.error(message));
-  }
-
-  void _failRequest(PageTurnRequest request, String message) {
-    if (_state.currentRequest?.requestId != request.requestId) return;
-    _cancelTimeout();
-    final needsRecovery =
-        _handledExecuteIds.contains(request.requestId) ||
-        _positionCommit?.requestId == request.requestId;
-    if (needsRecovery) {
-      // Once the requester has published a commit, that CFI is authoritative
-      // (and may already be persisted). Ack/complete failures must converge to
-      // it instead of rolling some readers back to the pre-turn page.
-      final positionWasCommitted =
-          _positionCommit?.requestId == request.requestId;
-      final recoveryCfi = positionWasCommitted
-          ? _positionCommit!.targetCfi
-          : request.fromCfi;
-      _currentCfi = recoveryCfi;
-      onPositionRecovery?.call(recoveryCfi, positionWasCommitted);
-    }
-    _clearActivePositionState(request.requestId);
-    _updateState(PageSyncState.error(message));
-  }
-
-  void _clearActivePositionState(String requestId) {
-    if (_positionCommit?.requestId == requestId) _positionCommit = null;
-    _positionAckUserIds.clear();
-    _ackInFlightIds.remove(requestId);
-    _sentAckIds.remove(requestId);
-    _completeInFlightIds.remove(requestId);
   }
 
   void _updateState(PageSyncState newState) {
@@ -1137,61 +849,48 @@ class PageSyncService {
     _scheduleErrorAutoClear(newState);
   }
 
-  /// Returns a failed state to idle so the status bar stops reporting a
-  /// finished failure as if the reader were still blocked on it.
+  /// Clears a message so the bar stops reporting a finished failure as if the
+  /// reader were still blocked on it. A request in flight keeps going.
   void _scheduleErrorAutoClear(PageSyncState newState) {
     _errorAutoClearTimer?.cancel();
     _errorAutoClearTimer = null;
-    if (newState.errorMessage == null || newState.currentRequest != null) {
-      return;
-    }
+    if (newState.errorMessage == null) return;
     _errorAutoClearTimer = Timer(_errorAutoClearDelay, () {
       _errorAutoClearTimer = null;
-      if (_disposed ||
-          !identical(_state, newState) ||
-          _state.currentRequest != null) {
-        return;
-      }
-      _updateState(const PageSyncState.idle());
+      if (_disposed || !identical(_state, newState)) return;
+      _updateState(_state.copyWith(clearError: true));
     });
   }
 
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
-    _cancelTimeout();
+    _cancelRequestTimers();
     _errorAutoClearTimer?.cancel();
     _errorAutoClearTimer = null;
     for (final subscription in _subscriptions) {
       await subscription.cancel();
     }
     _subscriptions.clear();
-    onPageTurn = null;
-    onPositionCommit = null;
-    onPositionRecovery = null;
+    onExecuteTurn = null;
+    onPositionChanged = null;
+    onTurnAbandoned = null;
     await _stateController.close();
   }
 }
 
 /// Turns a wire cancel reason into something a reader can act on.
 ///
-/// The raw codes are protocol identifiers; they were previously rendered
-/// verbatim in the status bar as e.g. "Page turn cancelled:
-/// declined_by_Bob".
+/// The raw codes are protocol identifiers and stay on the wire.
 String describeCancelReason(String reason) {
   const messages = <String, String>{
     'timeout': 'Page turn timed out waiting for the other readers',
-    'stale_page_position': 'Page turn cancelled: your page moved',
-    'reader_became_unready': 'Page turn cancelled: this reader is still loading',
-    'required_reader_not_ready':
-        'Page turn cancelled: a reader is not ready yet',
-    'invalid_or_stale_request': 'Page turn cancelled: readers were out of sync',
+    'out_of_sync': 'Readers were on different pages. Synced — try again',
     'requester_left': 'Page turn cancelled: the requester left',
-    'requester_left_reading_session':
-        'Page turn cancelled: the requester left the book',
-    'reading_session_ended': 'Page turn cancelled: the reading session ended',
-    'persistence_coordination_failed':
-        'Page turn cancelled: could not save the new page',
+    'superseded': 'Another page turn went first',
+    'turn_failed':
+        'The page did not move — this may be the start or end '
+        'of the book',
   };
 
   final known = messages[reason];
@@ -1205,13 +904,4 @@ String describeCancelReason(String reason) {
         : '$nickname asked to wait on this page';
   }
   return 'Page turn cancelled';
-}
-
-class _ReadyReaderQuorum {
-  final Set<String> userIds;
-  final String? error;
-
-  const _ReadyReaderQuorum(this.userIds) : error = null;
-
-  const _ReadyReaderQuorum.error(this.error) : userIds = const {};
 }

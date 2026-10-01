@@ -42,24 +42,38 @@ supabase/
 
 2. **翻頁是一套共識協定**，不是單純的廣播。狀態機在
    `lib/services/page_sync_service.dart`：
-   `request → confirm → execute → position_commit → ack → complete`。
-   requester 是唯一的資料庫寫入者，而且要等 CFI 落地才會發 commit。
-   改這個檔案前先讀 `test/page_sync_service_test.dart`，它把各種 race 都釘住了。
+   `request → vote → (requester 本機翻頁) → commit(seq+1, cfi)`。
+   - 大家比對的是 `SharedPosition.seq`，**永遠不要比對 CFI 字串**——CFI 依本機分頁而定，
+     不同螢幕同一頁的字串不同（見 issue #14）。CFI 只用來 `display()`。
+   - requester 是唯一的協調者；follower 只投票與跟隨 commit。
+   - 每個 reader 把 `page_seq` / `page_cfi` 放進 Presence，任何漏掉的訊息都靠
+     「採用 reader 中最新的位置」收斂。資料庫的 `current_cfi` 只是給之後才打開書的人用的
+     best-effort 紀錄。
+   - reader 畫面不決定房間在哪一頁：它只顯示 shared position，以及在自己是 requester
+     時翻一頁並回報落點。
+   改這個檔案前先讀 `test/page_sync_service_test.dart`——它用多 client 的 `FakeRoom`
+   把遺失訊息、同時翻頁、斷線等情況都釘住了。
 
 3. **房間成員的權威來源是資料庫，不是 Presence。**
    Presence 只負責 online / has_book 這層 overlay。
    `RoomNotifier.refreshMembers()` 用 `_membersFetchGeneration` 控制順序——
    不要改回用 list identity 做守衛（見 issue #3）。
+   lobby 一進入就重讀名單，之後定時對帳——**不要只靠訊號**（Presence 事件、
+   `membership_changed`）更新名單，訊號會遺失（見 issue #15）。
 
 4. **房間成員只能透過 `create_room` / `join_room` / `leave_room` 三個 RPC 變動。**
    不要恢復對 `cotime_book.room_members` 的直接 DELETE 權限；RPC 會在 room 母列上
    序列化並行的離開、過期成員驅逐與 host 轉移。
 
-5. **錯誤狀態要能自己收斂。**
+5. **傳書是 receiver 驅動的。** `FileTransferService` 的初次分享只是快速路徑；
+   收書端缺什麼就向 Presence 裡持有這本書的人要，停滯就輪替持有者再要。
+   收書**沒有失敗終態**，也不能阻擋分享新書（見 issue #16）。
+
+6. **錯誤狀態要能自己收斂。**
    `PageSyncState.error` 會在 `defaultErrorAutoClearDelay` 後自動回到 idle。
    任何新加的錯誤狀態都要有清除路徑——永久橫幅會被使用者讀成「App 壞了」。
 
-6. **UI 是為電子紙（e-ink）設計的。** 很大一部分使用者用的是電子閱讀器，不是手機。
+7. **UI 是為電子紙（e-ink）設計的。** 很大一部分使用者用的是電子閱讀器，不是手機。
    設計系統叫 Paper，定義在 `lib/config/theme.dart`，共用元件在 `lib/widgets/paper.dart`：
    - 狀態不靠顏色傳達（面板是灰階）——用字重、實心/空心、黑白反轉、文字標籤。
    - 不要動畫：不用 `CircularProgressIndicator`（改成「Loading...」之類的文字）、

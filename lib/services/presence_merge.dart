@@ -32,6 +32,7 @@ List<Map<String, dynamic>> mergePresenceUsers(
         .toList(growable: false);
     latest['is_reading'] = metas.any((meta) => meta['is_reading'] == true);
     latest['reader_ready'] = metas.any((meta) => meta['reader_ready'] == true);
+    _mergeReadingPosition(latest, metas);
     latest['session_count'] = metas.length;
     merged.add(latest);
   }
@@ -42,6 +43,37 @@ List<Map<String, dynamic>> mergePresenceUsers(
     return (a['user_id'] as String).compareTo(b['user_id'] as String);
   });
   return List.unmodifiable(merged);
+}
+
+/// The newest page any of this user's reading connections holds.
+///
+/// Taken from reading metas only: a lobby meta's position is whatever page that
+/// connection last saw, and must not drag the merged row backwards.
+void _mergeReadingPosition(
+  Map<String, dynamic> merged,
+  List<Map<String, dynamic>> metas,
+) {
+  merged.remove('page_seq');
+  merged.remove('page_cfi');
+  int? bestSeq;
+  String? bestCfi;
+  for (final meta in metas) {
+    final seq = meta['page_seq'];
+    final cfi = meta['page_cfi'];
+    if (meta['is_reading'] != true || seq is! int || cfi is! String) continue;
+    final isNewer =
+        bestSeq == null ||
+        seq > bestSeq ||
+        (seq == bestSeq && cfi.compareTo(bestCfi!) > 0);
+    if (isNewer) {
+      bestSeq = seq;
+      bestCfi = cfi;
+    }
+  }
+  if (bestSeq != null) {
+    merged['page_seq'] = bestSeq;
+    merged['page_cfi'] = bestCfi;
+  }
 }
 
 DateTime presenceTime(Map<String, dynamic> presence) {

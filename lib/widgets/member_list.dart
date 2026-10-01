@@ -1,3 +1,4 @@
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/room_member.dart';
@@ -13,8 +14,21 @@ class MemberList extends StatelessWidget {
     this.currentUserId,
   });
 
+  /// Online first, each group in join order. A member whose app was killed
+  /// stays in the room until the server evicts them; at the top of the list
+  /// they read as still here.
+  static List<RoomMember> ordered(List<RoomMember> members) {
+    final sorted = [...members];
+    mergeSort<RoomMember>(
+      sorted,
+      compare: (a, b) => (b.isOnline ? 1 : 0) - (a.isOnline ? 1 : 0),
+    );
+    return sorted;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final members = ordered(this.members);
     if (members.isEmpty) {
       return const Center(
         child: Text('No members yet', style: AppTheme.caption),
@@ -68,7 +82,7 @@ class MemberList extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      member.isOnline ? 'Online' : 'Offline',
+                      member.isOnline ? 'Online' : 'Away — not connected',
                       style: AppTheme.caption,
                     ),
                   ],
