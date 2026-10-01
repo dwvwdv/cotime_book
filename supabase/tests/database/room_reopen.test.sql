@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(16);
+select plan(21);
 
 insert into auth.users (
   id,
@@ -308,6 +308,58 @@ select ok(
   'creating a room records the creator as a member who may reopen it'
 );
 
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-000000000011","role":"authenticated"}',
+  true
+);
+select is(
+  cotime_book.available_room_codes(array['rpna22', 'RPXP22', 'NOPE22']),
+  array['RPNA22'],
+  'available_room_codes answers only for rooms the caller has been in'
+);
+reset role;
+
+-- Close RPNA22 again; a closed room is still one its members can go back to.
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-000000000011","role":"authenticated"}',
+  true
+);
+select cotime_book.leave_room('20000000-0000-0000-0000-000000000001');
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-000000000012","role":"authenticated"}',
+  true
+);
+select cotime_book.leave_room('20000000-0000-0000-0000-000000000001');
+select is(
+  cotime_book.available_room_codes(array['RPNA22']),
+  array['RPNA22'],
+  'a closed room is still available to its former members'
+);
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-000000000013","role":"authenticated"}',
+  true
+);
+select is(
+  cotime_book.available_room_codes(array['RPNA22']),
+  array[]::text[],
+  'available_room_codes does not reveal rooms to people never in them'
+);
+select throws_ok(
+  $$select cotime_book.available_room_codes(
+    array(select 'AAAAAA' from generate_series(1, 51))
+  )$$,
+  '22023',
+  'At most 50 room codes can be checked at once',
+  'available_room_codes refuses oversized lookups'
+);
+reset role;
+
 -- Once cleanup purges a closed room, its history goes with it.
 delete from cotime_book.room_members
 where room_id = '20000000-0000-0000-0000-000000000002';
@@ -336,6 +388,19 @@ select is(
   0::bigint,
   'a purged room takes its member history with it'
 );
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-000000000015","role":"authenticated"}',
+  true
+);
+select is(
+  cotime_book.available_room_codes(array['RPXP22']),
+  array[]::text[],
+  'a purged room is no longer available, even to its members'
+);
+reset role;
 
 select * from finish();
 rollback;

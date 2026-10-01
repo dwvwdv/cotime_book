@@ -30,7 +30,7 @@ class RoomNotFoundException implements Exception {
   const RoomNotFoundException(this.code);
 
   @override
-  String toString() => 'Room $code has closed or does not exist.';
+  String toString() => 'Room $code is no longer available.';
 }
 
 class RoomRevisionConflictException implements Exception {
@@ -80,6 +80,16 @@ class RoomService {
       }
       rethrow;
     }
+  }
+
+  /// The codes among [codes] this account can still go back to: rooms it has
+  /// been in that have not been deleted, whether open or closed.
+  Future<Set<String>> availableRoomCodes(List<String> codes) async {
+    final result = await _database.rpc(
+      'available_room_codes',
+      params: {'p_codes': codes},
+    );
+    return {for (final code in result as List) code as String};
   }
 
   Future<List<RoomMember>> getRoomMembers(String roomId) async {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cotime_book/models/recent_room.dart';
 import 'package:cotime_book/providers/auth_provider.dart';
 import 'package:cotime_book/providers/recent_rooms_provider.dart';
@@ -97,6 +99,23 @@ void main() {
 
       SharedPreferences.setMockInitialValues({'recent_rooms': 'not json'});
       expect((await relaunch()).recentRooms, isEmpty);
+    });
+
+    test('a room entered while the check is in flight is not pruned', () async {
+      final answer = Completer<Set<String>>();
+      final rooms = RecentRoomsNotifier(
+        await relaunch(),
+        now: () => clock,
+        availableCodes: (_) => answer.future,
+      );
+      rooms.record(testRoom(code: 'AAAAAA'));
+      final pruning = rooms.pruneUnavailable();
+      // Re-entered after the server was asked, so the stale "gone" must lose.
+      rooms.record(testRoom(code: 'AAAAAA'));
+      answer.complete(<String>{});
+      await pruning;
+
+      expect(rooms.state.map((r) => r.code), ['AAAAAA']);
     });
 
     test('a store without preferences still works for the session', () {

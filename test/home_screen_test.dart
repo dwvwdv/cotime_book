@@ -139,12 +139,10 @@ void main() {
     await leave(tester);
   });
 
-  testWidgets('a recent room that is gone is replaced by a new one', (
+  testWidgets('a recent room that is gone says so and leaves the list', (
     tester,
   ) async {
-    rooms
-      ..joinError = const RoomNotFoundException('ABC234')
-      ..createdRoom = testRoom(id: 'room-b', code: 'XYZ789');
+    rooms.joinError = const RoomNotFoundException('ABC234');
     await store.saveNickname('Alice');
     await store.saveRecentRooms([
       RecentRoom(code: 'ABC234', lastVisitedAt: DateTime.now()),
@@ -154,10 +152,40 @@ void main() {
     await tester.tap(find.text('ABC234'));
     await tester.pumpAndSettle();
 
-    expect(visitedLobbies, ['XYZ789']);
-    expect(find.textContaining('Room ABC234 is no longer available'), findsOneWidget);
-    await leave(tester);
-    expect(store.recentRooms.map((r) => r.code), ['XYZ789']);
+    expect(visitedLobbies, isEmpty);
+    expect(rooms.createCalls, 0);
+    expect(find.text('Room ABC234 is no longer available.'), findsOneWidget);
+    expect(find.byType(RecentRoomsList), findsNothing);
+    expect(store.recentRooms, isEmpty);
+  });
+
+  testWidgets('rooms deleted while the app was closed are not listed', (
+    tester,
+  ) async {
+    // Closed rooms are deleted 30 days after closing; the server is the only
+    // one who knows when that happened.
+    rooms.availableCodes = {'BBBBBB'};
+    await store.saveRecentRooms([
+      RecentRoom(code: 'AAAAAA', lastVisitedAt: DateTime.now()),
+      RecentRoom(code: 'BBBBBB', lastVisitedAt: DateTime.now()),
+    ]);
+    await pumpHome(tester);
+    await tester.pump();
+
+    expect(find.text('AAAAAA'), findsNothing);
+    expect(find.text('BBBBBB'), findsOneWidget);
+    expect(store.recentRooms.map((r) => r.code), ['BBBBBB']);
+  });
+
+  testWidgets('being offline does not empty the recent list', (tester) async {
+    rooms.availabilityError = StateError('no network');
+    await store.saveRecentRooms([
+      RecentRoom(code: 'AAAAAA', lastVisitedAt: DateTime.now()),
+    ]);
+    await pumpHome(tester);
+    await tester.pump();
+
+    expect(find.text('AAAAAA'), findsOneWidget);
   });
 
   testWidgets('a recent room can be forgotten', (tester) async {

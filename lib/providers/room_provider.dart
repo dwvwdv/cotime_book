@@ -93,20 +93,24 @@ class RoomNotifier extends StateNotifier<RoomState> {
 
   /// Goes back to a room from the recent list.
   ///
-  /// join_room itself reopens a closed room for anyone who was in it, so this
-  /// only falls back when the room is really gone: purged after 30 days
-  /// closed, or this account was never a member. Codes are never reused, so
-  /// the old one can't be recreated; the person tapped it to read again, so
-  /// they get a new room rather than a dead end, and the caller can tell from
-  /// the returned code that it is not the one they asked for.
-  Future<Room?> rejoinRoom(String code, String nickname) {
-    return _enterRoom(() async {
+  /// join_room reopens a closed room for anyone who was in it, so failing
+  /// with [RoomNotFoundException] means the room is gone for good (deleted
+  /// after 30 days closed). [gone] tells the caller the entry can be dropped,
+  /// as opposed to a network error that is worth trying again.
+  Future<({Room? room, bool gone})> rejoinRoom(
+    String code,
+    String nickname,
+  ) async {
+    var gone = false;
+    final room = await _enterRoom(() async {
       try {
         return await _roomService.joinRoom(code: code, nickname: nickname);
       } on RoomNotFoundException {
-        return _roomService.createRoom(nickname: nickname);
+        gone = true;
+        rethrow;
       }
     });
+    return (room: room, gone: gone);
   }
 
   Future<Room?> _enterRoom(Future<Room> Function() enter) async {

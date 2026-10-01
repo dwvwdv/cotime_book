@@ -269,7 +269,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       'Leave the active room before creating another one.',
       (nickname) => ref.read(roomProvider.notifier).createRoom(nickname),
     );
-    if (room != null && mounted) _goToLobby(room);
+    if (room != null) _goToLobby(room);
   }
 
   Future<void> _joinRoom() async {
@@ -286,24 +286,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _openRecentRoom(RecentRoom recent) async {
+    var gone = false;
     final room = await _enterRoom(
       'Leave the active room before joining another one.',
-      (nickname) =>
-          ref.read(roomProvider.notifier).rejoinRoom(recent.code, nickname),
+      (nickname) async {
+        final result = await ref
+            .read(roomProvider.notifier)
+            .rejoinRoom(recent.code, nickname);
+        gone = result.gone;
+        return result.room;
+      },
     );
-    if (room == null || !mounted) return;
-    if (room.code != recent.code) {
-      // The old room is gone for good (a closed room would have been reopened)
-      // and its code is never reused, so the entry would only fail again.
+    if (!mounted) return;
+    if (gone) {
+      // A closed room would have been reopened, so this one has been deleted
+      // and its code is never reused: the entry could only fail again. The
+      // room error notice already says why it disappeared.
       ref.read(recentRoomsProvider.notifier).remove(recent.code);
-      showPaperMessage(
-        context,
-        'Room ${recent.code} is no longer available, so a new room '
-        '${room.code} was created. Share the new code with the others.',
-        duration: const Duration(seconds: 6),
-      );
     }
-    _goToLobby(room);
+    if (room != null && mounted) _goToLobby(room);
   }
 
   Future<Room?> _enterRoom(
