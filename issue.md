@@ -301,6 +301,53 @@
   `a damaged book is thrown away and asked for again`、
   `a stalled receive never blocks sharing another book`。
 
+### [x] #17 翻了幾頁之後斷線，而且再也連不回來
+
+- **檔案**：`lib/services/realtime_service.dart`、`lib/services/page_sync_service.dart`、
+  `lib/app.dart`、`lib/widgets/sync_status_bar.dart`
+- **症狀**：一開始同步翻頁正常，翻幾頁後上方變成「0 readers ready」，成員面板
+  「0 members online」，再翻頁出現「Could not reach the other readers」；回到房間下方顯示
+  「Unable to subscribe to room channel」，而且一直不會恢復。
+- **原因**（全在 realtime 連線恢復路徑，翻頁協定本身沒問題）：
+  1. 讀一頁書時裝置休眠或網路閃斷是常態：supabase_flutter 在 `paused` 會主動
+     `realtime.disconnect()`，Wi-Fi 省電也會讓 socket 掉線。
+  2. 恢復時 library 的 `rejoin()` 會先呼叫 `leaveOpenTopic(topic)`，而它**不排除自己**：
+     rejoin timer（最短 1 秒）在私有 channel 的 join 還沒回來時再觸發，channel 就把自己
+     unsubscribe 掉，變成 `closed`。library 永遠不會 rejoin 一個 closed channel，
+     `RealtimeService` 也沒有任何重建路徑——房間就此斷線。
+  3. 回到 lobby 會重建 channel，但重建時用的 `removeChannel(舊的)` 在移除最後一個 channel 時
+     會**不 await 地**呼叫 `disconnect()`。新 channel 的 `connect()` 看到 socket 還在
+     disconnecting 就直接 return；disconnect 完成後還把 reconnect timer 一併取消——
+     新 channel 的 join 永遠送不出去，於是永久顯示「Unable to subscribe to room channel」。
+  4. 斷線時 Presence 是舊的或空的：空的會讓 quorum 只剩自己而**直接獨自翻頁**，
+     非空則送出請求失敗變成「Could not reach the other readers」。
+- **修法**：
+  - `RealtimeService` 自帶 watchdog：channel `closed` / `channelError` / `timedOut`、
+    track 失敗、或訂閱 15 秒完全沒回應，都會先標成 `reconnecting`，給 library 一點時間
+    自己恢復；之後若仍未連上就**重建 channel**（退避 4s→8s→…→30s，永不放棄，連上後歸零）。
+    重建前若 access token 已過期會先 refresh，並 `setAuth`。
+  - 換 channel 時只 `unsubscribe()` 舊的、保留 socket；只有真正離開房間才釋放 socket，
+    而且是 await 完成的 `disconnect()`。
+  - App 回到前景時呼叫 `checkConnection()`，2 秒後若仍未連上就重建。
+  - 翻頁在 channel 未連上時直接拒絕（「Reconnecting to the room」）；「自己在 Presence 裡」
+    改成每次請求都檢查，不再是一次性的旗標——重連後新 channel 的 Presence 還沒 sync 時
+    不會變成獨自翻頁。
+  - 同步列、成員面板、lobby 在重建期間顯示「Reconnecting to the room...」，
+    而不是「0 readers ready」或技術錯誤字串。
+  - 送出 broadcast 的 `ChannelResponse` 不再被忽略（socket 斷線時的 REST fallback 失敗
+    以前是靜默的）。
+- **測試**：`test/realtime_service_test.dart` → group `a broken room channel`
+  （`is rebuilt when the server or library closes it`、`keeps the socket when replacing a channel`、
+  `is left alone when the library recovers it in time`、`keeps retrying until a rebuild sticks`、
+  `a subscription that never answers is rebuilt`、`is not rebuilt after the room is left`、
+  `an app resume checks a channel that is down`）；`test/page_sync_service_test.dart` →
+  `a reader whose connection dropped does not turn alone`、
+  `right after a reconnect it waits for Presence before turning`。
+  已用 mutation 驗證：不處理 closed、重建時釋放 socket、拿掉連線閘門、
+  把 self-presence 改回一次性旗標，各自都會讓測試失敗。
+- **未在實機驗證**：library 的 `leaveOpenTopic` 自我退訂與 socket 競態是讀
+  `realtime_client 2.10.0` 原始碼推得的；watchdog 不依賴哪一個才是實際觸發點。
+
 ### [x] #A 不同螢幕尺寸的裝置之間 CFI 對不起來
 
 - 由 #14 的重新設計解決：共識比對 `seq`，不比對 CFI 字串。

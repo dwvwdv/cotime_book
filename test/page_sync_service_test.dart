@@ -473,6 +473,57 @@ void main() {
       },
     );
 
+    test('a reader whose connection dropped does not turn alone', () async {
+      // Regression: with the channel down, Presence read empty, so the
+      // quorum was this reader alone and the turn went through unasked — or
+      // the request was sent and failed with "Could not reach the other
+      // readers".
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      room.offline.add('alice');
+      room.blackout('alice');
+      await flush();
+
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isFalse,
+      );
+      expect(alice.service.position.seq, 0);
+      expect(alice.service.currentState.errorMessage, contains('Reconnecting'));
+      expect(
+        room.sent.where((e) => e.event == PageSyncService.requestEvent),
+        isEmpty,
+      );
+    });
+
+    test(
+      'right after a reconnect it waits for Presence before turning',
+      () async {
+        final room = FakeRoom();
+        final alice = room.join('alice', 'Alice');
+        room.join('bob', 'Bob');
+        addTearDown(room.dispose);
+        await flush();
+
+        // Connected again, but the new channel has not synced Presence yet.
+        room.blackout('alice');
+        await flush();
+
+        expect(
+          await alice.service.requestPageTurn(
+            direction: PageTurnDirection.next,
+          ),
+          isFalse,
+        );
+        expect(alice.service.position.seq, 0);
+        expect(alice.service.currentState.errorMessage, contains('connecting'));
+      },
+    );
+
     test('a loading reader cannot start a turn', () async {
       final room = FakeRoom();
       final alice = room.join('alice', 'Alice', viewerReady: false);
@@ -586,6 +637,7 @@ class FakeRoom {
   final Map<String, FakeReader> readers = {};
   final Map<String, Map<String, dynamic>> _presence = {};
   final Set<String> _blackedOut = {};
+  final Set<String> offline = {};
   final List<SentEvent> sent = [];
   final Set<String> dropEvents = {};
   int turnsExecuted = 0;
@@ -748,6 +800,9 @@ class FakeTransport implements PageSyncTransport {
 
   @override
   List<Map<String, dynamic>> getOnlineUsers() => room.presenceFor(userId);
+
+  @override
+  bool get isConnected => !room.offline.contains(userId);
 
   @override
   Future<void> broadcast({

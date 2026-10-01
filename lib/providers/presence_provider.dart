@@ -34,6 +34,12 @@ class PresenceState {
 
   bool get isConnected =>
       connectionStatus == RealtimeConnectionStatus.connected;
+
+  /// The room channel broke and is being rebuilt. Distinct from "not joined
+  /// yet": only this one should read as "Reconnecting".
+  bool get isReconnecting =>
+      connectionStatus == RealtimeConnectionStatus.reconnecting ||
+      connectionStatus == RealtimeConnectionStatus.error;
   int get onlineCount => onlineUsers.length;
 
   List<String> get onlineUserIds => onlineUsers

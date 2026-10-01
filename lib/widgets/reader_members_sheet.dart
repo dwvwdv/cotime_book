@@ -21,7 +21,9 @@ class ReaderMembersSheet extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '${presenceState.onlineCount} Members Online',
+          presenceState.isReconnecting
+              ? 'Reconnecting to the room...'
+              : '${presenceState.onlineCount} Members Online',
           style: AppTheme.title,
         ),
         const SizedBox(height: 12),

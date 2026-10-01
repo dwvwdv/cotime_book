@@ -11,6 +11,7 @@ import '../providers/book_provider.dart';
 import '../providers/presence_provider.dart';
 import '../providers/room_provider.dart';
 import '../services/presence_merge.dart';
+import '../services/realtime_service.dart';
 import '../widgets/member_list.dart';
 import '../widgets/paper.dart';
 import '../widgets/room_code_display.dart';
@@ -444,7 +445,14 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                       const SizedBox(height: 12),
                       PaperNotice(message: bookState.error!),
                     ],
-                    if (presenceState.error != null) ...[
+                    if (presenceState.connectionStatus ==
+                        RealtimeConnectionStatus.reconnecting) ...[
+                      const SizedBox(height: 8),
+                      const PaperNotice(
+                        message: 'Reconnecting to the room...',
+                        icon: Icons.sync,
+                      ),
+                    ] else if (presenceState.error != null) ...[
                       const SizedBox(height: 8),
                       PaperNotice(
                         message: presenceState.error!,

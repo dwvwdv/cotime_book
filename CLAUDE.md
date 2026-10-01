@@ -67,15 +67,20 @@ supabase/
    不要恢復對 `cotime_book.room_members` 的直接 DELETE 權限；RPC 會在 room 母列上
    序列化並行的離開、過期成員驅逐與 host 轉移。
 
-5. **傳書是 receiver 驅動的。** `FileTransferService` 的初次分享只是快速路徑；
+5. **Realtime 連線會斷，而且 library 不一定會自己接回來。** 裝置在讀一頁時休眠是常態。
+   `RealtimeService` 有 watchdog 會重建壞掉的 channel（見 issue #17）。
+   換 channel 時不要用 `removeChannel()`（它會在背景斷掉 socket），走 `remove(releaseSocket: false)`；
+   任何依賴 Presence 的決策都要先確認 `isConnected`——斷線時的 Presence 是舊的或空的。
+
+6. **傳書是 receiver 驅動的。** `FileTransferService` 的初次分享只是快速路徑；
    收書端缺什麼就向 Presence 裡持有這本書的人要，停滯就輪替持有者再要。
    收書**沒有失敗終態**，也不能阻擋分享新書（見 issue #16）。
 
-6. **錯誤狀態要能自己收斂。**
+7. **錯誤狀態要能自己收斂。**
    `PageSyncState.error` 會在 `defaultErrorAutoClearDelay` 後自動回到 idle。
    任何新加的錯誤狀態都要有清除路徑——永久橫幅會被使用者讀成「App 壞了」。
 
-7. **UI 是為電子紙（e-ink）設計的。** 很大一部分使用者用的是電子閱讀器，不是手機。
+8. **UI 是為電子紙（e-ink）設計的。** 很大一部分使用者用的是電子閱讀器，不是手機。
    設計系統叫 Paper，定義在 `lib/config/theme.dart`，共用元件在 `lib/widgets/paper.dart`：
    - 狀態不靠顏色傳達（面板是灰階）——用字重、實心/空心、黑白反轉、文字標籤。
    - 不要動畫：不用 `CircularProgressIndicator`（改成「Loading...」之類的文字）、

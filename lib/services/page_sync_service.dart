@@ -16,6 +16,10 @@ abstract interface class PageSyncTransport {
 
   List<Map<String, dynamic>> getOnlineUsers();
 
+  /// Whether the room channel is up. Presence read while it is down is stale
+  /// (or empty), and a quorum built from it is wrong.
+  bool get isConnected;
+
   Future<void> broadcast({
     required String event,
     required Map<String, dynamic> payload,
@@ -45,6 +49,9 @@ class RealtimePageSyncTransport implements PageSyncTransport {
   @override
   List<Map<String, dynamic>> getOnlineUsers() =>
       _realtimeService.getOnlineUsers();
+
+  @override
+  bool get isConnected => _realtimeService.isConnected;
 
   @override
   Future<void> broadcast({
@@ -223,13 +230,17 @@ class PageSyncService {
       return false;
     }
 
-    final users = _transport.getOnlineUsers();
-    if (!_presenceSynchronized && _isSelfPresent(users)) {
-      _presenceSynchronized = true;
+    if (!_transport.isConnected) {
+      // The channel is being rebuilt. Presence read now is stale or empty:
+      // an empty view would let this reader turn alone without asking anyone.
+      _setError('Reconnecting to the room — try again in a moment');
+      return false;
     }
-    if (!_presenceSynchronized) {
-      // Without a Presence view this client cannot know who else is reading,
-      // and a turn taken now would skip their consent.
+    final users = _transport.getOnlineUsers();
+    // Not a one-time flag: right after a reconnect the new channel's
+    // Presence is empty until it syncs, and a quorum built from it would be
+    // this reader alone.
+    if (!_isSelfPresent(users)) {
       _setError('Still connecting to the room');
       return false;
     }

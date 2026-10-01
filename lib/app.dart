@@ -46,6 +46,12 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
     } catch (error) {
       debugPrint('Unable to update room heartbeat lifecycle: $error');
     }
+    if (isActive) {
+      // The socket is closed while the app sleeps (supabase_flutter does that
+      // on pause, and e-readers sleep between pages). If the library's own
+      // rejoin does not bring the room channel back, rebuild it.
+      ref.read(realtimeServiceProvider).checkConnection();
+    }
     try {
       await ref.read(presenceProvider.notifier).setAppActive(isActive);
     } catch (error) {

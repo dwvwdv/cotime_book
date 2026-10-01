@@ -252,6 +252,11 @@ Future<void> disposeLobby(
 ) async {
   await tester.pumpWidget(const SizedBox());
   await tester.pump(const Duration(seconds: 5));
+  // overrideWithValue does not dispose the service with the container, and
+  // its connection watchdog holds a timer.
+  final closing = container.read(realtimeServiceProvider).close();
+  await tester.pump();
+  await closing;
   container.dispose();
 }
 
@@ -303,5 +308,5 @@ class _SilentChannel implements RoomRealtimeChannel {
   List<Map<String, dynamic>> presencePayloads() => const [];
 
   @override
-  Future<void> remove() async {}
+  Future<void> remove({bool releaseSocket = true}) async {}
 }

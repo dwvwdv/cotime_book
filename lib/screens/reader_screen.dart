@@ -409,6 +409,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 SyncStatusBar(
                   syncState: syncState,
                   onlineUsers: presenceState.onlineUsers,
+                  isConnected: !presenceState.isReconnecting,
                   ink: prefs.textColor,
                   paper: prefs.backgroundColor,
                   onConfirm: () => unawaited(_pageSync.confirmPageTurn()),
