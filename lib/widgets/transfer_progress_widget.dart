@@ -3,6 +3,13 @@ import '../config/theme.dart';
 import '../models/transfer_state.dart';
 
 class TransferProgressWidget extends StatelessWidget {
+  /// Progress is drawn in this many whole steps.
+  ///
+  /// Chunks arrive every ~100ms. A continuous bar repaints on each one, which
+  /// on e-ink is a refresh every 100ms for the whole transfer. Ten cells
+  /// change at most ten times.
+  static const int segments = 10;
+
   final TransferState transferState;
 
   const TransferProgressWidget({
@@ -16,12 +23,15 @@ class TransferProgressWidget extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
+    final filled = (transferState.progress.clamp(0.0, 1.0) * segments).floor();
+
     return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(16),
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppTheme.cardColor,
-        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.ink, width: AppTheme.ruleWidth),
+        borderRadius: BorderRadius.circular(AppTheme.radius),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -29,54 +39,66 @@ class TransferProgressWidget extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(
-                _icon,
-                color: _color,
-                size: 20,
-              ),
+              Icon(_icon, size: 20),
               const SizedBox(width: 8),
-              Text(
-                _statusText,
-                style: TextStyle(
-                  color: _color,
-                  fontWeight: FontWeight.w600,
+              Expanded(
+                child: Text(
+                  _statusText,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    color: AppTheme.ink,
+                  ),
                 ),
               ),
+              if (transferState.isActive)
+                Text(
+                  '${filled * segments}%',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    color: AppTheme.ink,
+                  ),
+                ),
             ],
           ),
           if (transferState.isActive) ...[
             const SizedBox(height: 12),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: transferState.progress,
-                backgroundColor: Colors.white12,
-                color: AppTheme.primaryColor,
-                minHeight: 6,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '${transferState.receivedChunks}/${transferState.totalChunks} chunks '
-              '(${(transferState.progress * 100).toStringAsFixed(0)}%)',
-              style: const TextStyle(color: Colors.white54, fontSize: 12),
+            Row(
+              children: [
+                for (var i = 0; i < segments; i++) ...[
+                  if (i > 0) const SizedBox(width: 4),
+                  Expanded(
+                    child: Container(
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: i < filled ? AppTheme.ink : AppTheme.paper,
+                        border: Border.all(color: AppTheme.ink, width: 1),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ],
           if (transferState.status == TransferStatus.completed)
             const Padding(
-              padding: EdgeInsets.only(top: 8),
+              padding: EdgeInsets.only(top: 6),
               child: Text(
                 'Book received successfully!',
-                style: TextStyle(color: Colors.green, fontSize: 13),
+                style: AppTheme.caption,
               ),
             ),
           if (transferState.status == TransferStatus.failed &&
               transferState.errorMessage != null)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.only(top: 6),
               child: Text(
                 transferState.errorMessage!,
-                style: const TextStyle(color: Colors.red, fontSize: 13),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.ink,
+                ),
               ),
             ),
         ],
@@ -87,26 +109,13 @@ class TransferProgressWidget extends StatelessWidget {
   IconData get _icon {
     switch (transferState.status) {
       case TransferStatus.transferring:
-        return Icons.download;
+        return transferState.isSending ? Icons.upload : Icons.download;
       case TransferStatus.completed:
-        return Icons.check_circle;
+        return Icons.check_circle_outline;
       case TransferStatus.failed:
-        return Icons.error;
+        return Icons.error_outline;
       default:
-        return Icons.hourglass_empty;
-    }
-  }
-
-  Color get _color {
-    switch (transferState.status) {
-      case TransferStatus.transferring:
-        return AppTheme.primaryColor;
-      case TransferStatus.completed:
-        return Colors.green;
-      case TransferStatus.failed:
-        return Colors.red;
-      default:
-        return Colors.white54;
+        return Icons.hourglass_top;
     }
   }
 

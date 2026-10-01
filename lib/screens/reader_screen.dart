@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_epub_viewer/flutter_epub_viewer.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -13,6 +14,9 @@ import '../providers/presence_provider.dart';
 import '../providers/reading_preferences_provider.dart';
 import '../providers/room_provider.dart';
 import '../services/room_service.dart';
+import '../widgets/page_turn_input.dart';
+import '../widgets/paper.dart';
+import '../widgets/reader_members_sheet.dart';
 import '../widgets/sync_status_bar.dart';
 
 class ReaderScreen extends ConsumerStatefulWidget {
@@ -428,12 +432,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
   }
 
+  bool get _canRebuildViewer =>
+      !_isStoppingPageSync &&
+      ref.read(pageSyncProvider).currentRequest == null;
+
   /// Returns false when a rebuild is refused, leaving the viewer untouched.
   bool _rebuildViewer() {
-    if (_isStoppingPageSync ||
-        ref.read(pageSyncProvider).currentRequest != null) {
-      return false;
-    }
+    if (!_canRebuildViewer) return false;
     _isReaderReady = false;
     _publishReadiness();
     setState(() => _viewerKey++);
@@ -555,217 +560,257 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       child: Scaffold(
         backgroundColor: prefs.backgroundColor,
         body: SafeArea(
-          child: Column(
-            children: [
-              // Sync status bar
-              SyncStatusBar(
-                syncState: syncState,
-                onlineUsers: presenceState.onlineUsers,
-                onConfirm: () => unawaited(
-                  ref.read(pageSyncProvider.notifier).confirmPageTurn(),
+          // Physical page buttons, Bluetooth page turners and keyboards. The
+          // viewer absorbs pointers, so the WebView never takes focus from
+          // this node.
+          child: Focus(
+            autofocus: true,
+            onKeyEvent: (_, event) => _handleKeyEvent(event),
+            child: Column(
+              children: [
+                // Sync status bar. Fixed height: see SyncStatusBar.height.
+                SyncStatusBar(
+                  syncState: syncState,
+                  onlineUsers: presenceState.onlineUsers,
+                  ink: prefs.textColor,
+                  paper: prefs.backgroundColor,
+                  onConfirm: () => unawaited(
+                    ref.read(pageSyncProvider.notifier).confirmPageTurn(),
+                  ),
+                  onDecline: () => unawaited(
+                    ref.read(pageSyncProvider.notifier).declinePageTurn(),
+                  ),
                 ),
-                onDecline: () => unawaited(
-                  ref.read(pageSyncProvider.notifier).declinePageTurn(),
-                ),
-              ),
 
-              // EPUB reader with gesture overlay
-              Expanded(
-                child: Stack(
-                  children: [
-                    // Layer 1: EPUB viewer
-                    AbsorbPointer(
-                      absorbing: true,
-                      child: EpubViewer(
-                        key: ValueKey(_viewerKey),
-                        epubController: _epubController!,
-                        epubSource: EpubSource.fromFile(bookState.bookFile!),
-                        displaySettings: EpubDisplaySettings(
-                          flow: EpubFlow.paginated,
-                          snap: false,
-                          // flutter_epub_viewer 1.2.x otherwise installs its
-                          // own Android detectSwipe() handler even when snap
-                          // is false, bypassing the consensus overlay.
-                          useSnapAnimationAndroid: true,
-                        ),
-                        initialCfi: _currentCfi,
-                        onChaptersLoaded: (chapters) {
-                          if (!mounted || _isStoppingPageSync) return;
-                          setState(() => _isReaderReady = true);
-                          // A viewer reload does not confirm the position, so
-                          // loading a new viewer — a theme change, say — must
-                          // not put this client back in the quorum while a
-                          // recovery is still pending. _publishReadiness knows.
-                          _publishReadiness();
+                // EPUB reader with gesture overlay
+                Expanded(
+                  child: Stack(
+                    children: [
+                      // Layer 1: EPUB viewer
+                      AbsorbPointer(
+                        absorbing: true,
+                        child: EpubViewer(
+                          key: ValueKey(_viewerKey),
+                          epubController: _epubController!,
+                          epubSource: EpubSource.fromFile(bookState.bookFile!),
+                          displaySettings: prefs.displaySettings,
+                          initialCfi: _currentCfi,
+                          onChaptersLoaded: (chapters) {
+                            if (!mounted || _isStoppingPageSync) return;
+                            setState(() => _isReaderReady = true);
+                            // A viewer reload does not confirm the position, so
+                            // loading a new viewer — a theme change, say — must
+                            // not put this client back in the quorum while a
+                            // recovery is still pending. _publishReadiness knows.
+                            _publishReadiness();
 
-                          final targetCfi = _queuedTargetCfi;
-                          if (targetCfi != null) {
-                            _displayCommittedPosition(targetCfi);
-                            return;
-                          }
-                          final queuedTurn = _queuedTurnCommand;
-                          if (queuedTurn != null) _executePageTurn(queuedTurn);
-                        },
-                        onRelocated: (location) {
-                          if (!mounted || _isStoppingPageSync) return;
-                          final committedTarget = _displayingTargetCfi;
-                          final relocatedCfi =
-                              committedTarget ?? location.startCfi;
-                          _currentCfi = relocatedCfi;
-                          if (committedTarget != null) {
-                            setState(() => _displayingTargetCfi = null);
-                          }
-                          ref
-                              .read(bookProvider.notifier)
-                              .updateCfi(relocatedCfi);
-                          _publishReadiness(currentCfi: relocatedCfi);
-
-                          if (committedTarget != null) {
-                            unawaited(
-                              ref
-                                  .read(pageSyncProvider.notifier)
-                                  .acknowledgePagePosition(relocatedCfi),
-                            );
-                          }
-
-                          final command = _awaitingTurnRelocation;
-                          final roomId = _awaitingTurnRoomId;
-                          if (command != null) {
-                            _awaitingTurnRelocation = null;
-                            _awaitingTurnRoomId = null;
-                            if (roomId != null) {
-                              unawaited(
-                                _commitRequesterPosition(
-                                  command,
-                                  relocatedCfi,
-                                  roomId,
-                                ),
-                              );
-                            }
-                          }
-                        },
-                      ),
-                    ),
-
-                    // Layer 2: Gesture interceptor overlay
-                    if (_isReaderReady)
-                      Positioned.fill(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onHorizontalDragEnd: (details) {
-                            if (syncState.status != SyncStatus.idle ||
-                                !_canAdvertiseReady ||
-                                _displayingTargetCfi != null) {
+                            final targetCfi = _queuedTargetCfi;
+                            if (targetCfi != null) {
+                              _displayCommittedPosition(targetCfi);
                               return;
                             }
-                            if (details.primaryVelocity == null) return;
+                            final queuedTurn = _queuedTurnCommand;
+                            if (queuedTurn != null) _executePageTurn(queuedTurn);
+                          },
+                          onRelocated: (location) {
+                            if (!mounted || _isStoppingPageSync) return;
+                            final committedTarget = _displayingTargetCfi;
+                            final relocatedCfi =
+                                committedTarget ?? location.startCfi;
+                            _currentCfi = relocatedCfi;
+                            if (committedTarget != null) {
+                              setState(() => _displayingTargetCfi = null);
+                            }
+                            ref
+                                .read(bookProvider.notifier)
+                                .updateCfi(relocatedCfi);
+                            _publishReadiness(currentCfi: relocatedCfi);
 
-                            if (details.primaryVelocity! < -200) {
+                            if (committedTarget != null) {
                               unawaited(
                                 ref
                                     .read(pageSyncProvider.notifier)
-                                    .requestPageTurn(
-                                      direction: PageTurnDirection.next,
-                                      fromCfi: _currentCfi,
-                                    ),
+                                    .acknowledgePagePosition(relocatedCfi),
                               );
-                            } else if (details.primaryVelocity! > 200) {
-                              unawaited(
-                                ref
-                                    .read(pageSyncProvider.notifier)
-                                    .requestPageTurn(
-                                      direction: PageTurnDirection.previous,
-                                      fromCfi: _currentCfi,
-                                    ),
-                              );
+                            }
+
+                            final command = _awaitingTurnRelocation;
+                            final roomId = _awaitingTurnRoomId;
+                            if (command != null) {
+                              _awaitingTurnRelocation = null;
+                              _awaitingTurnRoomId = null;
+                              if (roomId != null) {
+                                unawaited(
+                                  _commitRequesterPosition(
+                                    command,
+                                    relocatedCfi,
+                                    roomId,
+                                  ),
+                                );
+                              }
                             }
                           },
                         ),
                       ),
-                  ],
-                ),
-              ),
 
-              // Bottom navigation bar
-              _buildBottomBar(syncState),
-            ],
+                      // Layer 2: Gesture interceptor overlay
+                      if (_isReaderReady)
+                        Positioned.fill(
+                          child: LayoutBuilder(
+                            builder: (context, constraints) => GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              // Tap zones are how e-readers turn pages; a
+                              // swipe on e-ink is slow to register and
+                              // easily read as a tap anyway.
+                              onTapUp: (details) => _requestTurnFromInput(
+                                pageTurnDirectionForTap(
+                                  dx: details.localPosition.dx,
+                                  width: constraints.maxWidth,
+                                ),
+                              ),
+                              onHorizontalDragEnd: (details) {
+                                final velocity = details.primaryVelocity;
+                                if (velocity == null) return;
+                                if (velocity < -200) {
+                                  _requestTurnFromInput(PageTurnDirection.next);
+                                } else if (velocity > 200) {
+                                  _requestTurnFromInput(
+                                    PageTurnDirection.previous,
+                                  );
+                                }
+                              },
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+
+                // Bottom navigation bar
+                _buildBottomBar(syncState, prefs),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildBottomBar(PageSyncState syncState) {
-    final isIdle =
-        syncState.status == SyncStatus.idle &&
-        _isReaderReady &&
-        _canAdvertiseReady &&
-        _displayingTargetCfi == null;
+  /// Whether this reader may start a page turn of its own right now.
+  bool _canRequestTurn(PageSyncState syncState) =>
+      syncState.status == SyncStatus.idle &&
+      _isReaderReady &&
+      _canAdvertiseReady &&
+      _displayingTargetCfi == null;
 
+  /// One entry point for taps, swipes and keys.
+  ///
+  /// While someone else's request is waiting on this reader, turning the same
+  /// way *is* agreeing to it: on an e-reader the page button is under the
+  /// thumb and the Turn button is not. Turning the other way does nothing —
+  /// declining stays an explicit choice.
+  void _requestTurnFromInput(PageTurnDirection direction) {
+    if (!mounted || _isStoppingPageSync) return;
+    final syncState = ref.read(pageSyncProvider);
+    final pageSync = ref.read(pageSyncProvider.notifier);
+    final request = syncState.currentRequest;
+    if (syncState.status == SyncStatus.confirming && request != null) {
+      if (request.direction == direction) {
+        unawaited(pageSync.confirmPageTurn());
+      }
+      return;
+    }
+    if (!_canRequestTurn(syncState)) return;
+    unawaited(
+      pageSync.requestPageTurn(direction: direction, fromCfi: _currentCfi),
+    );
+  }
+
+  KeyEventResult _handleKeyEvent(KeyEvent event) {
+    final direction = pageTurnDirectionForKey(
+      event.logicalKey,
+      volumeKeysTurnPages: ref
+          .read(readingPreferencesProvider)
+          .volumeKeysTurnPages,
+    );
+    if (direction == null) return KeyEventResult.ignored;
+    // Claim the repeat and the release too, so a held volume key does not
+    // leak through to the system volume halfway through.
+    if (event is KeyDownEvent) _requestTurnFromInput(direction);
+    return KeyEventResult.handled;
+  }
+
+  Widget _buildBottomBar(PageSyncState syncState, ReadingPreferences prefs) {
+    final canTurn = _canRequestTurn(syncState);
+    final ink = prefs.textColor;
+    final paper = prefs.backgroundColor;
+    final disabledInk = ink.withValues(alpha: 0.35);
+    final iconStyle = IconButton.styleFrom(
+      foregroundColor: ink,
+      disabledForegroundColor: disabledInk,
+      minimumSize: const Size(52, 52),
+    );
+    final pageButtonStyle = OutlinedButton.styleFrom(
+      foregroundColor: ink,
+      disabledForegroundColor: disabledInk,
+      backgroundColor: paper,
+      minimumSize: const Size(64, 48),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      side: BorderSide(
+        color: canTurn ? ink : disabledInk,
+        width: AppTheme.ruleWidth,
+      ),
+    );
+
+    // Fixed height for the same reason as the status bar: the viewer must
+    // never be resized by its own chrome.
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: AppTheme.surfaceColor,
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: paper,
+        border: Border(top: BorderSide(color: ink, width: AppTheme.ruleWidth)),
+      ),
       child: Row(
         children: [
-          // Leave button
           IconButton(
+            style: iconStyle,
             icon: const Icon(Icons.arrow_back),
             onPressed: syncState.currentRequest == null ? _leaveReader : null,
             tooltip: 'Leave reading',
           ),
-
           const Spacer(),
-
-          // Previous page button
-          IconButton(
-            icon: const Icon(Icons.chevron_left, size: 32),
-            onPressed: isIdle
-                ? () => unawaited(
-                    ref
-                        .read(pageSyncProvider.notifier)
-                        .requestPageTurn(
-                          direction: PageTurnDirection.previous,
-                          fromCfi: _currentCfi,
-                        ),
-                  )
+          OutlinedButton(
+            style: pageButtonStyle,
+            onPressed: canTurn
+                ? () => _requestTurnFromInput(PageTurnDirection.previous)
                 : null,
+            child: const Icon(Icons.chevron_left, size: 32),
           ),
-
-          const SizedBox(width: 24),
-
-          // Next page button
-          IconButton(
-            icon: const Icon(Icons.chevron_right, size: 32),
-            onPressed: isIdle
-                ? () => unawaited(
-                    ref
-                        .read(pageSyncProvider.notifier)
-                        .requestPageTurn(
-                          direction: PageTurnDirection.next,
-                          fromCfi: _currentCfi,
-                        ),
-                  )
+          const SizedBox(width: 12),
+          OutlinedButton(
+            style: pageButtonStyle,
+            onPressed: canTurn
+                ? () => _requestTurnFromInput(PageTurnDirection.next)
                 : null,
+            child: const Icon(Icons.chevron_right, size: 32),
           ),
-
           const Spacer(),
-
-          // Theme / color settings button (Feature 1)
           IconButton(
-            icon: const Icon(Icons.palette_outlined),
+            style: iconStyle,
+            icon: const Icon(Icons.text_fields),
             onPressed:
                 syncState.status == SyncStatus.idle &&
                     syncState.currentRequest == null &&
                     _isReaderReady &&
                     _canAdvertiseReady &&
                     !_isStoppingPageSync
-                ? _showThemeSettings
+                ? _showReadingSettings
                 : null,
-            tooltip: 'Reading theme',
+            tooltip: 'Reading settings',
           ),
-
-          // Members indicator
           IconButton(
+            style: iconStyle,
             icon: const Icon(Icons.people_outline),
             onPressed: _showMembersDrawer,
             tooltip: 'Room members',
@@ -775,150 +820,134 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
-  // Feature 1: Show reading theme settings panel.
-  void _showThemeSettings() {
-    final prefs = ref.read(readingPreferencesProvider);
+  /// Applies a preference that changes how the book is laid out.
+  ///
+  /// The viewer only reads its settings when it loads, so the preference and
+  /// the rebuild must happen together or not at all. Changing the preference
+  /// while the rebuild is refused would repaint the margins in the new theme
+  /// around a page still in the old one.
+  void _applyLayoutPreference(
+    void Function(ReadingPreferencesNotifier notifier) change,
+  ) {
+    if (!_canRebuildViewer) return;
+    change(ref.read(readingPreferencesProvider.notifier));
+    _rebuildViewer();
+  }
 
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppTheme.surfaceColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Reading Theme',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
-
-            // Theme presets row
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+  // Feature 1: reading theme, type size and page-turn keys.
+  void _showReadingSettings() {
+    unawaited(
+      showPaperSheet<void>(
+        context: context,
+        builder: (sheetContext) => Consumer(
+          builder: (context, ref, _) {
+            final prefs = ref.watch(readingPreferencesProvider);
+            final canChangeLayout =
+                ref.watch(pageSyncProvider).currentRequest == null;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _ThemeOption(
-                  label: 'Day',
-                  bgColor: Colors.white,
-                  textColor: Colors.black87,
-                  isSelected: prefs.theme == ReadingTheme.day,
-                  onTap: () {
-                    if (ref.read(pageSyncProvider).currentRequest != null) {
-                      Navigator.pop(ctx);
-                      return;
-                    }
-                    ref
-                        .read(readingPreferencesProvider.notifier)
-                        .setTheme(ReadingTheme.day);
-                    _rebuildViewer();
-                    Navigator.pop(ctx);
-                  },
+                const Text('Reading Settings', style: AppTheme.title),
+                const SizedBox(height: 20),
+                const SectionHeader(label: 'Page'),
+                const SizedBox(height: 14),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    for (final theme in const [
+                      ReadingTheme.day,
+                      ReadingTheme.sepia,
+                      ReadingTheme.night,
+                    ])
+                      _ThemeOption(
+                        preview: ReadingPreferences(theme: theme),
+                        isSelected: prefs.theme == theme,
+                        onTap: canChangeLayout
+                            ? () => _applyLayoutPreference(
+                                (notifier) => notifier.setTheme(theme),
+                              )
+                            : null,
+                      ),
+                  ],
                 ),
-                _ThemeOption(
-                  label: 'Sepia',
-                  bgColor: const Color(0xFFF5E6C8),
-                  textColor: const Color(0xFF4A3728),
-                  isSelected: prefs.theme == ReadingTheme.sepia,
-                  onTap: () {
-                    if (ref.read(pageSyncProvider).currentRequest != null) {
-                      Navigator.pop(ctx);
-                      return;
-                    }
-                    ref
-                        .read(readingPreferencesProvider.notifier)
-                        .setTheme(ReadingTheme.sepia);
-                    _rebuildViewer();
-                    Navigator.pop(ctx);
-                  },
+                const SizedBox(height: 24),
+                const SectionHeader(label: 'Text size'),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    OutlinedButton(
+                      onPressed:
+                          canChangeLayout &&
+                              prefs.fontSize > ReadingPreferences.minFontSize
+                          ? () => _applyLayoutPreference(
+                              (notifier) => notifier.setFontSize(
+                                prefs.fontSize -
+                                    ReadingPreferences.fontSizeStep,
+                              ),
+                            )
+                          : null,
+                      child: const Text('A−', style: TextStyle(fontSize: 16)),
+                    ),
+                    Expanded(
+                      child: Text(
+                        '${prefs.fontSize.round()}',
+                        textAlign: TextAlign.center,
+                        style: AppTheme.title,
+                      ),
+                    ),
+                    OutlinedButton(
+                      onPressed:
+                          canChangeLayout &&
+                              prefs.fontSize < ReadingPreferences.maxFontSize
+                          ? () => _applyLayoutPreference(
+                              (notifier) => notifier.setFontSize(
+                                prefs.fontSize +
+                                    ReadingPreferences.fontSizeStep,
+                              ),
+                            )
+                          : null,
+                      child: const Text('A+', style: TextStyle(fontSize: 22)),
+                    ),
+                  ],
                 ),
-                _ThemeOption(
-                  label: 'Night',
-                  bgColor: const Color(0xFF1A1A2E),
-                  textColor: const Color(0xFFE0E0E0),
-                  isSelected: prefs.theme == ReadingTheme.night,
-                  onTap: () {
-                    if (ref.read(pageSyncProvider).currentRequest != null) {
-                      Navigator.pop(ctx);
-                      return;
-                    }
-                    ref
-                        .read(readingPreferencesProvider.notifier)
-                        .setTheme(ReadingTheme.night);
-                    _rebuildViewer();
-                    Navigator.pop(ctx);
-                  },
+                const SizedBox(height: 24),
+                const SectionHeader(label: 'Turning pages'),
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text(
+                    'Volume keys turn pages',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  subtitle: const Text(
+                    'For e-readers whose page buttons act as volume keys.',
+                    style: AppTheme.caption,
+                  ),
+                  value: prefs.volumeKeysTurnPages,
+                  onChanged: (enabled) => ref
+                      .read(readingPreferencesProvider.notifier)
+                      .setVolumeKeysTurnPages(enabled),
+                ),
+                const Text(
+                  'Tap the left third of the page to go back, anywhere else '
+                  'to go forward. Page Up/Down and arrow keys work too.',
+                  style: AppTheme.caption,
                 ),
               ],
-            ),
-            const SizedBox(height: 20),
-          ],
+            );
+          },
         ),
       ),
     );
   }
 
-  // Feature 3: Members panel showing who's reading and who left (yellow).
+  // Feature 3: Members panel showing who's reading and who left.
   void _showMembersDrawer() {
-    final presenceState = ref.read(presenceProvider);
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppTheme.surfaceColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '${presenceState.onlineCount} Members Online',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
-            ...presenceState.onlineUsers.map((user) {
-              final isReading = user['is_reading'] as bool? ?? false;
-              final nickname = user['nickname'] as String? ?? 'Unknown';
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        // Green = reading, Yellow = left the page
-                        color: isReading ? Colors.green : Colors.amber,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        nickname,
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: isReading ? Colors.white : Colors.amber,
-                        ),
-                      ),
-                    ),
-                    if (!isReading)
-                      const Text(
-                        'Left',
-                        style: TextStyle(color: Colors.amber, fontSize: 12),
-                      ),
-                  ],
-                ),
-              );
-            }),
-            const SizedBox(height: 20),
-          ],
-        ),
+    unawaited(
+      showPaperSheet<void>(
+        context: context,
+        builder: (_) => const ReaderMembersSheet(),
       ),
     );
   }
@@ -962,65 +991,69 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   void _showSyncError(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    showPaperMessage(context, message);
   }
 }
 
-/// A circular theme-selection button shown in the theme picker.
+/// A miniature page in the theme picker.
 class _ThemeOption extends StatelessWidget {
-  final String label;
-  final Color bgColor;
-  final Color textColor;
+  final ReadingPreferences preview;
   final bool isSelected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   const _ThemeOption({
-    required this.label,
-    required this.bgColor,
-    required this.textColor,
+    required this.preview,
     required this.isSelected,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        children: [
-          Container(
-            width: 72,
-            height: 72,
-            decoration: BoxDecoration(
-              color: bgColor,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: isSelected ? AppTheme.primaryColor : Colors.white24,
-                width: isSelected ? 3 : 1,
-              ),
-            ),
-            child: Center(
-              child: Text(
-                'Aa',
-                style: TextStyle(
-                  color: textColor,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
+    return Semantics(
+      button: true,
+      selected: isSelected,
+      label: '${preview.themeLabel} theme',
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Column(
+            children: [
+              Container(
+                width: 68,
+                height: 88,
+                decoration: BoxDecoration(
+                  color: preview.backgroundColor,
+                  borderRadius: BorderRadius.circular(AppTheme.radius),
+                  // Selection is a heavy frame, not an accent colour.
+                  border: Border.all(
+                    color: AppTheme.ink,
+                    width: isSelected ? 4 : AppTheme.ruleWidth,
+                  ),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  'Aa',
+                  style: TextStyle(
+                    fontFamily: AppTheme.serif,
+                    color: preview.textColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 24,
+                  ),
                 ),
               ),
-            ),
+              const SizedBox(height: 8),
+              Text(
+                isSelected ? '✓ ${preview.themeLabel}' : preview.themeLabel,
+                style: TextStyle(
+                  color: AppTheme.ink,
+                  fontSize: 15,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w400,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 6),
-          Text(
-            label,
-            style: TextStyle(
-              color: isSelected ? AppTheme.primaryColor : Colors.white70,
-              fontSize: 12,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

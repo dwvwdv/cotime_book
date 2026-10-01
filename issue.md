@@ -140,6 +140,48 @@
   navigation stack，硬體返回會直接離開 App。
 - **修法**：補上 `PopScope` 與「Back to Lobby」按鈕。
 
+### [x] #12 閱讀主題沒有套到書頁上
+
+- **檔案**：`lib/providers/reading_preferences_provider.dart`、`lib/screens/reader_screen.dart`
+- **症狀**：在閱讀器選 Night / Sepia，只有書頁**周圍**的底色變了，書頁本身
+  （也就是正在讀的那一塊）完全沒變。
+- **原因**：`ReadingPreferences` 的顏色只用在 `Scaffold.backgroundColor`，
+  `EpubViewer` 的 `displaySettings` 從來沒有帶 `theme`；`fontSize` 也一樣存在
+  provider 裡卻沒有任何地方用到。
+- **修法**：`ReadingPreferences.displaySettings` 一次產出 viewer 需要的全部設定
+  （theme、fontSize、以及原本防止套件自帶 swipe 的 `snap` / `useSnapAnimationAndroid`）。
+  viewer 只在載入時讀設定，所以偏好與 `_rebuildViewer()` 必須一起成立或一起不做：
+  `_applyLayoutPreference()` 先確認可以重建才改偏好，避免「外框換了新主題、
+  書頁還是舊主題」的半套狀態。
+- **測試**：`test/reading_preferences_test.dart` →
+  `the chosen theme reaches the page, not just the margins`、
+  `the viewer never gets its own swipe handler`
+
+### [x] #13 同步狀態列的高度會隨狀態改變，讓 viewer 在翻頁途中重新分頁
+
+- **檔案**：`lib/widgets/sync_status_bar.dart`、`lib/screens/reader_screen.dart`
+- **症狀（由程式碼推論，未在實機重現）**：與 #A 同一類——某次翻頁後，下一次請求被
+  follower 以 `invalid_or_stale_request` 打回，但又不是「進 reader 後第一次」。
+- **原因**：狀態列就疊在 `EpubViewer` 上方的 `Column` 裡，而各狀態的 padding
+  與內容高度不同（idle 約 34px、requesting 約 38px、confirming 有按鈕更高）。
+  每次高度變化 WebView 就被 resize，epub.js 會重新分頁並從 start CFI 重新 display，
+  接著送出 `onRelocated`。這發生在 request 開始與結束的瞬間，
+  於是 `_currentCfi` 被換成一個只有這台裝置才有的新分頁 CFI。
+- **修法**：`SyncStatusBar.height` 固定 60，所有狀態（含兩行錯誤訊息）都在這個
+  高度內排版；閱讀器底部工具列也固定 64。原則寫進 CLAUDE.md：
+  **viewer 周圍的 chrome 不准改變 viewer 的尺寸。**
+- **測試**：`test/sync_status_bar_test.dart` → `the bar keeps one height in every state`
+  （已驗證：拿掉固定高度時這個測試會失敗）
+
+### [x] #C reader 的成員面板不會即時更新
+
+- **檔案**：`lib/widgets/reader_members_sheet.dart`
+- **原因**：`_showMembersDrawer` 用 `ref.read(presenceProvider)` 取一次 snapshot 就畫，
+  面板開著的期間有人進出不會反映。
+- **修法**：抽成 `ReaderMembersSheet`（`ConsumerWidget`，watch `presenceProvider`）。
+- **測試**：`test/reader_members_sheet_test.dart` →
+  `the members panel follows people coming and going while open`
+
 ---
 
 ## 開放中
@@ -161,6 +203,9 @@
      並像 follower 一樣把 anchor 當成自己的 `_currentCfi`（而不是採用本機 startCfi）。
   2. 或者把相等性判斷從「字串相等」放寬成「spine index 相同」，只用 CFI 字串做顯示。
 - **注意**：這會動到 consensus 的核心判斷，必須先補測試再改。
+- **相關**：#13 修掉了「狀態列高度變化造成 resize」這個觸發點。閱讀設定裡的
+  主題與字級仍然會 `_rebuildViewer()`，字級改變更是一定會讓分頁結果不同——
+  在 #A 修好之前，改完字級後的第一次翻頁仍可能被打回一次。
 
 ### [ ] #H reader_screen.dart 沒有任何測試
 
@@ -211,12 +256,6 @@
 - **影響**：目前沒有明顯的使用者可見 bug（錯誤本來就短命），但很容易誤用。
 - **建議**：統一成 `error ?? this.error` + 顯式的 `clearError` 旗標，並逐一檢查呼叫點。
 
-### [ ] #C reader 的成員面板不會即時更新
-
-- **檔案**：`lib/screens/reader_screen.dart`（`_showMembersDrawer`）
-- **問題**：用 `ref.read(presenceProvider)` 取一次 snapshot 就畫，bottom sheet 打開
-  期間有人進出不會反映。應該用 `Consumer` 包起來。
-
 ### [ ] #D reader 進場的頭幾毫秒會丟掉 page_turn 事件
 
 - **檔案**：`lib/services/realtime_service.dart`
@@ -245,3 +284,22 @@
   於是 Presence 瞬間變成 `is_reading: false`，同房其他人若正好在 confirming 階段
   就會被取消翻頁。
 - **建議**：只對 `paused` / `detached` 反應，或對 `inactive` 加一個短去抖動。
+
+### [ ] #I 傳輸失敗的狀態永遠不會顯示
+
+- **檔案**：`lib/widgets/transfer_progress_widget.dart`
+- **問題**：開頭的守衛是 `!isActive && status != completed` 就 `SizedBox.shrink()`，
+  而 `failed` 不算 active，所以下面那段顯示 `errorMessage` 的分支是死碼。
+  收書失敗時 lobby 只會停在「Receiving book...」。
+- **為什麼先不動**：直接讓 failed 顯示出來會變成一個沒有清除路徑的永久錯誤
+  （違反 CLAUDE.md 第 5 條）。要修得先決定它怎麼收斂——例如下一次 `book_shared`
+  或重試時清掉，或像 `PageSyncState.error` 一樣計時自動清除。
+
+### [ ] #J 閱讀偏好不會保存
+
+- **檔案**：`lib/providers/reading_preferences_provider.dart`
+- **問題**：主題、字級、音量鍵翻頁都只存在記憶體裡，每次開 App 都回到預設。
+  電子閱讀器使用者通常會調大字級，每次重設很煩。
+- **建議**：加 `shared_preferences`，在 `ReadingPreferencesNotifier` 建構時讀取、
+  每次 set 時寫入。這是新增依賴，所以沒有跟這次的樣式重做一起進來。
+

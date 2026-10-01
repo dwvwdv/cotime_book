@@ -11,6 +11,7 @@ import '../providers/book_provider.dart';
 import '../providers/presence_provider.dart';
 import '../providers/room_provider.dart';
 import '../widgets/member_list.dart';
+import '../widgets/paper.dart';
 import '../widgets/room_code_display.dart';
 import '../widgets/transfer_progress_widget.dart';
 
@@ -292,7 +293,13 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     });
 
     if (_isInitializing) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      // A static line rather than a spinner: on e-ink a spinner is a panel
+      // refresh every frame for as long as the room takes to join.
+      return const Scaffold(
+        body: Center(
+          child: Text('Opening the room...', style: AppTheme.title),
+        ),
+      );
     }
 
     final routeMatchesRoom =
@@ -315,6 +322,13 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       currentBookHash: activeRoom.currentBookHash,
     );
 
+    final isHost = roomState.isHost;
+    final startHint = !isHost
+        ? 'The host starts the reading session.'
+        : canStartReading
+        ? null
+        : 'Everyone needs to be online with the book before you start.';
+
     // Feature 2: hardware back → leave room properly.
     return PopScope(
       canPop: false,
@@ -327,164 +341,113 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             onPressed: _isLeaving ? null : () => _leaveRoom(),
+            tooltip: 'Leave room',
           ),
         ),
-        body: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // Room code
-              const Text(
-                'Room Code',
-                style: TextStyle(color: Colors.white54, fontSize: 14),
-              ),
-              const SizedBox(height: 8),
-              RoomCodeDisplay(code: activeRoom.code),
-              const SizedBox(height: 24),
-
-              // Members section
-              Row(
-                children: [
-                  const Text(
-                    'Members',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 2,
+        body: SafeArea(
+          top: false,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'ROOM CODE',
+                      style: AppTheme.overline,
+                      textAlign: TextAlign.center,
                     ),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primaryColor.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      '${presenceState.onlineCount} online',
-                      style: const TextStyle(
-                        color: AppTheme.primaryColor,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: MemberList(
-                  members: roomState.members,
-                  currentUserId: authState.userId,
-                ),
-              ),
+                    const SizedBox(height: 10),
+                    Center(child: RoomCodeDisplay(code: activeRoom.code)),
+                    const SizedBox(height: 24),
 
-              // Transfer progress
-              TransferProgressWidget(transferState: _transferState),
-
-              // Book info
-              if (activeRoom.currentBookTitle != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: AppTheme.cardColor,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.menu_book, color: AppTheme.primaryColor),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              activeRoom.currentBookTitle!,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            Text(
-                              hasCurrentBook
-                                  ? 'Ready to read'
-                                  : 'Receiving book...',
-                              style: TextStyle(
-                                color: hasCurrentBook
-                                    ? Colors.green
-                                    : Colors.orange,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
+                    SectionHeader(
+                      label: 'Members',
+                      trailing: Text(
+                        '${presenceState.onlineCount} online',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.ink,
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-
-              // Action buttons
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed:
-                          _isLeaving ||
-                              bookState.isLoading ||
-                              _transferState.isActive
-                          ? null
-                          : _shareBook,
-                      icon: const Icon(Icons.upload_file),
-                      label: bookState.isLoading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Share Book'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: AppTheme.primaryColor),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    Expanded(
+                      child: MemberList(
+                        members: roomState.members,
+                        currentUserId: authState.userId,
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _isLeaving || !canStartReading
-                          ? null
-                          : _startReading,
-                      icon: const Icon(Icons.play_arrow),
-                      label: const Text('Start Reading'),
-                    ),
-                  ),
-                ],
-              ),
+                    const SizedBox(height: 12),
 
-              if (bookState.error != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  bookState.error!,
-                  style: const TextStyle(
-                    color: AppTheme.errorColor,
-                    fontSize: 13,
-                  ),
-                  textAlign: TextAlign.center,
+                    // Transfer progress
+                    TransferProgressWidget(transferState: _transferState),
+
+                    // Book info
+                    if (activeRoom.currentBookTitle != null) ...[
+                      _BookCard(
+                        title: activeRoom.currentBookTitle!,
+                        isReady: hasCurrentBook,
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+
+                    // Action buttons
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed:
+                                _isLeaving ||
+                                    bookState.isLoading ||
+                                    _transferState.isActive
+                                ? null
+                                : _shareBook,
+                            icon: const Icon(Icons.upload_file),
+                            label: Text(
+                              bookState.isLoading ? 'Loading...' : 'Share Book',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: _isLeaving || !canStartReading
+                                ? null
+                                : _startReading,
+                            icon: const Icon(Icons.auto_stories_outlined),
+                            label: const Text('Start Reading'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    // A disabled button with no reason reads as broken.
+                    if (startHint != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        startHint,
+                        style: AppTheme.caption,
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+
+                    if (bookState.error != null) ...[
+                      const SizedBox(height: 12),
+                      PaperNotice(message: bookState.error!),
+                    ],
+                    if (presenceState.error != null) ...[
+                      const SizedBox(height: 8),
+                      PaperNotice(
+                        message: presenceState.error!,
+                        icon: Icons.wifi_off,
+                      ),
+                    ],
+                  ],
                 ),
-              ],
-              if (presenceState.error != null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  presenceState.error!,
-                  style: const TextStyle(
-                    color: AppTheme.errorColor,
-                    fontSize: 12,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ],
+              ),
+            ),
           ),
         ),
       ),
@@ -570,13 +533,13 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.meeting_room_outlined,
-                size: 56,
-                color: AppTheme.errorColor,
-              ),
+              const Icon(Icons.meeting_room_outlined, size: 56),
               const SizedBox(height: 16),
-              Text(message, textAlign: TextAlign.center),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: AppTheme.body,
+              ),
               const SizedBox(height: 24),
               ElevatedButton(
                 onPressed: () => context.goNamed('home'),
@@ -624,10 +587,68 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     }
   }
 
-  void _showError(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+  void _showError(String message) => showPaperMessage(context, message);
+}
+
+class _BookCard extends StatelessWidget {
+  final String title;
+  final bool isReady;
+
+  const _BookCard({required this.title, required this.isReady});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppTheme.ink, width: AppTheme.ruleWidth),
+        borderRadius: BorderRadius.circular(AppTheme.radius),
+      ),
+      child: Row(
+        children: [
+          // A book spine: a tall narrow block reads as "book" at a glance
+          // without needing a cover image or a colour.
+          Container(
+            width: 34,
+            height: 48,
+            decoration: BoxDecoration(
+              color: AppTheme.ink,
+              borderRadius: BorderRadius.circular(2),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(
+              Icons.menu_book_outlined,
+              color: AppTheme.paper,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontFamily: AppTheme.serif,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 18,
+                    color: AppTheme.ink,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  isReady ? 'Ready to read' : 'Receiving book...',
+                  style: AppTheme.caption,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

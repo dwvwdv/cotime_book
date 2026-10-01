@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../config/app_constants.dart';
+import '../config/theme.dart';
 
 class RoomCodeInput extends StatelessWidget {
   final TextEditingController controller;
@@ -20,19 +21,22 @@ class RoomCodeInput extends StatelessWidget {
       textCapitalization: TextCapitalization.characters,
       textAlign: TextAlign.center,
       style: const TextStyle(
-        fontSize: 24,
-        fontWeight: FontWeight.bold,
-        letterSpacing: 6,
+        fontFamily: AppTheme.serif,
+        fontSize: 28,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 10,
+        color: AppTheme.ink,
       ),
       inputFormatters: [
         FilteringTextInputFormatter.allow(RegExp('[a-zA-Z0-9]')),
         UpperCaseTextFormatter(),
       ],
       decoration: InputDecoration(
-        hintText: 'ENTER CODE',
-        hintStyle: TextStyle(
-          color: Colors.white.withValues(alpha: 0.3),
-          letterSpacing: 4,
+        labelText: 'Room code',
+        hintText: 'ABC234',
+        hintStyle: const TextStyle(
+          color: AppTheme.inkFaint,
+          letterSpacing: 10,
         ),
         counterText: '',
         errorText: errorText,

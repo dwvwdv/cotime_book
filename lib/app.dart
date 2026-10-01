@@ -70,7 +70,8 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
   Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'CoTime Book',
-      theme: AppTheme.darkTheme,
+      theme: AppTheme.paperTheme,
+      scrollBehavior: const PaperScrollBehavior(),
       routerConfig: AppRouter.router,
       debugShowCheckedModeBanner: false,
     );
