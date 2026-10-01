@@ -130,6 +130,33 @@ supabase/
 - Verify your Supabase credentials are correct
 - Check the Supabase Dashboard for any API issues
 
+### Publishing to Google Play
+
+`.github/workflows/publish-play-store.yml` builds a signed AAB and uploads it to Google Play
+(package `com.lazyrhythm.cotime_book`). Run it from **Actions → Publish to Google Play**.
+
+Repository secrets it needs:
+
+| Secret | Used for |
+| --- | --- |
+| `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_PASSWORD`, `KEY_ALIAS` | Upload-key signing |
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Baked into the build via `--dart-define` |
+| `SERVICE_ACCOUNT_JSON` | Play Developer API (service account with release permission on this app) |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Optional result notification |
+
+Inputs:
+
+- `track`: `internal` / `alpha` / `beta` / `production`
+- `inAppUpdatePriority`: `5` forces an update, `0` doesn't
+- `version_code`: overrides the build number from `pubspec.yaml`; every upload needs a new one
+- `skip_build`: promote a version code that is already on Google Play to `track` without rebuilding
+- `release_status`: `draft` until the app has passed its first review — Play rejects
+  `completed` releases on a draft app
+- `release_notes`: optional "What's new" text (≤500 characters, used for zh-TW and en-US)
+
+The Play Developer API can't create an app: the first AAB must be uploaded by hand in Play
+Console before this workflow can publish to it.
+
 ## 📄 License
 
 MIT License

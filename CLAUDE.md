@@ -133,6 +133,10 @@ CI（`.github/workflows/build-check.yml`）跑的是 Flutter 3.32.4：
 先 pgTAP，再 `flutter analyze` + `flutter test`，最後建 arm64 APK。
 **送 PR 前 `flutter analyze` 與 `flutter test` 必須是乾淨的。**
 
+上架 Google Play 走手動觸發的 `.github/workflows/publish-play-store.yml`（套件名
+`com.lazyrhythm.cotime_book`，所需 secrets 與輸入見 README）。每次上傳都要新的版本碼——
+記得先調 `pubspec.yaml` 的 `+N`，或在觸發時填 `version_code`。
+
 ## 慣例
 
 - 註解解釋**為什麼**，不解釋做了什麼——尤其是那些用來擋掉 race 的守衛。
