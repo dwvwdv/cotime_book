@@ -482,7 +482,7 @@
 
 ### [x] #R 已關閉的房間無法重新啟用
 
-- **檔案**：`supabase/migrations/20261001142734_record_room_participants.sql`（已套用到正式庫）、`supabase/migrations/20261001150000_reopen_closed_rooms.sql`（尚未套用）
+- **檔案**：`supabase/migrations/20261001142734_record_room_participants.sql`、`20261001144100_available_room_codes.sql`（已套用到正式庫）、`20261001150000_reopen_closed_rooms.sql`（`join_room`，尚未套用——**新版 APK 要等它套用後才能發佈**，否則點已關閉的房間會被當成已刪除而從清單移除）
 - **症狀**：大家離開（或 24 小時沒活動）後房間就關了；從「Recent rooms」點回去只會開一個新房號，
   要重新把房號傳給所有人，書與上次的位置也都沒了——即使關閉的房間列還在資料庫裡保留 30 天。
 - **原因**：`join_room` 把任何非 active 的房間都當成不存在。
