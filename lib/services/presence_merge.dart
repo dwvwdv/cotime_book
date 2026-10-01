@@ -1,5 +1,3 @@
-import '../models/page_sync_state.dart';
-
 /// Collapses multiple device/connection metas into one logical room member.
 ///
 /// Supabase Presence is keyed per connection, so one logical user can appear
@@ -34,7 +32,6 @@ List<Map<String, dynamic>> mergePresenceUsers(
         .toList(growable: false);
     latest['is_reading'] = metas.any((meta) => meta['is_reading'] == true);
     latest['reader_ready'] = metas.any((meta) => meta['reader_ready'] == true);
-    _mergeReadingPosition(latest, metas);
     latest['session_count'] = metas.length;
     merged.add(latest);
   }
@@ -45,33 +42,6 @@ List<Map<String, dynamic>> mergePresenceUsers(
     return (a['user_id'] as String).compareTo(b['user_id'] as String);
   });
   return List.unmodifiable(merged);
-}
-
-/// The newest page any of this user's reading connections holds.
-///
-/// Taken from reading metas only: a lobby meta's position is whatever page that
-/// connection last saw, and must not drag the merged row backwards. Ordered by
-/// [SharedPosition.isNewerThan], the same order [PageSyncService] converges on.
-void _mergeReadingPosition(
-  Map<String, dynamic> merged,
-  List<Map<String, dynamic>> metas,
-) {
-  merged
-    ..remove('page_epoch')
-    ..remove('page_seq')
-    ..remove('page_cfi');
-  SharedPosition? newest;
-  for (final meta in metas) {
-    if (meta['is_reading'] != true) continue;
-    final position = SharedPosition.fromPresence(meta);
-    if (position == null) continue;
-    if (newest == null || position.isNewerThan(newest)) newest = position;
-  }
-  if (newest != null) {
-    merged['page_epoch'] = newest.epoch;
-    merged['page_seq'] = newest.seq;
-    merged['page_cfi'] = newest.cfi;
-  }
 }
 
 /// Whether a merged Presence row holds the book [bookHash] — i.e. can serve

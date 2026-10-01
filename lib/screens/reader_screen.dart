@@ -116,7 +116,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       currentUserId: authState.userId!,
       currentNickname: authState.nickname,
       initialPosition: SharedPosition(seq: 0, cfi: room?.currentCfi ?? ''),
-      publishPosition: presence.updateReadingPosition,
     );
     if (!mounted || _leaving) return;
 

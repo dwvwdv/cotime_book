@@ -15,6 +15,7 @@ void main() {
         channels.add(channel);
         return channel;
       },
+      presenceCoalesceDelay: Duration.zero,
     );
   });
 
@@ -38,6 +39,7 @@ void main() {
         },
         recoveryDelay: const Duration(milliseconds: 20),
         silentSubscribeTimeout: const Duration(milliseconds: 60),
+        presenceCoalesceDelay: Duration.zero,
       );
       realtime.connectionStream.listen((e) => statuses.add(e.status));
     });
@@ -144,6 +146,71 @@ void main() {
     });
   });
 
+  group('Presence updates', () {
+    // Supabase closes the channel of a client that sends more than five
+    // Presence updates in 30 seconds (ClientPresenceRateLimitReached).
+    late _FakeRoomChannel channel;
+    late RealtimeService realtime;
+
+    setUp(() async {
+      realtime = RealtimeService(
+        channelFactory: (name, key) => channel = _FakeRoomChannel(name, key),
+        presenceCoalesceDelay: const Duration(milliseconds: 10),
+        presenceWindow: const Duration(milliseconds: 200),
+      );
+      await realtime.joinRoom(
+        roomCode: 'ABC234',
+        userId: 'alice',
+        nickname: 'Alice',
+        avatarColorIndex: 1,
+        hasBook: false,
+      );
+      channel.emitStatus(RealtimeSubscribeStatus.subscribed);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(channel.tracked, hasLength(1));
+    });
+
+    tearDown(() => realtime.close());
+
+    Future<void> update({bool reading = true, bool ready = true}) {
+      return realtime.updatePresence(
+        userId: 'alice',
+        nickname: 'Alice',
+        avatarColorIndex: 1,
+        hasBook: true,
+        isReading: reading,
+        readerReady: ready,
+      );
+    }
+
+    test(
+      'a burst of changes goes out as one update with the last value',
+      () async {
+        await update(ready: false);
+        await update(reading: true, ready: false);
+        await update(reading: true, ready: true);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+
+        expect(channel.tracked, hasLength(2));
+        expect(channel.tracked.last['reader_ready'], isTrue);
+      },
+    );
+
+    test('never more than four updates per window', () async {
+      // Regression: a Presence update per page turn hit Supabase's limit
+      // within a few pages, and the server closed the room channel.
+      for (var i = 0; i < 8; i++) {
+        await update(ready: i.isEven);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(channel.tracked.length, lessThanOrEqualTo(4));
+
+      // The latest state still arrives once the window allows it.
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(channel.tracked.last['reader_ready'], isFalse);
+    });
+  });
+
   test('room event registry includes lifecycle and commit events', () {
     expect(
       RealtimeService.roomEvents,
@@ -184,6 +251,8 @@ void main() {
       hasBook: true,
       readerReady: true,
     );
+    // Presence updates are coalesced, so they go out on the next tick.
+    await Future<void>.delayed(const Duration(milliseconds: 5));
 
     expect(channels, hasLength(1));
     expect(channels.single.tracked.last['has_book'], isTrue);

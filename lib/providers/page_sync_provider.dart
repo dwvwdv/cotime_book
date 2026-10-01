@@ -30,7 +30,6 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     required String currentUserId,
     required String currentNickname,
     required SharedPosition initialPosition,
-    required Future<void> Function(SharedPosition position) publishPosition,
   }) async {
     final generation = ++_lifecycleGeneration;
     await _stopResources(clearCallbacks: false);
@@ -38,10 +37,7 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     state = const PageSyncState.idle();
 
     final service = PageSyncService(
-      transport: RealtimePageSyncTransport(
-        realtimeService,
-        publishPosition: publishPosition,
-      ),
+      transport: RealtimePageSyncTransport(realtimeService),
       currentUserId: currentUserId,
       currentNickname: currentNickname,
       initialPosition: initialPosition,

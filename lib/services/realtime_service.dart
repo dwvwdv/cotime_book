@@ -149,6 +149,9 @@ class RealtimeService {
     'page_turn_vote',
     'page_turn_commit',
     'page_turn_cancel',
+    'page_position_query',
+    'page_position',
+    'reader_left',
     'book_shared',
     'book_chunk',
     'transfer_request',
@@ -177,6 +180,16 @@ class RealtimeService {
   Timer? _recoveryTimer;
   int _recoveryAttempts = 0;
 
+  /// Supabase's per-client Presence window. See [_schedulePresenceTrack].
+  static const defaultPresenceWindow = Duration(seconds: 30);
+  final Duration _presenceWindow;
+  final int _maxPresenceUpdates;
+  final Duration _presenceCoalesceDelay;
+  final DateTime Function() _clock;
+  final List<DateTime> _presenceSends = [];
+  Timer? _presenceTimer;
+  bool _presencePending = false;
+
   final _presenceController =
       StreamController<Map<String, dynamic>>.broadcast();
   final _connectionController =
@@ -193,12 +206,23 @@ class RealtimeService {
   /// than the library's own 10s join timeout, which reports as trouble first.
   static const defaultSilentSubscribeTimeout = Duration(seconds: 15);
 
+  /// One below Supabase's limit of 5, so a final untrack still fits.
+  static const defaultMaxPresenceUpdatesPerWindow = 4;
+
+  /// Entering the reader changes several Presence fields in a row; send them
+  /// as one update.
+  static const defaultPresenceCoalesceDelay = Duration(milliseconds: 500);
+
   RealtimeService({
     RoomRealtimeChannelFactory? channelFactory,
     Future<void> Function()? beforeReconnect,
     Duration recoveryDelay = defaultRecoveryDelay,
     Duration maxRecoveryDelay = defaultMaxRecoveryDelay,
     Duration silentSubscribeTimeout = defaultSilentSubscribeTimeout,
+    int maxPresenceUpdatesPerWindow = defaultMaxPresenceUpdatesPerWindow,
+    Duration presenceCoalesceDelay = defaultPresenceCoalesceDelay,
+    Duration presenceWindow = defaultPresenceWindow,
+    DateTime Function()? clock,
   }) : _channelFactory =
            channelFactory ??
            ((channelName, presenceKey) => _SupabaseRoomRealtimeChannel(
@@ -211,7 +235,11 @@ class RealtimeService {
            (channelFactory == null ? _refreshRealtimeAuth : null),
        _recoveryDelay = recoveryDelay,
        _maxRecoveryDelay = maxRecoveryDelay,
-       _silentSubscribeTimeout = silentSubscribeTimeout;
+       _silentSubscribeTimeout = silentSubscribeTimeout,
+       _maxPresenceUpdates = maxPresenceUpdatesPerWindow,
+       _presenceCoalesceDelay = presenceCoalesceDelay,
+       _presenceWindow = presenceWindow,
+       _clock = clock ?? DateTime.now;
 
   /// A channel rebuilt with an expired token is refused, so make sure the
   /// socket carries a current one first.
@@ -251,9 +279,6 @@ class RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
-    int? pageEpoch,
-    int? pageSeq,
-    String? pageCfi,
   }) {
     final normalizedCode = roomCode.trim().toUpperCase();
     final normalizedTopicId = _normalizeTopicId(roomTopicId);
@@ -265,9 +290,6 @@ class RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
-      pageEpoch: pageEpoch,
-      pageSeq: pageSeq,
-      pageCfi: pageCfi,
     );
 
     return _serialize(() async {
@@ -283,9 +305,7 @@ class RealtimeService {
           _channel != null &&
           canReuseCurrentChannel) {
         _presencePayload = payload;
-        if (isConnected) {
-          await _trackCurrentPresence(_channel!, _generation);
-        }
+        if (isConnected) _schedulePresenceTrack();
         return;
       }
 
@@ -357,20 +377,13 @@ class RealtimeService {
     channel.subscribe((status, error) async {
       if (!_isCurrent(channel, generation)) return;
       if (status == RealtimeSubscribeStatus.subscribed) {
-        try {
-          await _trackCurrentPresence(channel, generation);
-          if (_isCurrent(channel, generation)) {
-            _recoveryTimer?.cancel();
-            _recoveryTimer = null;
-            _recoveryAttempts = 0;
-            _emitConnection(RealtimeConnectionStatus.connected);
-            debugPrint('Joined room channel: $channelName');
-          }
-        } catch (trackError) {
-          if (_isCurrent(channel, generation)) {
-            _channelInTrouble(generation, trackError);
-          }
-        }
+        _recoveryTimer?.cancel();
+        _recoveryTimer = null;
+        _recoveryAttempts = 0;
+        _emitConnection(RealtimeConnectionStatus.connected);
+        debugPrint('Joined room channel: $channelName');
+        // A new channel carries no Presence for this client yet.
+        _schedulePresenceTrack();
         return;
       }
       // Our own leave bumps the generation before it unsubscribes, so a
@@ -478,9 +491,6 @@ class RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
-    int? pageEpoch,
-    int? pageSeq,
-    String? pageCfi,
   }) {
     final payload = _buildPresencePayload(
       userId: userId,
@@ -490,17 +500,62 @@ class RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
-      pageEpoch: pageEpoch,
-      pageSeq: pageSeq,
-      pageCfi: pageCfi,
     );
 
     return _serialize(() async {
       _ensureOpen();
       _presencePayload = payload;
+      if (_channel != null && isConnected) _schedulePresenceTrack();
+    });
+  }
+
+  /// Sends the current Presence payload, coalesced and rate limited.
+  ///
+  /// Supabase closes the channel of a client that sends more than five
+  /// Presence updates (track or untrack) within 30 seconds
+  /// (`ClientPresenceRateLimitReached`). Callers update [_presencePayload] as
+  /// often as they like; only the latest value goes out, at most
+  /// [_maxPresenceUpdates] times per window.
+  void _schedulePresenceTrack() {
+    _presencePending = true;
+    if (_presenceTimer != null || _isClosed) return;
+    _presenceTimer = Timer(_presenceDelay(), () {
+      _presenceTimer = null;
+      unawaited(_flushPresence());
+    });
+  }
+
+  Duration _presenceDelay() {
+    final now = _clock();
+    _presenceSends.removeWhere(
+      (sentAt) => now.difference(sentAt) >= _presenceWindow,
+    );
+    var delay = _presenceCoalesceDelay;
+    if (_presenceSends.length >= _maxPresenceUpdates) {
+      final freeAt = _presenceSends.first.add(_presenceWindow).difference(now);
+      if (freeAt > delay) delay = freeAt;
+    }
+    return delay;
+  }
+
+  Future<void> _flushPresence() {
+    return _serialize(() async {
       final channel = _channel;
-      if (channel != null && isConnected) {
+      // Not connected: the next subscription schedules it again.
+      if (!_presencePending || channel == null || !isConnected || _isClosed) {
+        return;
+      }
+      if (_presenceDelay() > _presenceCoalesceDelay) {
+        _schedulePresenceTrack();
+        return;
+      }
+      _presencePending = false;
+      _presenceSends.add(_clock());
+      try {
         await _trackCurrentPresence(channel, _generation);
+      } catch (error) {
+        debugPrint('Presence update failed: $error');
+        _schedulePresenceTrack();
       }
     });
   }
@@ -553,6 +608,10 @@ class RealtimeService {
   }) async {
     _recoveryTimer?.cancel();
     _recoveryTimer = null;
+    _presenceTimer?.cancel();
+    _presenceTimer = null;
+    // A channel being replaced keeps its Presence owed to the new one.
+    _presencePending = !releaseSocket;
     final channel = _channel;
     if (channel == null) {
       _roomCode = null;
@@ -622,9 +681,6 @@ class RealtimeService {
     required String? bookHash,
     required bool isReading,
     required bool readerReady,
-    required int? pageEpoch,
-    required int? pageSeq,
-    required String? pageCfi,
   }) {
     return {
       'user_id': userId,
@@ -634,12 +690,6 @@ class RealtimeService {
       'book_hash': hasBook ? bookHash : null,
       'is_reading': isReading,
       'reader_ready': readerReady,
-      // Only a reader holds a shared position; see PageSyncService.
-      if (isReading && pageSeq != null && pageCfi != null) ...{
-        'page_epoch': pageEpoch ?? 0,
-        'page_seq': pageSeq,
-        'page_cfi': pageCfi,
-      },
     };
   }
 

@@ -109,6 +109,11 @@ void main() {
         currentRequest: request(const {'user-a', 'user-b'}),
       ),
       const PageSyncState(status: SyncStatus.turning),
+      const PageSyncState.idle().withReadersReconnecting([
+        'Reader user-b with a long name',
+        'Reader user-c with a long name',
+        'Reader user-d with a long name',
+      ]),
       const PageSyncState.error(
         'Waiting for Reader user-b with a long name, Reader user-c with a '
         'long name and Reader user-d with a long name to become ready',
@@ -134,6 +139,25 @@ void main() {
       );
       expect(tester.takeException(), isNull);
     }
+  });
+
+  testWidgets('a reader who dropped out is named while turns are held',
+      (tester) async {
+    // Regression: with the other reader briefly disconnected, the one left
+    // could turn freely, and the bar still read "1 readers ready".
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SyncStatusBar(
+          syncState: const PageSyncState.idle().withReadersReconnecting(
+            ['Bob'],
+          ),
+          onlineUsers: [readyUser('user-a')],
+        ),
+      ),
+    ));
+
+    expect(find.text('Waiting for Bob to reconnect...'), findsOneWidget);
+    expect(find.text('1 readers ready'), findsNothing);
   });
 
   testWidgets('a request waiting on this reader can be answered from the bar',

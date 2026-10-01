@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../models/page_sync_state.dart';
 import '../services/realtime_service.dart';
 
 export '../services/presence_merge.dart' show mergePresenceUsers;
@@ -77,7 +76,6 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
   String? _currentBookHash;
   bool _currentIsReading = false;
   bool _currentReaderReady = false;
-  SharedPosition? _currentPosition;
   bool _isAppActive = true;
   bool _hasPendingJoinAnnouncement = false;
   Timer? _joinAnnouncementRetryTimer;
@@ -160,9 +158,6 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
         bookHash: bookHash,
         isReading: _isAppActive && isReading,
         readerReady: _isAppActive && readerReady,
-        pageEpoch: _currentPosition?.epoch,
-        pageSeq: _currentPosition?.seq,
-        pageCfi: _currentPosition?.cfi,
       );
     } catch (error) {
       state = state.copyWith(
@@ -183,24 +178,13 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
     _currentIsReading = isReading;
     // Entering Reader does not mean the EPUB viewer can turn pages yet.
     // Only the chapters-loaded hook may set reader_ready=true.
-    if (!isReading) {
-      _currentReaderReady = false;
-      _currentPosition = null;
-    }
+    if (!isReading) _currentReaderReady = false;
     await _updatePresence();
   }
 
   Future<void> updateReaderReady(bool readerReady) async {
     if (_currentReaderReady == readerReady) return;
     _currentReaderReady = readerReady;
-    await _updatePresence();
-  }
-
-  /// The page this reader is on, so a reader that missed a commit (or just
-  /// arrived) can catch up from whoever is furthest along.
-  Future<void> updateReadingPosition(SharedPosition position) async {
-    if (_currentPosition == position) return;
-    _currentPosition = position;
     await _updatePresence();
   }
 
@@ -278,9 +262,6 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
       bookHash: _currentBookHash,
       isReading: _isAppActive && _currentIsReading,
       readerReady: _isAppActive && _currentReaderReady,
-      pageEpoch: _currentPosition?.epoch,
-      pageSeq: _currentPosition?.seq,
-      pageCfi: _currentPosition?.cfi,
     );
   }
 
@@ -307,7 +288,6 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
     _currentBookHash = null;
     _currentIsReading = false;
     _currentReaderReady = false;
-    _currentPosition = null;
     _isAppActive = true;
   }
 

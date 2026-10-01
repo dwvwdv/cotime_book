@@ -24,19 +24,12 @@ abstract interface class PageSyncTransport {
     required String event,
     required Map<String, dynamic> payload,
   });
-
-  /// Advertises this reader's shared position in its Presence meta.
-  Future<void> publishPosition(SharedPosition position);
 }
 
 class RealtimePageSyncTransport implements PageSyncTransport {
   final RealtimeService _realtimeService;
-  final Future<void> Function(SharedPosition position) _publishPosition;
 
-  const RealtimePageSyncTransport(
-    this._realtimeService, {
-    required Future<void> Function(SharedPosition position) publishPosition,
-  }) : _publishPosition = publishPosition;
+  const RealtimePageSyncTransport(this._realtimeService);
 
   @override
   Stream<Map<String, dynamic>> broadcastStream(String event) =>
@@ -60,10 +53,6 @@ class RealtimePageSyncTransport implements PageSyncTransport {
   }) {
     return _realtimeService.broadcast(event: event, payload: payload);
   }
-
-  @override
-  Future<void> publishPosition(SharedPosition position) =>
-      _publishPosition(position);
 }
 
 /// Everyone-must-agree page turning.
@@ -82,21 +71,41 @@ class RealtimePageSyncTransport implements PageSyncTransport {
 /// * **The requester is the only coordinator.** Followers vote and follow the
 ///   commit; they never cancel a request because *their* view of the room
 ///   differs from the requester's.
-/// * **Every reader advertises its position in Presence.** A lost commit, a
-///   reader that re-enters, a reader that reconnects: all of them converge by
-///   adopting the newest position anyone in the reader holds. Nothing has to
-///   be retried against the database to recover.
+/// * **Positions travel by Broadcast, never Presence.** Supabase closes the
+///   channel of a client that sends more than five Presence updates in 30
+///   seconds, and a page per Presence update hit that within a few turns.
+///   A reader that arrives or reconnects asks for positions; everyone
+///   answers, and also repeats their position every
+///   [defaultPositionAnnounceInterval]. A lost commit, a re-entry, a
+///   reconnect: all converge on the newest position anyone in the reader
+///   holds, without the database.
 /// * **Liveness is explicit.** The requester re-broadcasts its request while it
 ///   waits; a follower that stops hearing it drops it. No request can outlive
 ///   its requester, and a lost vote is re-sent on the next nudge.
 /// * **Only readers who are in the reader with the book loaded are asked.**
 ///   Someone in the lobby, or whose app is in the background, never blocks the
-///   room; they catch up from Presence when they come back.
+///   room; they catch up when they come back.
+/// * **A reader who drops out mid-book holds the room for a while.** Turning on
+///   without them would leave them on another page when they reconnect, so
+///   for [defaultReconnectGrace] nobody turns and the bar says who it is
+///   waiting for. Leaving on purpose (to the lobby, or the room) is
+///   announced and never holds anyone up.
 class PageSyncService {
   static const requestEvent = 'page_turn_request';
   static const voteEvent = 'page_turn_vote';
   static const commitEvent = 'page_turn_commit';
   static const cancelEvent = 'page_turn_cancel';
+  static const positionQueryEvent = 'page_position_query';
+  static const positionEvent = 'page_position';
+  static const readerLeftEvent = 'reader_left';
+  static const membershipEvent = 'membership_changed';
+
+  static const defaultPositionAnnounceInterval = Duration(seconds: 20);
+  static const defaultReconnectGrace = Duration(minutes: 1);
+
+  /// How long an announced departure outweighs Presence, which is rate
+  /// limited and may still show the reader for a while.
+  static const departureMemory = Duration(seconds: 45);
 
   /// How long a failure stays on screen before the bar returns to idle.
   ///
@@ -126,6 +135,21 @@ class PageSyncService {
   final Duration _turnTimeout;
   final Duration _errorAutoClearDelay;
   final int Function() _mintEpoch;
+  final Duration _positionAnnounceInterval;
+  final Duration _reconnectGrace;
+  final DateTime Function() _clock;
+
+  /// Other readers last seen in the reader: user id → nickname.
+  final Map<String, String> _knownReaders = {};
+
+  /// Readers who vanished from Presence while reading: user id → when.
+  final Map<String, DateTime> _awaySince = {};
+
+  /// Readers who said they left: user id → when.
+  final Map<String, DateTime> _departedAt = {};
+  Timer? _awayTimer;
+  Timer? _announceTimer;
+  bool _wasSelfPresent = false;
 
   final _stateController = StreamController<PageSyncState>.broadcast();
   final List<StreamSubscription<Map<String, dynamic>>> _subscriptions = [];
@@ -147,7 +171,6 @@ class PageSyncService {
   SharedPosition _position;
   bool _initialized = false;
   bool _disposed = false;
-  bool _presenceSynchronized = false;
   bool _viewerReady = false;
 
   /// Requester only: move the viewer one page, then call [completeTurn].
@@ -172,6 +195,9 @@ class PageSyncService {
     Duration turnTimeout = defaultTurnTimeout,
     Duration errorAutoClearDelay = defaultErrorAutoClearDelay,
     int Function()? mintEpoch,
+    Duration positionAnnounceInterval = defaultPositionAnnounceInterval,
+    Duration reconnectGrace = defaultReconnectGrace,
+    DateTime Function()? clock,
   }) : _transport = transport,
        _currentUserId = currentUserId,
        _currentNickname = currentNickname,
@@ -182,14 +208,16 @@ class PageSyncService {
        _followerLiveness = followerLiveness,
        _turnTimeout = turnTimeout,
        _errorAutoClearDelay = errorAutoClearDelay,
-       _mintEpoch = mintEpoch ?? _wallClockEpoch;
+       _mintEpoch = mintEpoch ?? _wallClockEpoch,
+       _positionAnnounceInterval = positionAnnounceInterval,
+       _reconnectGrace = reconnectGrace,
+       _clock = clock ?? DateTime.now;
 
   static int _wallClockEpoch() => DateTime.now().millisecondsSinceEpoch;
 
   Stream<PageSyncState> get stateStream => _stateController.stream;
   PageSyncState get currentState => _state;
   SharedPosition get position => _position;
-  bool get isPresenceSynchronized => _presenceSynchronized;
 
   void initialize() {
     if (_initialized || _disposed) return;
@@ -200,15 +228,20 @@ class PageSyncService {
       _transport.broadcastStream(voteEvent).listen(_onVote),
       _transport.broadcastStream(commitEvent).listen(_onCommit),
       _transport.broadcastStream(cancelEvent).listen(_onCancel),
+      _transport.broadcastStream(positionQueryEvent).listen(_onPositionQuery),
+      _transport.broadcastStream(positionEvent).listen(_onPosition),
+      _transport.broadcastStream(readerLeftEvent).listen(_onReaderLeft),
+      _transport.broadcastStream(membershipEvent).listen(_onMembership),
       _transport.presenceStream.listen(_onPresence),
     ]);
 
-    final users = _transport.getOnlineUsers();
-    _presenceSynchronized = _isSelfPresent(users);
+    _observeReaders(_transport.getOnlineUsers());
     // A reader entering mid-session starts from the database, which may be a
     // page behind whoever is already reading.
-    _absorbPresencePositions(users);
-    unawaited(_publishPosition());
+    unawaited(_askForPositions());
+    _announceTimer = Timer.periodic(_positionAnnounceInterval, (_) {
+      if (_transport.isConnected) unawaited(_announcePosition());
+    });
     _updateState(const PageSyncState.idle());
   }
 
@@ -244,9 +277,12 @@ class PageSyncService {
       _setError('Still connecting to the room');
       return false;
     }
-    // Someone is already further on: go there instead of turning from a page
-    // the room has left.
-    if (_absorbPresencePositions(users)) return false;
+    final away = _readersAway();
+    if (away.isNotEmpty) {
+      // Turning now would leave them on another page when they come back.
+      _setError('Waiting for ${_joinNames(away)} to reconnect');
+      return false;
+    }
 
     final request = PageTurnRequest(
       requestId: _uuid.v4(),
@@ -255,6 +291,7 @@ class PageSyncService {
       direction: direction,
       fromEpoch: _position.epoch,
       fromSeq: _position.seq,
+      fromCfi: _position.cfi,
       requestedAt: DateTime.now().toUtc(),
       confirmedUserIds: {_currentUserId},
       requiredUserIds: {..._readyReaderIds(users), _currentUserId},
@@ -369,7 +406,6 @@ class PageSyncService {
     _position = next;
     _finishRequest(request);
     unawaited(_broadcastCommit(request, next));
-    unawaited(_publishPosition());
     return next;
   }
 
@@ -389,13 +425,24 @@ class PageSyncService {
   }
 
   /// Leaves the reader. A request this client owns is withdrawn so nobody else
-  /// waits for it; anything else is resolved by Presence.
+  /// waits for it, and the departure is announced so nobody waits for this
+  /// reader to "reconnect" either.
   Future<void> leave() async {
+    if (_disposed) return;
     final request = _state.currentRequest;
-    if (_disposed || request == null) return;
-    _finishRequest(request);
-    if (request.requestedByUserId == _currentUserId) {
-      await _broadcastCancelQuietly(request, 'requester_left');
+    if (request != null) {
+      _finishRequest(request);
+      if (request.requestedByUserId == _currentUserId) {
+        await _broadcastCancelQuietly(request, 'requester_left');
+      }
+    }
+    try {
+      await _transport.broadcast(
+        event: readerLeftEvent,
+        payload: {'user_id': _currentUserId},
+      );
+    } catch (_) {
+      // Presence shows the departure too, only later.
     }
   }
 
@@ -429,12 +476,25 @@ class PageSyncService {
     }
 
     // The request may come from a page this reader has not reached yet.
-    _absorbPresencePositions(_transport.getOnlineUsers());
+    if (incoming.fromCfi.isNotEmpty) {
+      _adoptRemotePosition(
+        SharedPosition(
+          epoch: incoming.fromEpoch,
+          seq: incoming.fromSeq,
+          cfi: incoming.fromCfi,
+        ),
+      );
+    }
     if (_position.isPastPage(incoming.fromEpoch, incoming.fromSeq)) {
       if (incoming.requiredUserIds.contains(_currentUserId)) {
-        // Tell the requester it is behind; it catches up from Presence.
+        // Tell the requester it is behind, and where the room is.
         unawaited(
-          _sendVoteQuietly(incoming, accept: false, reason: 'out_of_sync'),
+          _sendVoteQuietly(
+            incoming,
+            accept: false,
+            reason: 'out_of_sync',
+            position: _position,
+          ),
         );
       }
       return;
@@ -503,8 +563,10 @@ class PageSyncService {
         : 'declined';
     _finishRequest(request, error: describeCancelReason(reason));
     unawaited(_broadcastCancelQuietly(request, reason));
-    if (reason == 'out_of_sync') {
-      _absorbPresencePositions(_transport.getOnlineUsers());
+    final position = payload['position'];
+    if (position is Map<String, dynamic>) {
+      final ahead = SharedPosition.fromWire(position);
+      if (ahead != null) _adoptRemotePosition(ahead);
     }
   }
 
@@ -557,15 +619,19 @@ class PageSyncService {
   void _onPresence(Map<String, dynamic> _) {
     if (_disposed) return;
     final users = _transport.getOnlineUsers();
-    final selfPresent = _isSelfPresent(users);
-    if (selfPresent) _presenceSynchronized = true;
-
-    _absorbPresencePositions(users);
-
     // An empty or partial view during a reconnect is not evidence that anyone
     // left. Pruning on it would let a requester turn alone.
+    final selfPresent = _transport.isConnected && _isSelfPresent(users);
+    if (selfPresent && !_wasSelfPresent) {
+      // Back on the channel: whatever was committed meanwhile is news.
+      unawaited(_askForPositions());
+    }
+    _wasSelfPresent = selfPresent;
+    if (!selfPresent) return;
+    _observeReaders(users);
+
     final request = _state.currentRequest;
-    if (request == null || !selfPresent) return;
+    if (request == null) return;
 
     if (request.requestedByUserId != _currentUserId) {
       if (!_isReading(request.requestedByUserId, users)) {
@@ -578,8 +644,25 @@ class PageSyncService {
     }
 
     if (_state.status != SyncStatus.requesting) return;
+    // Someone who dropped off the channel is not someone who stepped away:
+    // the room waits for them rather than turning without them.
+    final dropped = request.requiredUserIds
+        .where((id) => _awaySince.containsKey(id))
+        .toList();
+    if (dropped.isNotEmpty) {
+      _finishRequest(
+        request,
+        error: 'Waiting for ${_joinNames(dropped)} to reconnect',
+      );
+      unawaited(_broadcastCancelQuietly(request, 'reader_disconnected'));
+      return;
+    }
     final stillReading = request.requiredUserIds
-        .where((id) => id == _currentUserId || _isReading(id, users))
+        .where(
+          (id) =>
+              id == _currentUserId ||
+              (_isReading(id, users) && !_hasDeparted(id)),
+        )
         .toSet();
     if (stillReading.length == request.requiredUserIds.length) return;
     final updated = request.copyWith(requiredUserIds: stillReading);
@@ -646,22 +729,8 @@ class PageSyncService {
       if (wasTurning) onTurnAbandoned?.call(request.requestId);
     }
 
-    unawaited(_publishPosition());
     onPositionChanged?.call(candidate);
     return true;
-  }
-
-  bool _absorbPresencePositions(List<Map<String, dynamic>> users) {
-    SharedPosition? newest;
-    for (final user in users) {
-      if (user['user_id'] == _currentUserId || user['is_reading'] != true) {
-        continue;
-      }
-      final position = SharedPosition.fromPresence(user);
-      if (position == null) continue;
-      if (newest == null || position.isNewerThan(newest)) newest = position;
-    }
-    return newest != null && _adoptRemotePosition(newest);
   }
 
   /// Ends [request] locally, optionally leaving a message on the bar.
@@ -724,6 +793,7 @@ class PageSyncService {
     PageTurnRequest request, {
     required bool accept,
     String? reason,
+    SharedPosition? position,
   }) {
     return _transport.broadcast(
       event: voteEvent,
@@ -732,6 +802,7 @@ class PageSyncService {
         'user_id': _currentUserId,
         'accept': accept,
         if (reason != null) 'reason': reason,
+        if (position != null) 'position': position.toWire(),
       },
     );
   }
@@ -740,9 +811,15 @@ class PageSyncService {
     PageTurnRequest request, {
     required bool accept,
     String? reason,
+    SharedPosition? position,
   }) async {
     try {
-      await _sendVote(request, accept: accept, reason: reason);
+      await _sendVote(
+        request,
+        accept: accept,
+        reason: reason,
+        position: position,
+      );
     } catch (_) {
       // The next nudge asks again.
     }
@@ -797,13 +874,153 @@ class PageSyncService {
     }
   }
 
-  Future<void> _publishPosition() async {
+  Future<void> _askForPositions() async {
     if (_disposed) return;
     try {
-      await _transport.publishPosition(_position);
+      await _transport.broadcast(
+        event: positionQueryEvent,
+        payload: {'user_id': _currentUserId},
+      );
     } catch (_) {
-      // Re-sent with the next Presence update; the commit covers the gap.
+      // Asked again when this reader is back on the channel.
     }
+  }
+
+  Future<void> _announcePosition() async {
+    if (_disposed) return;
+    try {
+      await _transport.broadcast(
+        event: positionEvent,
+        payload: {'user_id': _currentUserId, ..._position.toWire()},
+      );
+    } catch (_) {
+      // The next announcement carries the same position.
+    }
+  }
+
+  void _onPositionQuery(Map<String, dynamic> payload) {
+    if (_disposed || payload['user_id'] == _currentUserId) return;
+    // The asker may be from the lobby's past; it is also back, so it is no
+    // longer away.
+    final userId = payload['user_id'];
+    if (userId is String) _departedAt.remove(userId);
+    unawaited(_announcePosition());
+  }
+
+  void _onPosition(Map<String, dynamic> payload) {
+    if (_disposed || payload['user_id'] == _currentUserId) return;
+    final position = SharedPosition.fromWire(payload);
+    if (position != null) _adoptRemotePosition(position);
+  }
+
+  void _onReaderLeft(Map<String, dynamic> payload) {
+    final userId = payload['user_id'];
+    if (_disposed || userId is! String || userId == _currentUserId) return;
+    _markDeparted(userId);
+  }
+
+  void _onMembership(Map<String, dynamic> payload) {
+    final userId = payload['user_id'];
+    if (_disposed ||
+        payload['action'] != 'leaving' ||
+        userId is! String ||
+        userId == _currentUserId) {
+      return;
+    }
+    _markDeparted(userId);
+  }
+
+  void _markDeparted(String userId) {
+    _departedAt[userId] = _clock();
+    _knownReaders.remove(userId);
+    if (_awaySince.remove(userId) != null) _refreshAway();
+  }
+
+  bool _hasDeparted(String userId) {
+    final at = _departedAt[userId];
+    if (at == null) return false;
+    if (_clock().difference(at) < departureMemory) return true;
+    _departedAt.remove(userId);
+    return false;
+  }
+
+  /// Keeps track of who was reading, to tell a dropped connection (wait for
+  /// them) from stepping away (do not).
+  void _observeReaders(List<Map<String, dynamic>> users) {
+    final now = _clock();
+    final present = <String>{};
+    for (final user in users) {
+      final userId = user['user_id'];
+      if (userId is! String || userId == _currentUserId) continue;
+      present.add(userId);
+      if (user['is_reading'] == true && !_hasDeparted(userId)) {
+        final nickname = user['nickname'];
+        _knownReaders[userId] = nickname is String && nickname.trim().isNotEmpty
+            ? nickname.trim()
+            : 'A reader';
+      } else {
+        // In the lobby, or the app went to the background: stepped away.
+        _knownReaders.remove(userId);
+      }
+      _awaySince.remove(userId);
+    }
+    for (final userId in _knownReaders.keys) {
+      if (!present.contains(userId) && !_hasDeparted(userId)) {
+        _awaySince.putIfAbsent(userId, () => now);
+      }
+    }
+    _refreshAway();
+  }
+
+  /// Readers still inside their reconnect grace, oldest first.
+  List<String> _readersAway() {
+    final now = _clock();
+    _awaySince.removeWhere((userId, since) {
+      final expired = now.difference(since) >= _reconnectGrace;
+      // Gone for good as far as this session is concerned.
+      if (expired) _knownReaders.remove(userId);
+      return expired;
+    });
+    return _awaySince.keys.toList();
+  }
+
+  void _refreshAway() {
+    _awayTimer?.cancel();
+    _awayTimer = null;
+    final away = _readersAway();
+    if (away.isNotEmpty) {
+      final now = _clock();
+      final next = _awaySince.values
+          .map((since) => since.add(_reconnectGrace).difference(now))
+          .reduce((a, b) => a < b ? a : b);
+      _awayTimer = Timer(next + const Duration(milliseconds: 1), _refreshAway);
+    }
+    final names = _awayNames();
+    if (!_listEquals(names, _state.readersReconnecting)) {
+      _updateState(_state);
+    }
+  }
+
+  List<String> _awayNames() {
+    final names = [
+      for (final userId in _readersAway()) _knownReaders[userId] ?? 'A reader',
+    ]..sort();
+    return names;
+  }
+
+  String _joinNames(List<String> userIdsOrNames) {
+    final names = [
+      for (final value in userIdsOrNames) _knownReaders[value] ?? value,
+    ]..sort();
+    return names.join(', ');
+  }
+
+  static bool _listEquals(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   // ---------------------------------------------------------------------------
@@ -817,7 +1034,8 @@ class PageSyncService {
         if (user['user_id'] is String &&
             user['user_id'] != _currentUserId &&
             user['is_reading'] == true &&
-            user['reader_ready'] == true)
+            user['reader_ready'] == true &&
+            !_hasDeparted(user['user_id'] as String))
           user['user_id'] as String,
     };
   }
@@ -888,6 +1106,7 @@ class PageSyncService {
 
   void _updateState(PageSyncState newState) {
     if (_disposed) return;
+    newState = newState.withReadersReconnecting(_awayNames());
     _state = newState;
     if (!_stateController.isClosed) {
       _stateController.add(newState);
@@ -914,6 +1133,8 @@ class PageSyncService {
     _cancelRequestTimers();
     _errorAutoClearTimer?.cancel();
     _errorAutoClearTimer = null;
+    _awayTimer?.cancel();
+    _announceTimer?.cancel();
     for (final subscription in _subscriptions) {
       await subscription.cancel();
     }
@@ -937,6 +1158,7 @@ String describeCancelReason(String reason) {
     'turn_failed':
         'The page did not move — this may be the start or end of the book',
     'requester_busy': 'Page turn cancelled: the page was still loading',
+    'reader_disconnected': 'Page turn paused: a reader is reconnecting',
   };
 
   final known = messages[reason];

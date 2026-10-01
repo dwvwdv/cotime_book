@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:cotime_book/models/page_sync_state.dart';
 import 'package:cotime_book/providers/presence_provider.dart';
 import 'package:cotime_book/services/realtime_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -42,83 +41,6 @@ void main() {
     expect(alice['ready_book_hashes'], ['book-a']);
     expect(alice['is_reading'], isTrue);
     expect(alice['reader_ready'], isTrue);
-  });
-
-  test('a merged user carries the newest page among their reading metas', () {
-    final users = mergePresenceUsers([
-      {
-        'user_id': 'alice',
-        'is_reading': true,
-        'page_seq': 4,
-        'page_cfi': 'p4',
-        'online_at': '2026-08-12T01:00:00Z',
-      },
-      {
-        'user_id': 'alice',
-        'is_reading': true,
-        'page_seq': 6,
-        'page_cfi': 'p6',
-        'online_at': '2026-08-12T00:00:00Z',
-      },
-      {
-        // A lobby connection's stale page must not win.
-        'user_id': 'alice',
-        'is_reading': false,
-        'page_seq': 9,
-        'page_cfi': 'p9',
-        'online_at': '2026-08-12T02:00:00Z',
-      },
-    ]);
-
-    expect(users.single['page_seq'], 6);
-    expect(users.single['page_cfi'], 'p6');
-  });
-
-  test('a newer reading stretch outranks a higher page count', () {
-    // A meta from an earlier stretch of reading (lower epoch) can carry a
-    // larger seq; it is still the older page.
-    final users = mergePresenceUsers([
-      {
-        'user_id': 'alice',
-        'is_reading': true,
-        'page_epoch': 1,
-        'page_seq': 10,
-        'page_cfi': 'old',
-        'online_at': '2026-08-12T01:00:00Z',
-      },
-      {
-        'user_id': 'alice',
-        'is_reading': true,
-        'page_epoch': 2,
-        'page_seq': 1,
-        'page_cfi': 'new',
-        'online_at': '2026-08-12T00:00:00Z',
-      },
-    ]);
-
-    expect(users.single['page_epoch'], 2);
-    expect(users.single['page_cfi'], 'new');
-  });
-
-  test('the reading position is published while reading and dropped after',
-      () async {
-    final realtime = _RecordingRealtimeService();
-    final notifier = PresenceNotifier(realtime);
-    await notifier.joinRoom(
-      roomCode: 'ABC234',
-      userId: 'alice',
-      nickname: 'Alice',
-      avatarColorIndex: 1,
-    );
-    await notifier.updateIsReading(true);
-    await notifier.updateReadingPosition(
-      const SharedPosition(seq: 3, cfi: 'p3'),
-    );
-    expect(realtime.lastPresence['page_seq'], 3);
-    expect(realtime.lastPresence['page_cfi'], 'p3');
-
-    await notifier.updateIsReading(false);
-    expect(realtime.lastPresence['page_seq'], isNull);
   });
 
   test('reader readiness is explicit and clears on reader exit', () async {
@@ -321,9 +243,6 @@ class _DeferredConnectionRealtimeService extends RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
-    int? pageEpoch,
-    int? pageSeq,
-    String? pageCfi,
   }) async {}
 
   @override
@@ -378,9 +297,6 @@ class _RecordingRealtimeService extends RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
-    int? pageEpoch,
-    int? pageSeq,
-    String? pageCfi,
   }) async {
     _record(
       userId: userId,
@@ -388,8 +304,6 @@ class _RecordingRealtimeService extends RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
-      pageSeq: pageSeq,
-      pageCfi: pageCfi,
     );
   }
 
@@ -402,9 +316,6 @@ class _RecordingRealtimeService extends RealtimeService {
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
-    int? pageEpoch,
-    int? pageSeq,
-    String? pageCfi,
   }) async {
     _record(
       userId: userId,
@@ -412,8 +323,6 @@ class _RecordingRealtimeService extends RealtimeService {
       bookHash: bookHash,
       isReading: isReading,
       readerReady: readerReady,
-      pageSeq: pageSeq,
-      pageCfi: pageCfi,
     );
   }
 
@@ -432,8 +341,6 @@ class _RecordingRealtimeService extends RealtimeService {
     required String? bookHash,
     required bool isReading,
     required bool readerReady,
-    int? pageSeq,
-    String? pageCfi,
   }) {
     lastPresence = {
       'user_id': userId,
@@ -441,8 +348,6 @@ class _RecordingRealtimeService extends RealtimeService {
       'book_hash': bookHash,
       'is_reading': isReading,
       'reader_ready': readerReady,
-      'page_seq': pageSeq,
-      'page_cfi': pageCfi,
     };
   }
 }

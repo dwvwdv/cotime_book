@@ -116,9 +116,13 @@ void main() {
       },
     );
 
-    test('a lost commit still reaches the follower through Presence', () async {
+    test('a lost commit still reaches the follower', () async {
       final room = FakeRoom();
-      final alice = room.join('alice', 'Alice');
+      final alice = room.join(
+        'alice',
+        'Alice',
+        positionAnnounceInterval: const Duration(milliseconds: 20),
+      );
       final bob = room.join('bob', 'Bob');
       addTearDown(room.dispose);
       await flush();
@@ -128,11 +132,43 @@ void main() {
       await flush();
       await bob.service.confirmPageTurn();
       await flush();
-
       expect(alice.service.position.seq, 1);
+
+      // Alice repeats where she is; Bob follows.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await flush();
       expect(bob.service.position, alice.service.position);
       expect(bob.service.currentState.status, SyncStatus.idle);
     });
+
+    test(
+      'a follower that missed a commit catches up from the next request',
+      () async {
+        final room = FakeRoom();
+        final alice = room.join('alice', 'Alice');
+        final bob = room.join('bob', 'Bob');
+        addTearDown(room.dispose);
+        await flush();
+
+        room.dropEvents.add(PageSyncService.commitEvent);
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+        await flush();
+        await bob.service.confirmPageTurn();
+        await flush();
+        room.dropEvents.clear();
+        expect(bob.service.position.seq, 0);
+
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+        await flush();
+
+        // Bob was moved to Alice's page before being asked about the next.
+        expect(bob.displayed.single, alice.service.position);
+        expect(bob.service.currentState.status, SyncStatus.confirming);
+        await bob.service.confirmPageTurn();
+        await flush();
+        expect(bob.service.position.seq, 2);
+      },
+    );
 
     test('a lost vote is sent again when the requester nudges', () async {
       final room = FakeRoom();
@@ -239,7 +275,7 @@ void main() {
       await flush();
       expect(bob.service.currentState.status, SyncStatus.confirming);
 
-      room.leave('alice');
+      room.setPresence('alice', isReading: false);
       await flush();
 
       expect(bob.service.currentState.status, SyncStatus.idle);
@@ -307,6 +343,7 @@ void main() {
         'direction': 'next',
         'from_epoch': 0,
         'from_seq': 2,
+        'from_cfi': 'p2',
         'requested_at': DateTime.now().toUtc().toIso8601String(),
         'required_users': ['alice', 'bob'],
       });
@@ -547,9 +584,11 @@ void main() {
         final bob = room.join(
           'bob',
           'Bob',
-          isReading: false, // asleep
           initialPosition: const SharedPosition(epoch: 5, seq: 10, cfi: 'p10'),
         );
+        await flush();
+        room.setOnline('bob', false); // asleep
+        await flush();
         final alice = room.join('alice', 'Alice', mintEpoch: () => 100);
         addTearDown(room.dispose);
         await flush();
@@ -563,7 +602,7 @@ void main() {
         expect(alice.service.position.epoch, 100);
         expect(alice.service.position.seq, 2);
 
-        room.setPresence('bob', isReading: true, readerReady: true);
+        room.setOnline('bob', true);
         await flush();
 
         expect(alice.service.position.seq, 2, reason: 'Alice stays put');
@@ -571,6 +610,96 @@ void main() {
         expect(bob.service.position, alice.service.position);
       },
     );
+
+    test('a reader who drops out holds the room until they are back', () async {
+      // Turning on without them would leave them on another page when they
+      // reconnect. Not silent: the bar names who it is waiting for.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      room.setOnline('bob', false);
+      await flush();
+
+      expect(alice.service.currentState.readersReconnecting, ['Bob']);
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isFalse,
+      );
+      expect(
+        alice.service.currentState.errorMessage,
+        'Waiting for Bob to reconnect',
+      );
+      expect(alice.service.position.seq, 0);
+
+      room.setOnline('bob', true);
+      await flush();
+      expect(alice.service.currentState.readersReconnecting, isEmpty);
+    });
+
+    test('the hold ends once the reconnect grace has passed', () async {
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        reconnectGrace: const Duration(milliseconds: 40),
+      );
+      room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      room.setOnline('bob', false);
+      await flush();
+      expect(alice.service.currentState.readersReconnecting, ['Bob']);
+
+      await Future<void>.delayed(const Duration(milliseconds: 70));
+      expect(alice.service.currentState.readersReconnecting, isEmpty);
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isTrue,
+      );
+    });
+
+    test('leaving on purpose never holds anyone up', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      await bob.service.leave();
+      await flush();
+      room.setOnline('bob', false);
+      await flush();
+
+      expect(alice.service.currentState.readersReconnecting, isEmpty);
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isTrue,
+      );
+    });
+
+    test('a reader dropping out mid-request pauses the turn', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+      await flush();
+      room.setOnline('bob', false);
+      await flush();
+
+      expect(alice.service.position.seq, 0, reason: 'not turned without Bob');
+      expect(alice.service.currentState.currentRequest, isNull);
+      expect(
+        alice.service.currentState.errorMessage,
+        'Waiting for Bob to reconnect',
+      );
+    });
 
     test('readers converge on one page after conflicting commits', () async {
       final room = FakeRoom();
@@ -600,6 +729,7 @@ void main() {
       'superseded',
       'turn_failed',
       'requester_busy',
+      'reader_disconnected',
       'declined_by_Bob',
       'something_new',
     ]) {
@@ -658,6 +788,8 @@ class FakeRoom {
     Duration followerLiveness = const Duration(minutes: 5),
     Duration turnTimeout = const Duration(minutes: 5),
     Duration errorAutoClearDelay = const Duration(hours: 1),
+    Duration positionAnnounceInterval = const Duration(minutes: 5),
+    Duration reconnectGrace = const Duration(minutes: 1),
     int Function()? mintEpoch,
   }) {
     if (trackPresence) {
@@ -680,8 +812,10 @@ class FakeRoom {
       turnTimeout: turnTimeout,
       errorAutoClearDelay: errorAutoClearDelay,
       mintEpoch: mintEpoch ?? () => 1,
+      positionAnnounceInterval: positionAnnounceInterval,
+      reconnectGrace: reconnectGrace,
     );
-    final reader = FakeReader(service, transport);
+    final reader = FakeReader(userId, nickname, service, transport);
     var localPage = 0;
     service.onExecuteTurn = (command) {
       turnsExecuted++;
@@ -712,12 +846,21 @@ class FakeRoom {
     _emitPresence();
   }
 
-  void publishPosition(String userId, SharedPosition position) {
-    final meta = _presence[userId];
-    if (meta == null) return;
-    meta['page_epoch'] = position.epoch;
-    meta['page_seq'] = position.seq;
-    meta['page_cfi'] = position.cfi;
+  /// The device drops off the channel (or comes back): its Presence goes and
+  /// nothing reaches it or leaves it.
+  void setOnline(String userId, bool online, {bool isReading = true}) {
+    if (online) {
+      offline.remove(userId);
+      _presence[userId] = {
+        'user_id': userId,
+        'nickname': readers[userId]!.nickname,
+        'is_reading': isReading,
+        'reader_ready': isReading,
+      };
+    } else {
+      offline.add(userId);
+      _presence.remove(userId);
+    }
     _emitPresence();
   }
 
@@ -733,14 +876,17 @@ class FakeRoom {
   }
 
   List<Map<String, dynamic>> presenceFor(String userId) {
-    if (_blackedOut.contains(userId)) return const [];
+    if (_blackedOut.contains(userId) || offline.contains(userId)) {
+      return const [];
+    }
     return [for (final meta in _presence.values) Map.of(meta)];
   }
 
   void deliver(String sender, String event, Map<String, dynamic> payload) {
     sent.add(SentEvent(sender, event, Map.of(payload)));
-    if (dropEvents.contains(event)) return;
+    if (dropEvents.contains(event) || offline.contains(sender)) return;
     for (final reader in readers.values.toList()) {
+      if (offline.contains(reader.userId)) continue;
       final copy = Map<String, dynamic>.from(payload);
       scheduleMicrotask(() => reader.transport.receive(event, copy));
     }
@@ -772,12 +918,14 @@ class FakeRoom {
 }
 
 class FakeReader {
+  final String userId;
+  final String nickname;
   final PageSyncService service;
   final FakeTransport transport;
   final List<SharedPosition> displayed = [];
   final List<String> abandoned = [];
 
-  FakeReader(this.service, this.transport);
+  FakeReader(this.userId, this.nickname, this.service, this.transport);
 }
 
 class FakeTransport implements PageSyncTransport {
@@ -810,11 +958,6 @@ class FakeTransport implements PageSyncTransport {
     required Map<String, dynamic> payload,
   }) async {
     room.deliver(userId, event, payload);
-  }
-
-  @override
-  Future<void> publishPosition(SharedPosition position) async {
-    room.publishPosition(userId, position);
   }
 
   void receive(String event, Map<String, dynamic> payload) {

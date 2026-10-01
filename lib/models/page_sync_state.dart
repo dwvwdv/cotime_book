@@ -68,11 +68,11 @@ class SharedPosition {
     );
   }
 
-  /// Reads the position a reader advertises in its Presence meta.
-  static SharedPosition? fromPresence(Map<String, dynamic> user) {
-    final epoch = user['page_epoch'] ?? 0;
-    final seq = user['page_seq'];
-    final cfi = user['page_cfi'];
+  /// Reads a position from a broadcast payload (`epoch`, `seq`, `cfi`).
+  static SharedPosition? fromWire(Map<String, dynamic> payload) {
+    final epoch = payload['epoch'] ?? 0;
+    final seq = payload['seq'];
+    final cfi = payload['cfi'];
     if (epoch is! int ||
         epoch < 0 ||
         seq is! int ||
@@ -82,6 +82,8 @@ class SharedPosition {
     }
     return SharedPosition(epoch: epoch, seq: seq, cfi: cfi);
   }
+
+  Map<String, dynamic> toWire() => {'epoch': epoch, 'seq': seq, 'cfi': cfi};
 
   @override
   bool operator ==(Object other) =>
@@ -124,6 +126,10 @@ class PageTurnRequest {
   /// stale by definition.
   final int fromEpoch;
   final int fromSeq;
+
+  /// Where the requester's page is, so a follower that missed a commit can go
+  /// there before answering. Display only, like every CFI.
+  final String fromCfi;
   final DateTime requestedAt;
   final Set<String> confirmedUserIds;
   final Set<String> requiredUserIds;
@@ -135,6 +141,7 @@ class PageTurnRequest {
     required this.direction,
     this.fromEpoch = 0,
     required this.fromSeq,
+    this.fromCfi = '',
     required this.requestedAt,
     required this.confirmedUserIds,
     required this.requiredUserIds,
@@ -170,6 +177,7 @@ class PageTurnRequest {
       direction: direction,
       fromEpoch: fromEpoch,
       fromSeq: fromSeq,
+      fromCfi: fromCfi,
       requestedAt: requestedAt,
       confirmedUserIds: confirmedUserIds ?? this.confirmedUserIds,
       requiredUserIds: requiredUserIds ?? this.requiredUserIds,
@@ -184,6 +192,7 @@ class PageTurnRequest {
       'direction': pageTurnDirectionToWire(direction),
       'from_epoch': fromEpoch,
       'from_seq': fromSeq,
+      'from_cfi': fromCfi,
       'requested_at': requestedAt.toUtc().toIso8601String(),
       'required_users': requiredUserIds.toList()..sort(),
     };
@@ -235,6 +244,7 @@ class PageTurnRequest {
       direction: direction,
       fromEpoch: fromEpoch,
       fromSeq: fromSeq,
+      fromCfi: json['from_cfi'] is String ? json['from_cfi'] as String : '',
       requestedAt: requestedAt,
       confirmedUserIds: {requestedByUserId},
       requiredUserIds: requiredUserIds,
@@ -256,21 +266,37 @@ class PageSyncState {
   final PageTurnRequest? currentRequest;
   final String? errorMessage;
 
+  /// Readers who dropped off mid-book and are within their reconnect grace.
+  /// Nobody can turn while this is not empty.
+  final List<String> readersReconnecting;
+
   const PageSyncState({
     this.status = SyncStatus.idle,
     this.currentRequest,
     this.errorMessage,
+    this.readersReconnecting = const [],
   });
 
   const PageSyncState.idle()
     : status = SyncStatus.idle,
       currentRequest = null,
-      errorMessage = null;
+      errorMessage = null,
+      readersReconnecting = const [];
 
   const PageSyncState.error(String message)
     : status = SyncStatus.idle,
       currentRequest = null,
-      errorMessage = message;
+      errorMessage = message,
+      readersReconnecting = const [];
+
+  PageSyncState withReadersReconnecting(List<String> names) {
+    return PageSyncState(
+      status: status,
+      currentRequest: currentRequest,
+      errorMessage: errorMessage,
+      readersReconnecting: List.unmodifiable(names),
+    );
+  }
 
   int get validConfirmationCount => currentRequest?.validConfirmationCount ?? 0;
 
@@ -287,6 +313,7 @@ class PageSyncState {
           ? null
           : currentRequest ?? this.currentRequest,
       errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
+      readersReconnecting: readersReconnecting,
     );
   }
 }
