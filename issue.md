@@ -457,6 +457,31 @@
     只統一頁框、不統一字型時第 1 頁就分歧——字型那一半是必要的。CI 沒有跑它
     （需要 Node + Playwright），改到排版相關程式時要手動跑。
 
+### [x] #21 一方翻頁了，另一方還停在原頁（但房間的頁序已經同步）
+
+- **檔案**：`assets/reader/shared_page.js`
+- **症狀**：有時候按下一頁，其中一台翻了、另一台沒動；同步列顯示一切正常
+  （`seq` 已經前進），只是沒翻的那台畫面還是同一頁。#20 之前就有，讀中文書時特別常見。
+  長段落裡還會出現另一種情況：翻頁的那台自己的畫面動了，卻在 4 秒後顯示
+  「The page did not move — this may be the start or end of the book」，其他人都沒動。
+- **原因**：與 #20 不同的根因。epub.js 用「頁面上第一個可見的詞」作為這一頁的 CFI，
+  而它找詞的方式是**用空白切開文字節點**（`Mapping.splitTextNodeIntoRanges`）。
+  中文沒有空白，一整段就是一個「詞」：
+  - 新的一頁若從段落中間開始，頁首 CFI 會指向**段落開頭**——那在上一頁。
+    requester 翻到了新頁，commit 給大家的卻是上一頁的位置；follower `display()` 它，
+    就停在原本那一頁。共識協定本身沒有錯，`seq` 確實前進了。
+  - 一段超過一頁時，段落內的每一頁都回報同一個頁首 CFI。reader 用「落點 CFI 與出發點相同」
+    判斷 relocate 只是重新排版、不是翻頁（`_onRelocated`），於是 requester 的翻頁永遠不會完成，
+    turn timeout 後放棄——但它的 viewer 其實已經移動了。
+- **修法**：`shared_page.js` 把 epub.js 的切詞改成**逐字元**（跳過空白、以 code point 為單位，
+  不會切開 surrogate pair），讓每一頁都以它第一個可見字元命名。只換掉 epub.js 用來找頁首／頁尾的
+  那一個方法，在版面套用時安裝；follower 的 `display()` 不需要改。
+- **測試**：Dart 這一側沒有行為改變，修正只在 WebView 裡，`flutter test` 碰不到（見 #H）。
+  回歸測試在 `tool/shared_page_check/check.js`：測試書加入超過一頁的中文段落，並模擬協定——
+  平板 `display()` 手機回報的每個頁首，檢查是否真的落在那一頁。
+  修正前：120 頁只產生 89 個不同的頁首（31 頁與前一頁同名），follower 只落對 74/89；
+  修正後 120 頁 120 個頁首，follower 120/120。可用 `SHARED_PAGE_SCRIPT=<舊版 script>` 重跑比較。
+
 ### [x] #A 不同螢幕尺寸的裝置之間 CFI 對不起來
 
 - 由 #14 的重新設計解決：共識比對 `seq`，不比對 CFI 字串。

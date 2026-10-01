@@ -3,7 +3,9 @@
 // flutter_epub_viewer in Chromium, with the app's own shared_page.js and
 // stylesheet, on two "devices" that differ in screen size, pixel density and
 // system fonts, turns through the whole book on both and compares where every
-// page starts.
+// page starts. Then it plays the page-turn protocol: the tablet display()s
+// each page start the phone reports, as a follower does with a commit, and
+// checks it lands on that page rather than the one before (issue #21).
 //
 //   flutter pub get
 //   node tool/shared_page_check/check.js        (from the repo root)
@@ -38,7 +40,9 @@ execFileSync('python3', [path.join(__dirname, 'make_epub.py'), path.join(work, '
 
 const rules = JSON.parse(fs.readFileSync(path.join(work, 'rules.json'), 'utf8'));
 const book = [...fs.readFileSync(path.join(work, 'book.epub'))];
-const script = path.join(root, 'assets/reader/shared_page.js');
+// SHARED_PAGE_SCRIPT runs another copy, e.g. the one before a change.
+const script =
+  process.env.SHARED_PAGE_SCRIPT || path.join(root, 'assets/reader/shared_page.js');
 
 // `sysFont` is what the device would draw unstyled text in. The app's rules
 // fall back to the generic `serif` for CJK; Chromium maps that to the same
@@ -67,7 +71,7 @@ function rulesFor(device) {
   return { ...rules, 'body, body *': text };
 }
 
-async function pageStarts(browser, device, shared, turns) {
+async function openBook(browser, device, shared) {
   const context = await browser.newContext({
     viewport: device.viewport,
     deviceScaleFactor: device.deviceScaleFactor,
@@ -107,6 +111,11 @@ async function pageStarts(browser, device, shared, turns) {
       },
     );
   }
+  return { context, tab };
+}
+
+async function pageStarts(browser, device, shared, turns) {
+  const { context, tab } = await openBook(browser, device, shared);
   const starts = [];
   for (let i = 0; i < turns; i++) {
     await tab.waitForTimeout(60);
@@ -120,6 +129,31 @@ async function pageStarts(browser, device, shared, turns) {
   }
   await context.close();
   return starts;
+}
+
+/// How many of [starts] a follower on [device] does not land on.
+async function missedCommits(browser, device, starts) {
+  const { context, tab } = await openBook(browser, device, true);
+  // Let the opening display report before listening for the next one.
+  await tab.waitForTimeout(300);
+  let missed = 0;
+  for (const cfi of new Set(starts)) {
+    const landed = await tab.evaluate(
+      (cfi) => new Promise((resolve) => {
+        rendition.once('relocated', () => {
+          setTimeout(() => resolve(rendition.location.start.cfi), 60);
+        });
+        toCfi(cfi);
+      }),
+      cfi,
+    );
+    if (landed !== cfi) {
+      if (missed === 0) console.log(`  first miss: ${cfi} showed ${landed}`);
+      missed++;
+    }
+  }
+  await context.close();
+  return { missed, of: new Set(starts).size };
 }
 
 (async () => {
@@ -136,6 +170,11 @@ async function pageStarts(browser, device, shared, turns) {
       const i = a.findIndex((cfi, j) => cfi !== b[j]);
       console.log(`  first difference at page ${i}: ${a[i]} vs ${b[i]}`);
       failed = true;
+    }
+    if (shared) {
+      const { missed, of } = await missedCommits(browser, devices.tablet, a);
+      console.log(`follower    : landed on ${of - missed}/${of} reported pages`);
+      if (missed > 0) failed = true;
     }
   }
   await browser.close();

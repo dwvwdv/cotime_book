@@ -1,11 +1,16 @@
 # A book with no fonts of its own, mixing English and Chinese paragraphs:
-# the case where every device falls back to its own system font.
+# the case where every device falls back to its own system font. Some Chinese
+# paragraphs run longer than a page.
 import sys
 import zipfile, random
 random.seed(7)
 words = "the book pages were scanned and converted to EPUB format automatically this process relies on optical character recognition and is somewhat susceptible to errors weird characters non-words incorrect guesses at structure numbering internationalization extraordinary".split()
 cjk = "這本書是由網際網路檔案館以電子書格式製作的書頁經過掃描並自動轉換為電子書格式，這個過程依賴光學字元辨識，因此容易出錯。「引號」與（括號）、標點！？"
 def para(i):
+    # Longer than a page: a page that starts inside it has no space to start
+    # a "word" at (issue #21).
+    if i % 9 == 8:
+        return "".join(random.choice(cjk) for _ in range(random.randint(900, 1600)))
     if i % 3 == 2:
         return "".join(random.choice(cjk) for _ in range(random.randint(60, 220)))
     return " ".join(random.choice(words) for _ in range(random.randint(30, 120))).capitalize() + "."
