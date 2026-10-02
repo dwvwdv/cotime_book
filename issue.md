@@ -601,6 +601,19 @@
   `rooms deleted while the app was closed are not listed`、`being offline does not empty the recent list`；
   `test/local_store_test.dart` → `a room entered while the check is in flight is not pruned`
 
+### [x] #U Google Play 拒收上傳：最低 SDK 版本為 21
+
+- **檔案**：`android/app/build.gradle`
+- **症狀**：上傳到 Google Play 被拒：「Play 自動防護功能要求的 SDK 版本為 24 以上。
+  您上傳的應用程式套件最低 SDK 版本為 21。」
+- **原因**：`defaultConfig` 的 `minSdk` 寫死為 21（與 Flutter 3.32 的預設值相同）。
+- **修法**：`minSdk = 24`（Android 7.0）。程式碼裡沒有任何 API 21–23 專用的分支，
+  所以不需要其他調整；代價是 Android 5.0–6.0 的裝置無法再安裝。
+  被拒的上傳不會佔用版本碼，但若 Play Console 顯示該版本碼已被使用，觸發
+  `publish-play-store.yml` 時要填新的 `version_code`（或調 `pubspec.yaml` 的 `+N`）。
+- **測試**：`test/android_build_config_test.dart` →
+  `the Android app targets at least API 24 for Play Auto Protect`
+
 ---
 
 ## 開放中
