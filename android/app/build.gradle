@@ -26,7 +26,9 @@ android {
 
     defaultConfig {
         applicationId = "com.lazyrhythm.cotime_book"
-        minSdk = 21
+        // Google Play 的自動防護（Play Auto Protect）拒收 minSdk < 24 的套件（issue #U）。
+        // 不要改回 flutter.minSdkVersion——Flutter 3.32 的預設值是 21。
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
