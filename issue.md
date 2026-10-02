@@ -614,6 +614,27 @@
 - **測試**：`test/android_build_config_test.dart` →
   `the Android app targets at least API 24 for Play Auto Protect`
 
+### [x] #V Google Play 拒收上傳：目標 API 級別為 35
+
+- **檔案**：`android/app/build.gradle`、`android/settings.gradle`、
+  `android/gradle/wrapper/gradle-wrapper.properties`
+- **症狀**：上傳到 Google Play 被拒：「您的應用程式目前的目標 API 級別是 35，
+  但目標 API 級別至少須為 36。」
+- **原因**：`targetSdk` / `compileSdk` 用的是 `flutter.targetSdkVersion` /
+  `flutter.compileSdkVersion`，Flutter 3.32 的值都是 35。
+- **修法**：
+  - `compileSdk = 36`、`targetSdk = 36`，寫死，不再跟 Flutter 的預設值走。
+  - AGP 8.1.0 → 8.9.1：API 36 官方支援的最低 AGP 版本（8.1 本來就已經被 Flutter 警告即將停止支援）。
+  - AGP 8.9 需要 Gradle 8.11.1 以上。repo 原本沒有 wrapper，由 Flutter 注入預設的 Gradle 8.12；
+    現在把 `gradle-wrapper.properties` 釘在 8.12 進 repo，避免日後 Flutter 換預設值而默默不相容。
+- **Android 16（API 36）行為變更的檢查**：
+  - 返回鍵改走 predictive back，`onBackPressed` 不再被呼叫——Flutter 3.32 的 `FlutterActivity`
+    已經在 framework 要處理返回時註冊 `OnBackInvokedCallback`，各畫面的 `PopScope` 不受影響。
+  - edge-to-edge 不能再 opt out——`styles.xml` 本來就沒有 opt out，API 35 時已是 edge-to-edge。
+  - 大螢幕（最短邊 ≥ 600dp）忽略方向與可調整大小的限制——App 沒有鎖方向，不受影響。
+- **測試**：`test/android_build_config_test.dart` →
+  `the Android app targets API 36 as Google Play requires`
+
 ---
 
 ## 開放中
