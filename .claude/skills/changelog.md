@@ -9,6 +9,13 @@
 - 同一個 PR 只有一個版本條目（見 `version-update.md`）；review 修復追加在同一條目下。
 - 只動文件、`.claude/`、`.github/` 的 PR 不 bump 版號，不必新增條目。
 
+### v1.0.1+5 (2026-10-02)
+
+版號規則建立後的第一個版本，起點從 1.0.0+4 往上加。App 本身的行為沒有變。
+
+- ⚡ 從無感記帳移入開發規範：版號與 changelog 規則（`version-update.md`、本檔）、構建與 CI 說明（`build-and-deploy.md`）、Codex review 門檻（`AGENTS.md`），以及雲端 session 自動安裝 Flutter 的 hook。
+- ⚡ CI：只改 `assets/` 的 PR 現在也會觸發 Build Check（issue #W）；可手動觸發、同一個 PR 連續 push 時取消舊的 run、runner 可用變數設定、單一測試最多 2 分鐘、Telegram 通知加上逾時與下載連結備援；release 對只改文件的 push 不觸發；新增比對 keystore 指紋的 workflow。
+
 ### v1.0.0+4 (2026-02-20 ~ 2026-10-02)
 
 版號規則建立前，這段期間的變更都沒有 bump，全部累積在 1.0.0+4 底下。
