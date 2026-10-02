@@ -157,6 +157,18 @@ Inputs:
 The Play Developer API can't create an app: the first AAB must be uploaded by hand in Play
 Console before this workflow can publish to it.
 
+### Other CI settings
+
+- `TEST_KEYSTORE_BASE64` / `TEST_KEYSTORE_PASSWORD` (secrets): used only by the manual
+  **Test Signing Key** workflow, which checks that `KEYSTORE_BASE64` is the same key as
+  another keystore (e.g. your local upload key) before you burn a version code on it.
+- `CI_RUNNER` / `CI_LIGHT_RUNNER` (variables): runner labels for the main and the light
+  (pgTAP) jobs; both default to `ubuntu-latest`.
+- `SKIP_COMPILER` (variable): set to `true` to make Build Check run analyze and tests only,
+  without building an APK.
+
+Versioning, changelog and CI notes live in `.claude/skills/` (see `CLAUDE.md`).
+
 ## 📄 License
 
 MIT License

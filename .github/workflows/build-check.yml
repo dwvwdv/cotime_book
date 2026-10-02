@@ -3,23 +3,40 @@ name: Build Check
 on:
   pull_request:
     branches: [ main, master ]
+    # 這份清單必須涵蓋所有會影響 analyze／test／pgTAP／APK 結果的來源。PR 只改了
+    # 沒列進去的目錄時，這個 workflow 完全不觸發，PR 看起來是「沒有 check」而不是
+    # 紅的。assets/ 曾經不在這裡——而 assets/reader/shared_page.js 與內建字型決定
+    # 全房的排版（issue #20），改壞了也要編得出 APK 來測。`.github/**` 而不是只列
+    # 本檔，是因為 release／publish 也共用同一套步驟。新增受檢來源時，這裡要跟著加。
     paths:
       - 'lib/**'
       - 'test/**'
+      - 'assets/**'
       - 'supabase/**'
       - 'android/**'
       - 'pubspec.yaml'
       - 'pubspec.lock'
-      - '.github/workflows/build-check.yml'
-      - '.github/workflows/release-apk.yml'
+      - 'analysis_options.yaml'
+      - '.github/**'
+
+  # ⚠️ 上面的 branches 過濾配上預設的 `opened / synchronize / reopened`，會漏掉
+  # 「PR 開在別的 base，之後才改指向 master」這種情況：改 base 只發 `edited`
+  # 事件，不在預設清單裡，於是這個 workflow 從頭到尾一次都不會跑，PR 看起來
+  # 沒有任何 check 而不是紅的。手動觸發是這種情形唯一的補救。
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# 同一 PR／分支連續 push 時，取消仍在執行的舊 build，只保留最新一次，避免重複浪費。
+concurrency:
+  group: build-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   database:
     name: Database Migrations and pgTAP
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
 
     steps:
@@ -42,7 +59,7 @@ jobs:
 
   build:
     name: Build and Test
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
 
     steps:
@@ -72,10 +89,13 @@ jobs:
       - name: Analyze code
         run: flutter analyze --no-fatal-infos
 
+      # 預設的單測逾時很長：一個卡死的非同步測試會一路等到 job timeout 才失敗，
+      # 而且看不出是哪一個。
       - name: Run tests
-        run: flutter test
+        run: flutter test --timeout 2m
 
       - name: Check if keystore secrets exist
+        if: ${{ vars.SKIP_COMPILER != 'true' }}
         id: check_secrets
         run: |
           if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
@@ -87,7 +107,7 @@ jobs:
           fi
 
       - name: Decode and setup keystore
-        if: steps.check_secrets.outputs.has_keystore == 'true'
+        if: ${{ vars.SKIP_COMPILER != 'true' && steps.check_secrets.outputs.has_keystore == 'true' }}
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -104,6 +124,7 @@ jobs:
           echo "✓ Keystore configured successfully"
 
       - name: Build APK (arm64)
+        if: ${{ vars.SKIP_COMPILER != 'true' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -122,26 +143,17 @@ jobs:
           fi
 
       - name: Get version from pubspec.yaml
+        if: ${{ vars.SKIP_COMPILER != 'true' }}
         id: get_version
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: /v/')
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Send APK to Telegram
-        if: steps.check_secrets.outputs.has_keystore == 'true'
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          curl -F document=@build/app/outputs/flutter-apk/app-release.apk \
-               -F caption="🔨 PR Build - ${{ steps.get_version.outputs.VERSION }}
-          Branch: ${{ github.head_ref || github.ref_name }}
-          Commit: ${GITHUB_SHA::7}
-          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-               "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument?chat_id=${TELEGRAM_CHAT_ID}"
-        continue-on-error: true
-
+      # 上傳 artifact 要排在 Telegram 之前：Telegram 失敗時的備援訊息要附上
+      # artifact 的下載連結，那需要這一步的 artifact-id。
       - name: Upload APK artifact
+        if: ${{ vars.SKIP_COMPILER != 'true' }}
+        id: upload_apk
         uses: actions/upload-artifact@v4
         with:
           name: build-check-apk
@@ -150,3 +162,38 @@ jobs:
             build/app/outputs/flutter-apk/app-debug.apk
           retention-days: 7
           if-no-files-found: ignore
+
+      # 通知是 best effort：curl 一律加逾時（沒有逾時的話，一個卡住的上傳能吃掉
+      # 整個 job 的 timeout），上傳 APK 失敗就改送 artifact 連結，連那個也失敗
+      # 也不讓 job 變紅。
+      - name: Send APK to Telegram
+        if: ${{ vars.SKIP_COMPILER != 'true' && steps.check_secrets.outputs.has_keystore == 'true' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ARTIFACT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload_apk.outputs.artifact-id }}
+        run: |
+          if curl --ipv4 --connect-timeout 10 --max-time 30 --fail-with-body \
+               -F document=@build/app/outputs/flutter-apk/app-release.apk \
+               -F caption="🔨 PR Build - ${{ steps.get_version.outputs.VERSION }}
+          Branch: ${{ github.head_ref || github.ref_name }}
+          Commit: ${GITHUB_SHA::7}
+          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+               "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument?chat_id=${TELEGRAM_CHAT_ID}"; then
+            echo "APK sent to Telegram"
+          else
+            echo "Telegram upload failed; sending GitHub artifact link"
+            fallback_text=$(printf '%s\n' \
+              '🔨 PR Build APK upload fallback' \
+              'Telegram upload failed or timed out.' \
+              "Download artifact: ${ARTIFACT_URL}")
+            if curl --ipv4 --connect-timeout 10 --max-time 30 --fail-with-body -sS -X POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode chat_id="${TELEGRAM_CHAT_ID}" \
+              --data-urlencode text="${fallback_text}"; then
+              echo "GitHub artifact link sent to Telegram"
+            else
+              echo "Telegram fallback notification failed; continuing without notification"
+            fi
+          fi
+        continue-on-error: true

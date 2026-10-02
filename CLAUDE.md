@@ -130,12 +130,44 @@ supabase test db       # pgTAP
 （與 Claude Code 權限無關，見 issue #R）——這類 migration 改用 `supabase db push` 或 SQL Editor。
 
 CI（`.github/workflows/build-check.yml`）跑的是 Flutter 3.32.4：
-先 pgTAP，再 `flutter analyze` + `flutter test`，最後建 arm64 APK。
+pgTAP 與 `flutter analyze` + `flutter test` + arm64 APK 是兩個平行的 job。
 **送 PR 前 `flutter analyze` 與 `flutter test` 必須是乾淨的。**
+Claude Code 雲端 session 由 `.claude/hooks/session-start.sh` 裝好同版本的 Flutter——
+升級 Flutter 時三份 workflow 與這支 hook 要一起改。改 workflow 前先讀
+[`build-and-deploy.md`](.claude/skills/build-and-deploy.md) 的「CI 設計筆記」：
+paths 過濾、concurrency、Telegram 通知的逾時與備援，每一條都對應踩過的坑。
 
 上架 Google Play 走手動觸發的 `.github/workflows/publish-play-store.yml`（套件名
 `com.lazyrhythm.cotime_book`，所需 secrets 與輸入見 README）。每次上傳都要新的版本碼——
 記得先調 `pubspec.yaml` 的 `+N`，或在觸發時填 `version_code`。
+
+## Skills 索引
+
+操作流程放在 `.claude/skills/`：
+
+| Skill | 說明 |
+|-------|------|
+| [version-update.md](.claude/skills/version-update.md) | 版本號何時、怎麼 bump |
+| [changelog.md](.claude/skills/changelog.md) | 版本歷史（每次改動都要確認是否要記） |
+| [build-and-deploy.md](.claude/skills/build-and-deploy.md) | 環境、構建、上架、CI 一覽與設計筆記 |
+
+Codex 的 code review 規範在根目錄的 [`AGENTS.md`](./AGENTS.md)：什麼值得提出、什麼不要提出。
+自己 review 時也照同一套門檻。
+
+## 版本管理
+
+- **唯一的版號來源是 `pubspec.yaml`**（`major.minor.patch+build`，例如 `1.0.1+5`）。
+  Gradle 與 CI 都從這裡讀；`+build` 就是 Google Play 的 versionCode，必須遞增。
+- **每次功能調整或修復都要 bump**：除非特別指定，只加 `patch`，`build` 一律 +1。
+  只動文件、`.claude/`、`.github/` 這類不進 APK 的 PR 不 bump。
+- **同一個 PR 最多只疊代一次版本號**：PR 首個需要 bump 的 commit 加 1 之後，
+  後續的 review 修復、追加調整都沿用同一版號；changelog 也合併在同一條目下。
+  禁止單一 PR 內出現 vX → vX+1 → vX+2。
+- **每次改動都要確認是否要更新 [`changelog.md`](.claude/skills/changelog.md)**：
+  `### vX.X.X+N (YYYY-MM-DD)`，emoji 前綴 ✨ 新功能 / 🐛 修復 / 🎨 UI / ⚡ 優化。
+  對應 issue.md 的項目時標出編號，細節留在 issue.md。
+
+詳細流程 → [version-update.md](.claude/skills/version-update.md)
 
 ## 慣例
 
@@ -149,3 +181,4 @@ CI（`.github/workflows/build-check.yml`）跑的是 Flutter 3.32.4：
 - 非同步工作要用 generation counter 防止過期的結果覆蓋新狀態
   （`_roomSessionGeneration`、`_membersFetchGeneration`、`_lifecycleGeneration`、
   `_receiveGeneration`）。新增非同步路徑時沿用這個模式。
+- PR 的 title、body、review 回覆一律用繁體中文；程式碼、命令與 API 名稱保留原文。

@@ -635,6 +635,23 @@
 - **測試**：`test/android_build_config_test.dart` →
   `the Android app targets API 36 as Google Play requires`
 
+### [x] #W 只改 `assets/` 的 PR 不會觸發 CI
+
+- **檔案**：`.github/workflows/build-check.yml`
+- **症狀**：PR 只改 `assets/reader/shared_page.js`（或字型）時，PR 上一個 check 都沒有——
+  看起來不是紅的，而是「沒有 CI」，很容易就直接合併。
+- **原因**：`pull_request.paths` 只列了 `lib/`、`test/`、`supabase/`、`android/` 與 pubspec，
+  而 `shared_page.js` 決定全房的排版（#20）、會被打包進 APK。同一份清單也漏了
+  `analysis_options.yaml`（改 lint 規則不會被驗證）。另外 branches 過濾配上預設事件型別，
+  「PR 開在別的 base、之後才改指向 master」只發 `edited`，workflow 一次都不會跑。
+- **修法**：paths 補上 `assets/**`、`analysis_options.yaml`，並把 `.github/**` 整個納入；
+  加上 `workflow_dispatch` 作為改 base 之後的補救。同時從無感記帳搬來其他 CI 慣例
+  （concurrency、Telegram 逾時與備援、`flutter test --timeout 2m`，見
+  `.claude/skills/build-and-deploy.md` 的「CI 設計筆記」）。
+- **測試**：`test/ci_workflow_test.dart` →
+  `Build Check runs for every change that reaches the app or its tests`、
+  `every workflow and the session hook use the same Flutter`
+
 ---
 
 ## 開放中
@@ -754,3 +771,26 @@
   或只在書沒有內嵌字型時才覆蓋——兩者都需要確認需求再做。
 - 另外，`flutter_epub_viewer` 的 `customCss` 送不進書（見 #20 原因），之後升級套件時
   若修好了，可以考慮改回用它，但 `shared_page.js` 仍需要負責頁框。
+
+### [ ] #X CI 沒有跑 `tool/shared_page_check`
+
+- **檔案**：`.github/workflows/build-check.yml`、`tool/shared_page_check/check.js`
+- **問題**：「兩台不同的裝置逐頁一致」（#20 / #21）只有 `check.js` 驗得到——它在 Chromium 裡
+  跑真的 epub.js。`flutter test` 只驗 `SharedPage` 怎麼算，驗不到套上去之後的分頁。
+  CLAUDE.md 要求改到 `displaySettings`、`SharedPageStyle`、`shared_page.js` 時手動跑，
+  但忘了跑也不會有任何徵兆。
+- **為什麼先不動**：需要 Playwright 的 Chromium、python3 與四套系統字型（含 CJK），
+  每次 PR 都裝的成本不低。可行做法是獨立 job、只在 `assets/reader/**`、
+  `lib/services/shared_page*.dart` 等變動時觸發；要先在 runner 上確認字型與 Chromium 的安裝時間。
+
+### [ ] #Y `realtime_service_test.dart` 在機器忙碌時失敗過一次
+
+- **檔案**：`test/realtime_service_test.dart`
+- **現象**：整合 #W 時，在 `flutter pub get` 與 `flutter analyze` 剛跑完、機器還很忙的時候，
+  完整的 `flutter test` 有一個測試失敗。失敗的是 `same room with a different authenticated user
+  replaces channel` 或緊接在後的 `cross-room join completely removes old channel`（當時的輸出被截斷，
+  只看得到失敗發生在這兩個之間）。之後完整跑四次、單獨跑這個檔案五次都全綠。
+- **為什麼先不動**：重現不出來，看不到斷言訊息就沒有根因；但也不能當成 flake 帶過。
+  下次在 CI 或本機再遇到時，保留 `--reporter expanded` 的完整輸出，
+  先看是哪一個 `expect` 失敗，再決定是測試依賴了 timer／microtask 的順序，還是
+  `RealtimeService` 換 channel 的路徑真的有 race。
