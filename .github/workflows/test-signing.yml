@@ -1,0 +1,70 @@
+name: Test Signing Key
+
+# 確認 CI 的 KEYSTORE_BASE64 與另一份 keystore（TEST_KEYSTORE_BASE64，例如本機那份
+# 或 Play Console 登記的 upload key）是同一把鑰匙。簽錯鑰匙的 AAB 要上傳到
+# Google Play 才會被拒收，而那時版本碼已經用掉了；先在這裡比對指紋。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare-signing:
+    name: Compare Keystore Fingerprints
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+
+    steps:
+      - name: Decode keystores
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          TEST_KEYSTORE_BASE64: ${{ secrets.TEST_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > ci.jks
+          echo "$TEST_KEYSTORE_BASE64" | base64 -d > test.jks
+
+      - name: Extract CI keystore fingerprint
+        id: ci_fp
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          FP=$(keytool -list -v -keystore ci.jks -storepass "$KEYSTORE_PASSWORD" 2>/dev/null \
+               | grep "SHA256:" | head -1 | awk '{print $2}')
+          echo "fingerprint=$FP" >> $GITHUB_OUTPUT
+          echo "CI keystore SHA256: $FP"
+
+      - name: Extract test keystore fingerprint
+        id: test_fp
+        env:
+          TEST_KEYSTORE_PASSWORD: ${{ secrets.TEST_KEYSTORE_PASSWORD }}
+        run: |
+          FP=$(keytool -list -v -keystore test.jks -storepass "$TEST_KEYSTORE_PASSWORD" 2>/dev/null \
+               | grep "SHA256:" | head -1 | awk '{print $2}')
+          echo "fingerprint=$FP" >> $GITHUB_OUTPUT
+          echo "Test keystore SHA256: $FP"
+
+      - name: Compare fingerprints
+        env:
+          CI_FP: ${{ steps.ci_fp.outputs.fingerprint }}
+          TEST_FP: ${{ steps.test_fp.outputs.fingerprint }}
+        run: |
+          echo "================================"
+          echo "CI   keystore SHA256: $CI_FP"
+          echo "Test keystore SHA256: $TEST_FP"
+          echo "================================"
+          # 兩邊都讀不到（密碼錯、secret 沒設）時字串同為空，不能當成相符。
+          if [ -z "$CI_FP" ] || [ -z "$TEST_FP" ]; then
+            echo "RESULT: ERROR - could not read a fingerprint (missing secret or wrong password)"
+            exit 1
+          fi
+          if [ "$CI_FP" = "$TEST_FP" ]; then
+            echo "RESULT: MATCH - Both keystores use the same signing key"
+          else
+            echo "RESULT: MISMATCH - Keystores use different signing keys"
+            exit 1
+          fi
+
+      - name: Clean up keystore files
+        if: always()
+        run: rm -f ci.jks test.jks

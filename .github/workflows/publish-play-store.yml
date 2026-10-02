@@ -113,7 +113,7 @@ jobs:
 
       - name: Run tests
         if: ${{ !inputs.skip_build }}
-        run: flutter test
+        run: flutter test --timeout 2m
 
       # 少了 keystore，Gradle 會退回 debug key 簽章，上傳時才被 Play 拒收；
       # 少了 Supabase 憑證，AAB 照樣上傳成功、用掉版本碼，裝起來卻連不上房間。

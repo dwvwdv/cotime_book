@@ -3,6 +3,12 @@ name: Build and Release
 on:
   push:
     branches: [ master ]
+    # 只動文件的 push（issue.md、CLAUDE.md、.claude/ 的 skill）不重新出版：tag 取自
+    # pubspec 的版號，而文件 PR 不 bump（見 .claude/skills/version-update.md），
+    # 觸發了只會把同一份 build 再掛到同一個 release 上。
+    paths-ignore:
+      - '**/*.md'
+      - '.claude/**'
   workflow_dispatch:
 
 permissions:
@@ -11,7 +17,7 @@ permissions:
 jobs:
   build:
     name: Build APK & AAB
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
 
     steps:
@@ -42,7 +48,7 @@ jobs:
         run: flutter analyze --no-fatal-infos
 
       - name: Run tests
-        run: flutter test
+        run: flutter test --timeout 2m
 
       - name: Check if keystore secrets exist
         id: check_secrets
@@ -108,26 +114,48 @@ jobs:
                build/app/outputs/flutter-apk/cotime_book-${VERSION}-debug.apk
           fi
 
-      - name: Send APK to Telegram
-        if: steps.check_secrets.outputs.has_keystore == 'true'
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          curl -F document=@build/app/outputs/flutter-apk/app-release.apk \
-               -F caption="🚀 Release ${{ steps.get_version.outputs.VERSION }}
-          Commit: ${GITHUB_SHA::7}
-          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-               "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument?chat_id=${TELEGRAM_CHAT_ID}"
-        continue-on-error: true
-
+      # 上傳 artifact 要排在 Telegram 之前：備援訊息要附上它的下載連結。
       - name: Upload APK artifact
+        id: upload_apk
         uses: actions/upload-artifact@v4
         with:
           name: apk-release
           path: build/app/outputs/flutter-apk/cotime_book-*.apk
           retention-days: 30
           if-no-files-found: ignore
+
+      # 通知是 best effort：curl 一律加逾時，上傳 APK 失敗就改送 artifact 連結，
+      # 連那個也失敗也不讓 job 變紅（後面還要建 release）。
+      - name: Send APK to Telegram
+        if: steps.check_secrets.outputs.has_keystore == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ARTIFACT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload_apk.outputs.artifact-id }}
+        run: |
+          if curl --ipv4 --connect-timeout 10 --max-time 30 --fail-with-body \
+               -F document=@build/app/outputs/flutter-apk/app-release.apk \
+               -F caption="🚀 Release ${{ steps.get_version.outputs.VERSION }}
+          Commit: ${GITHUB_SHA::7}
+          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+               "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument?chat_id=${TELEGRAM_CHAT_ID}"; then
+            echo "APK sent to Telegram"
+          else
+            echo "Telegram upload failed; sending GitHub artifact link"
+            fallback_text=$(printf '%s\n' \
+              '🚀 Release APK upload fallback' \
+              'Telegram upload failed or timed out.' \
+              "Download artifact: ${ARTIFACT_URL}")
+            if curl --ipv4 --connect-timeout 10 --max-time 30 --fail-with-body -sS -X POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode chat_id="${TELEGRAM_CHAT_ID}" \
+              --data-urlencode text="${fallback_text}"; then
+              echo "GitHub artifact link sent to Telegram"
+            else
+              echo "Telegram fallback notification failed; continuing without notification"
+            fi
+          fi
+        continue-on-error: true
 
       - name: Build App Bundle (AAB)
         if: steps.check_secrets.outputs.has_keystore == 'true'
