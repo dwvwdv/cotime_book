@@ -12,7 +12,9 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.lazyrhythm.cotime_book"
-    compileSdk = flutter.compileSdkVersion
+    // Play 要求 targetSdk 36（issue #V）；Flutter 3.32 的 flutter.compileSdkVersion /
+    // flutter.targetSdkVersion 都還是 35，所以兩個都寫死。
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -29,7 +31,7 @@ android {
         // Google Play 的自動防護（Play Auto Protect）拒收 minSdk < 24 的套件（issue #U）。
         // 不要改回 flutter.minSdkVersion——Flutter 3.32 的預設值是 21。
         minSdk = 24
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
