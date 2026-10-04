@@ -93,6 +93,9 @@ supabase/
 6. **傳書是 receiver 驅動的。** `FileTransferService` 的初次分享只是快速路徑；
    收書端缺什麼就向 Presence 裡持有這本書的人要，停滯就輪替持有者再要。
    收書**沒有失敗終態**，也不能阻擋分享新書（見 issue #16）。
+   公共圖書館的書（Storage bucket `cotime-book-library`）例外地先由收書端直接下載、
+   以 hash 驗證，失敗或逾時才回到上面的 P2P 路徑（issue #M）。圖書館只能讀，
+   書由維護者從 dashboard 放進去；bucket 的大小上限必須等於 `AppConstants.maxFileSize`。
 
 7. **錯誤狀態要能自己收斂。**
    `PageSyncState.error` 會在 `defaultErrorAutoClearDelay` 後自動回到 idle。

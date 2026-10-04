@@ -182,6 +182,132 @@ void main() {
     },
   );
 
+  group('library books', () {
+    test('are downloaded instead of asked from the room', () async {
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final alice = room.join('alice');
+      alice.service.holdBook(bookHash, bytes: book);
+      room.announceHolder('alice', bookHash);
+      final bob = room.join('bob');
+
+      bob.service.expectBook(bookHash, download: () async => book);
+
+      await room.waitFor(() => bob.store.books.containsKey(bookHash));
+      expect(bob.store.books[bookHash], book);
+      expect(bob.service.currentState.status, TransferStatus.completed);
+      expect(bob.service.heldBookHash, bookHash);
+      // Nobody had to broadcast the book.
+      expect(room.requests, isEmpty);
+      expect(room.chunksSent, 0);
+    });
+
+    test('come from the room when the library download fails', () async {
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final alice = room.join('alice');
+      alice.service.holdBook(bookHash, bytes: book);
+      room.announceHolder('alice', bookHash);
+      final bob = room.join('bob');
+
+      bob.service.expectBook(
+        bookHash,
+        download: () async => throw Exception('offline'),
+      );
+
+      await room.waitFor(() => bob.store.books.containsKey(bookHash));
+      expect(bob.store.books[bookHash], book);
+      expect(room.requests.single['sender_id'], 'alice');
+    });
+
+    test('are not kept when the library copy is a different book', () async {
+      // The file in the library was replaced after it was shared.
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final alice = room.join('alice');
+      alice.service.holdBook(bookHash, bytes: book);
+      room.announceHolder('alice', bookHash);
+      final bob = room.join('bob');
+
+      final replaced = Uint8List.fromList(List.generate(5000, (i) => i % 7));
+      bob.service.expectBook(bookHash, download: () async => replaced);
+
+      await room.waitFor(() => bob.store.books.containsKey(bookHash));
+      expect(bob.store.books[bookHash], book);
+      expect(bob.store.books.length, 1);
+    });
+
+    test('a slow library download does not hold the receive up', () async {
+      final room = TransferRoom(
+        directDownloadGrace: const Duration(milliseconds: 30),
+      );
+      addTearDown(room.dispose);
+      final alice = room.join('alice');
+      alice.service.holdBook(bookHash, bytes: book);
+      room.announceHolder('alice', bookHash);
+      final bob = room.join('bob');
+
+      final never = Completer<Uint8List>();
+      bob.service.expectBook(bookHash, download: () => never.future);
+      expect(
+        bob.service.currentState.message,
+        contains('Downloading the book from the library'),
+      );
+
+      await room.waitFor(() => bob.store.books.containsKey(bookHash));
+      expect(bob.service.currentState.status, TransferStatus.completed);
+    });
+
+    test('the download is used when the share arrives after the lobby '
+        'already expects the book', () async {
+      // The lobby expects the room's book as soon as it opens; the share
+      // broadcast saying it is a library book can arrive after that.
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final bob = room.join('bob');
+
+      bob.service.expectBook(bookHash);
+      bob.service.expectBook(bookHash, download: () async => book);
+
+      // Nobody in the room holds it: only the library can provide it.
+      await room.waitFor(() => bob.store.books.containsKey(bookHash));
+      expect(bob.store.books[bookHash], book);
+    });
+
+    test('a download that finishes after another book was shared is '
+        'dropped', () async {
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final bob = room.join('bob');
+
+      final slow = Completer<Uint8List>();
+      bob.service.expectBook(bookHash, download: () => slow.future);
+
+      final other = Uint8List.fromList(List.generate(5000, (i) => i % 7));
+      final otherHash = sha256.convert(other).toString();
+      await bob.service.shareBook(fileBytes: other, bookHash: otherHash);
+      slow.complete(book);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(bob.service.heldBookHash, otherHash);
+      expect(bob.store.books.containsKey(bookHash), isFalse);
+    });
+  });
+
+  test('a 40MB book can be shared', () async {
+    // The limit used to be 10MB, which turned away illustrated books.
+    final room = TransferRoom();
+    addTearDown(room.dispose);
+    final alice = room.join('alice');
+    final largest = Uint8List(40 * 1024 * 1024);
+    final largestHash = sha256.convert(largest).toString();
+
+    await alice.service.shareBook(fileBytes: largest, bookHash: largestHash);
+
+    expect(alice.service.heldBookHash, largestHash);
+    expect(room.chunksSent, largest.length ~/ AppConstants.fileChunkSize);
+  });
+
   test('initialize installs its subscriptions once', () async {
     final room = TransferRoom();
     addTearDown(room.dispose);
@@ -221,12 +347,16 @@ class TransferClient {
 }
 
 class TransferRoom {
+  final Duration directDownloadGrace;
   final Map<String, TransferClient> clients = {};
   final Map<String, Set<String>> _holdings = {};
   final List<Map<String, dynamic>> requests = [];
   bool dropChunks = false;
   Set<int> dropChunkIndices = {};
   bool corruptNextChunk = false;
+  int chunksSent = 0;
+
+  TransferRoom({this.directDownloadGrace = const Duration(milliseconds: 500)});
 
   TransferClient join(String userId) {
     final store = MemoryStore();
@@ -238,6 +368,7 @@ class TransferRoom {
       chunkDelay: const Duration(milliseconds: 1),
       firstRequestDelay: const Duration(milliseconds: 10),
       stallTimeout: const Duration(milliseconds: 25),
+      directDownloadGrace: directDownloadGrace,
     );
     service.initialize();
     _holdings.putIfAbsent(userId, () => {});
@@ -265,6 +396,7 @@ class TransferRoom {
   void deliver(String event, Map<String, dynamic> payload) {
     if (event == FileTransferService.requestEvent) requests.add(payload);
     if (event == FileTransferService.chunkEvent) {
+      chunksSent++;
       if (dropChunks ||
           dropChunkIndices.contains(payload['chunk_index'] as int)) {
         return;

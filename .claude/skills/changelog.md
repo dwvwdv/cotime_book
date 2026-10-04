@@ -9,6 +9,12 @@
 - 同一個 PR 只有一個版本條目（見 `version-update.md`）；review 修復追加在同一條目下。
 - 只動文件、`.claude/`、`.github/` 的 PR 不 bump 版號，不必新增條目。
 
+### v1.0.2+6 (2026-10-04)
+
+- ✨ 公共圖書館：lobby 的「Share Book」改成先選來源——這台裝置上的檔案，或圖書館裡的書。圖書館就是 Supabase Storage 的 `cotime-book-library` bucket，維護者把開源 EPUB 放進去，檔名就是書名；App 只能列出與下載。
+- ⚡ 分享圖書館的書時不再經過 Realtime 逐塊廣播：收書端直接從 Storage 下載（以 hash 驗證），下載失敗或 60 秒內沒完成才改向房內的人要（issue #M 部分緩解）。
+- ✨ 單本書的大小上限從 10MB 提高到 40MB。
+
 ### v1.0.1+5 (2026-10-02)
 
 版號規則建立後的第一個版本，起點從 1.0.0+4 往上加。App 本身的行為沒有變。

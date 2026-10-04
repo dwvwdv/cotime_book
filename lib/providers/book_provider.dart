@@ -5,9 +5,11 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/app_constants.dart';
 import '../models/book_metadata.dart';
+import '../models/library_book.dart';
 import '../services/epub_storage_service.dart';
 import '../models/transfer_state.dart';
 import '../services/file_transfer_service.dart';
+import '../services/library_service.dart';
 import '../services/realtime_service.dart';
 import 'presence_provider.dart';
 import 'room_provider.dart';
@@ -16,8 +18,16 @@ final epubStorageProvider = Provider<EpubStorageService>((ref) {
   return EpubStorageService();
 });
 
+final libraryServiceProvider = Provider<LibraryService>((ref) {
+  return const SupabaseLibraryService();
+});
+
 final bookProvider = StateNotifierProvider<BookNotifier, BookState>((ref) {
-  return BookNotifier(ref: ref, storageService: ref.read(epubStorageProvider));
+  return BookNotifier(
+    ref: ref,
+    storageService: ref.read(epubStorageProvider),
+    library: ref.read(libraryServiceProvider),
+  );
 });
 
 class BookState {
@@ -53,6 +63,7 @@ class BookState {
 class BookNotifier extends StateNotifier<BookState> {
   final Ref ref;
   final EpubStorageService _storageService;
+  final LibraryService _library;
   FileTransferService? _transferService;
   StreamSubscription<TransferState>? _transferStateSubscription;
   RealtimeService? _transferRealtimeService;
@@ -60,14 +71,21 @@ class BookNotifier extends StateNotifier<BookState> {
   String? _transferRoomCode;
   String? _loadedBookHash;
   String? _expectedBookHash;
+
+  /// Where [_expectedBookHash] is in the public library, if it came from there.
+  String? _expectedLibraryPath;
   int _sessionGeneration = 0;
   int _transferGeneration = 0;
   Future<void> _transferOperationTail = Future<void>.value();
   bool _isDisposed = false;
 
-  BookNotifier({required this.ref, required EpubStorageService storageService})
-    : _storageService = storageService,
-      super(const BookState());
+  BookNotifier({
+    required this.ref,
+    required EpubStorageService storageService,
+    required LibraryService library,
+  }) : _storageService = storageService,
+       _library = library,
+       super(const BookState());
 
   Future<void> initTransferService({
     required RealtimeService realtimeService,
@@ -115,7 +133,10 @@ class BookNotifier extends StateNotifier<BookState> {
     if (loadedBookHash != null && state.bookFile != null) {
       _transferService!.holdBook(loadedBookHash);
     } else if (_expectedBookHash != null) {
-      _transferService!.expectBook(_expectedBookHash!);
+      _transferService!.expectBook(
+        _expectedBookHash!,
+        download: _libraryDownload(_expectedLibraryPath),
+      );
     }
     final transferGeneration = _transferGeneration;
 
@@ -171,62 +192,120 @@ class BookNotifier extends StateNotifier<BookState> {
       } else {
         throw Exception('Cannot read file');
       }
-      if (bytes.length > AppConstants.maxFileSize) {
-        throw Exception(
-          'Book exceeds the ${AppConstants.maxFileSize} byte limit',
-        );
-      }
 
-      // Compute hash
-      final hash = await _storageService.computeHash(bytes);
-
-      // Save locally
-      final savedFile = await _storageService.saveBook(hash, bytes);
-      if (!_isCurrent(generation)) return;
-
-      final metadata = BookMetadata(
-        id: hash,
+      await _shareBytes(
+        bytes: bytes,
         title: file.name.replaceAll('.epub', ''),
-        author: 'Unknown',
         fileName: file.name,
-        fileSizeBytes: bytes.length,
-        fileHash: hash,
+        generation: generation,
       );
-
-      state = state.copyWith(
-        currentBook: metadata,
-        bookFile: savedFile,
-        isLoading: false,
-      );
-      _loadedBookHash = hash;
-      _expectedBookHash = hash;
-      _transferService?.holdBook(hash, bytes: bytes);
-
-      // Update room with book info
-      await ref
-          .read(roomProvider.notifier)
-          .updateBookShared(bookTitle: metadata.title, bookHash: hash);
-      if (!_isCurrent(generation)) return;
-      await ref
-          .read(presenceProvider.notifier)
-          .updateHasBook(true, bookHash: hash);
-      if (!_isCurrent(generation)) return;
-
-      // Broadcast book_shared event
-      final realtimeService = ref.read(realtimeServiceProvider);
-      await realtimeService.broadcast(
-        event: 'book_shared',
-        payload: metadata.toJson(),
-      );
-      if (!_isCurrent(generation)) return;
-
-      // Push to everyone now; anyone who misses part of it asks for the rest.
-      await _transferService?.shareBook(fileBytes: bytes, bookHash: hash);
     } catch (e) {
       if (_isCurrent(generation)) {
         state = state.copyWith(isLoading: false, error: e.toString());
       }
     }
+  }
+
+  /// Shares [book] from the public library with the room.
+  ///
+  /// The others download it from the library themselves, so nothing is pushed
+  /// over Realtime; this device still serves anyone who asks for it.
+  Future<void> shareLibraryBook(LibraryBook book) async {
+    final generation = _sessionGeneration;
+    state = state.copyWith(isLoading: true, error: null);
+    try {
+      final bytes = await _library.download(book.path);
+      if (!_isCurrent(generation)) return;
+      await _shareBytes(
+        bytes: bytes,
+        title: book.title,
+        fileName: book.fileName,
+        libraryPath: book.path,
+        generation: generation,
+      );
+    } catch (e) {
+      if (_isCurrent(generation)) {
+        state = state.copyWith(
+          isLoading: false,
+          error: 'Could not get "${book.title}" from the library: $e',
+        );
+      }
+    }
+  }
+
+  Future<void> _shareBytes({
+    required Uint8List bytes,
+    required String title,
+    required String fileName,
+    required int generation,
+    String? libraryPath,
+  }) async {
+    if (bytes.isEmpty) throw Exception('The book file is empty');
+    if (bytes.length > AppConstants.maxFileSize) {
+      throw Exception(
+        'This book is ${_megabytes(bytes.length)}. Books can be at most '
+        '${_megabytes(AppConstants.maxFileSize)}.',
+      );
+    }
+
+    final hash = await _storageService.computeHash(bytes);
+    final savedFile = await _storageService.saveBook(hash, bytes);
+    if (!_isCurrent(generation)) return;
+
+    final metadata = BookMetadata(
+      id: hash,
+      title: title,
+      author: 'Unknown',
+      fileName: fileName,
+      fileSizeBytes: bytes.length,
+      fileHash: hash,
+      libraryPath: libraryPath,
+    );
+
+    state = state.copyWith(
+      currentBook: metadata,
+      bookFile: savedFile,
+      isLoading: false,
+    );
+    _loadedBookHash = hash;
+    _expectedBookHash = hash;
+    _expectedLibraryPath = libraryPath;
+    _transferService?.holdBook(hash, bytes: bytes);
+
+    // Update room with book info
+    await ref
+        .read(roomProvider.notifier)
+        .updateBookShared(bookTitle: metadata.title, bookHash: hash);
+    if (!_isCurrent(generation)) return;
+    await ref
+        .read(presenceProvider.notifier)
+        .updateHasBook(true, bookHash: hash);
+    if (!_isCurrent(generation)) return;
+
+    // Broadcast book_shared event
+    final realtimeService = ref.read(realtimeServiceProvider);
+    await realtimeService.broadcast(
+      event: 'book_shared',
+      payload: metadata.toJson(),
+    );
+    if (!_isCurrent(generation)) return;
+
+    // A library book is downloaded by each receiver; pushing 40MB through
+    // Realtime as well would only race those downloads.
+    if (libraryPath != null) return;
+    // Push to everyone now; anyone who misses part of it asks for the rest.
+    await _transferService?.shareBook(fileBytes: bytes, bookHash: hash);
+  }
+
+  static String _megabytes(int bytes) =>
+      '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+
+  /// A download of the room's book from the library, or null when it did not
+  /// come from there.
+  BookDownload? _libraryDownload(String? libraryPath) {
+    if (libraryPath == null) return null;
+    final library = _library;
+    return () => library.download(libraryPath);
   }
 
   Future<void> _onBookReceived(
@@ -281,9 +360,20 @@ class BookNotifier extends StateNotifier<BookState> {
     return state.bookFile != null && _loadedBookHash == bookHash;
   }
 
-  Future<void> prepareForSharedBook(String bookHash) async {
+  /// The room's book is now [bookHash]. [libraryPath] says where it is in the
+  /// public library when the sharer took it from there.
+  Future<void> prepareForSharedBook(
+    String bookHash, {
+    String? libraryPath,
+  }) async {
     final generation = _sessionGeneration;
+    if (bookHash != _expectedBookHash) _expectedLibraryPath = null;
     _expectedBookHash = bookHash;
+    // The path arrives in a room broadcast; anything but a plain object name
+    // in the library bucket is ignored. The download is hash-checked anyway.
+    if (libraryPath != null && isPlainLibraryPath(libraryPath)) {
+      _expectedLibraryPath = libraryPath;
+    }
     if (hasBook(bookHash)) {
       _transferService?.holdBook(bookHash);
       await ref
@@ -292,7 +382,10 @@ class BookNotifier extends StateNotifier<BookState> {
       return;
     }
     if (!_isCurrent(generation)) return;
-    _transferService?.expectBook(bookHash);
+    _transferService?.expectBook(
+      bookHash,
+      download: _libraryDownload(_expectedLibraryPath),
+    );
     _loadedBookHash = null;
     // Not isLoading: that flag means "picking a file" and disables Share.
     // Receiving shows through the transfer state instead.
@@ -306,6 +399,7 @@ class BookNotifier extends StateNotifier<BookState> {
     ++_sessionGeneration;
     _loadedBookHash = null;
     _expectedBookHash = null;
+    _expectedLibraryPath = null;
     state = const BookState();
     await _serializeTransferOperation(_disposeTransferServiceInternal);
   }
@@ -347,4 +441,12 @@ class BookNotifier extends StateNotifier<BookState> {
     unawaited(_serializeTransferOperation(_disposeTransferServiceInternal));
     super.dispose();
   }
+}
+
+/// A library object name: no leading slash, no `..` segment, no backslash.
+bool isPlainLibraryPath(String path) {
+  if (path.isEmpty || path.startsWith('/') || path.contains('\\')) {
+    return false;
+  }
+  return !path.split('/').any((segment) => segment.isEmpty || segment == '..');
 }

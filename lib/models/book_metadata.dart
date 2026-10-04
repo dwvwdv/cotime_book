@@ -6,6 +6,10 @@ class BookMetadata {
   final int fileSizeBytes;
   final String fileHash;
 
+  /// Where the book is in the public library, when it came from there.
+  /// Receivers download it from Storage instead of waiting for the room.
+  final String? libraryPath;
+
   const BookMetadata({
     required this.id,
     required this.title,
@@ -13,6 +17,7 @@ class BookMetadata {
     required this.fileName,
     required this.fileSizeBytes,
     required this.fileHash,
+    this.libraryPath,
   });
 
   factory BookMetadata.fromJson(Map<String, dynamic> json) {
@@ -23,6 +28,7 @@ class BookMetadata {
       fileName: json['file_name'] as String,
       fileSizeBytes: json['file_size_bytes'] as int,
       fileHash: json['file_hash'] as String,
+      libraryPath: json['library_path'] as String?,
     );
   }
 
@@ -34,6 +40,7 @@ class BookMetadata {
       'file_name': fileName,
       'file_size_bytes': fileSizeBytes,
       'file_hash': fileHash,
+      if (libraryPath != null) 'library_path': libraryPath,
     };
   }
 
