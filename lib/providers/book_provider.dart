@@ -175,6 +175,7 @@ class BookNotifier extends StateNotifier<BookState> {
     // new hash simply replaces what the transfer is working on. Refusing here
     // is what used to strand a room behind a stalled transfer.
     state = state.copyWith(isLoading: true, error: null);
+    int? shareGeneration;
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -190,7 +191,7 @@ class BookNotifier extends StateNotifier<BookState> {
 
       // Taken after the picker closes: choosing a file is the decision, so a
       // book shared while the picker was open does not cancel it.
-      final shareGeneration = ++_shareGeneration;
+      shareGeneration = ++_shareGeneration;
       final file = result.files.first;
       final Uint8List bytes;
 
@@ -210,9 +211,7 @@ class BookNotifier extends StateNotifier<BookState> {
         shareGeneration: shareGeneration,
       );
     } catch (e) {
-      if (_isCurrent(generation)) {
-        state = state.copyWith(isLoading: false, error: e.toString());
-      }
+      _failShare(generation, shareGeneration, e.toString());
     }
   }
 
@@ -228,12 +227,11 @@ class BookNotifier extends StateNotifier<BookState> {
     try {
       bytes = await _library.download(book.path);
     } catch (e) {
-      if (_isCurrent(generation)) {
-        state = state.copyWith(
-          isLoading: false,
-          error: 'Could not get "${book.title}" from the library: $e',
-        );
-      }
+      _failShare(
+        generation,
+        shareGeneration,
+        'Could not get "${book.title}" from the library: $e',
+      );
       return;
     }
     if (!_isCurrent(generation)) return;
@@ -247,10 +245,19 @@ class BookNotifier extends StateNotifier<BookState> {
         shareGeneration: shareGeneration,
       );
     } catch (e) {
-      if (_isCurrent(generation)) {
-        state = state.copyWith(isLoading: false, error: e.toString());
-      }
+      _failShare(generation, shareGeneration, e.toString());
     }
+  }
+
+  /// Reports a failed share, unless another book has replaced it: the error
+  /// would then sit under a book that arrived fine, with nothing to clear it.
+  void _failShare(int generation, int? shareGeneration, String error) {
+    if (!_isCurrent(generation)) return;
+    final superseded =
+        shareGeneration != null && shareGeneration != _shareGeneration;
+    state = superseded
+        ? state.copyWith(isLoading: false, error: state.error)
+        : state.copyWith(isLoading: false, error: error);
   }
 
   Future<void> _shareBytes({

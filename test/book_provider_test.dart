@@ -177,4 +177,56 @@ void main() {
     expect(state.isLoading, isFalse);
     expect(books.hasBook(sha256.convert(aliceBook).toString()), isFalse);
   });
+
+  test('a library download that fails after another book was shared does '
+      'not report an error under that book', () async {
+    // Regression: the failure of the abandoned download was written over the
+    // state of the book that replaced it, and nothing cleared it.
+    final storage = MemoryEpubStorage();
+    addTearDown(() => storage.dir.deleteSync(recursive: true));
+    final library = SlowLibrary();
+    final container = ProviderContainer(
+      overrides: [
+        epubStorageProvider.overrideWithValue(storage),
+        libraryServiceProvider.overrideWithValue(library),
+      ],
+    );
+    addTearDown(container.dispose);
+    final books = container.read(bookProvider.notifier);
+
+    final sharing = books.shareLibraryBook(
+      const LibraryBook(path: 'Alice.epub'),
+    );
+    await books.prepareForSharedBook(sha256.convert([1, 2, 3]).toString());
+    library.downloads['Alice.epub']!.completeError(Exception('timed out'));
+    await sharing;
+
+    final state = container.read(bookProvider);
+    expect(state.error, isNull);
+    expect(state.isLoading, isFalse);
+  });
+
+  test('a library download that fails on its own is reported', () async {
+    final storage = MemoryEpubStorage();
+    addTearDown(() => storage.dir.deleteSync(recursive: true));
+    final library = SlowLibrary();
+    final container = ProviderContainer(
+      overrides: [
+        epubStorageProvider.overrideWithValue(storage),
+        libraryServiceProvider.overrideWithValue(library),
+      ],
+    );
+    addTearDown(container.dispose);
+    final books = container.read(bookProvider.notifier);
+
+    final sharing = books.shareLibraryBook(
+      const LibraryBook(path: 'Alice.epub'),
+    );
+    library.downloads['Alice.epub']!.completeError(Exception('timed out'));
+    await sharing;
+
+    final state = container.read(bookProvider);
+    expect(state.error, contains('Could not get "Alice" from the library'));
+    expect(state.isLoading, isFalse);
+  });
 }
