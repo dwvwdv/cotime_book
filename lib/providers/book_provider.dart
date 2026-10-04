@@ -75,6 +75,12 @@ class BookNotifier extends StateNotifier<BookState> {
   /// Where [_expectedBookHash] is in the public library, if it came from there.
   String? _expectedLibraryPath;
   int _sessionGeneration = 0;
+
+  /// Bumped whenever this device starts sharing a book and whenever the room
+  /// moves to another book. A library download can take a minute; if someone
+  /// shares a different book meanwhile, finishing it must not put the room
+  /// back on the old one.
+  int _shareGeneration = 0;
   int _transferGeneration = 0;
   Future<void> _transferOperationTail = Future<void>.value();
   bool _isDisposed = false;
@@ -182,6 +188,9 @@ class BookNotifier extends StateNotifier<BookState> {
         return;
       }
 
+      // Taken after the picker closes: choosing a file is the decision, so a
+      // book shared while the picker was open does not cancel it.
+      final shareGeneration = ++_shareGeneration;
       final file = result.files.first;
       final Uint8List bytes;
 
@@ -198,6 +207,7 @@ class BookNotifier extends StateNotifier<BookState> {
         title: file.name.replaceAll('.epub', ''),
         fileName: file.name,
         generation: generation,
+        shareGeneration: shareGeneration,
       );
     } catch (e) {
       if (_isCurrent(generation)) {
@@ -212,6 +222,7 @@ class BookNotifier extends StateNotifier<BookState> {
   /// over Realtime; this device still serves anyone who asks for it.
   Future<void> shareLibraryBook(LibraryBook book) async {
     final generation = _sessionGeneration;
+    final shareGeneration = ++_shareGeneration;
     state = state.copyWith(isLoading: true, error: null);
     try {
       final bytes = await _library.download(book.path);
@@ -222,6 +233,7 @@ class BookNotifier extends StateNotifier<BookState> {
         fileName: book.fileName,
         libraryPath: book.path,
         generation: generation,
+        shareGeneration: shareGeneration,
       );
     } catch (e) {
       if (_isCurrent(generation)) {
@@ -238,8 +250,15 @@ class BookNotifier extends StateNotifier<BookState> {
     required String title,
     required String fileName,
     required int generation,
+    required int shareGeneration,
     String? libraryPath,
   }) async {
+    if (shareGeneration != _shareGeneration) {
+      // Another book was shared meanwhile and is the room's book now. Share
+      // is disabled while loading, so that came from someone else.
+      state = state.copyWith(isLoading: false);
+      return;
+    }
     if (bytes.isEmpty) throw Exception('The book file is empty');
     if (bytes.length > AppConstants.maxFileSize) {
       throw Exception(
@@ -251,6 +270,12 @@ class BookNotifier extends StateNotifier<BookState> {
     final hash = await _storageService.computeHash(bytes);
     final savedFile = await _storageService.saveBook(hash, bytes);
     if (!_isCurrent(generation)) return;
+    if (shareGeneration != _shareGeneration) {
+      // Another book was shared meanwhile and is the room's book now. Share
+      // is disabled while loading, so that came from someone else.
+      state = state.copyWith(isLoading: false);
+      return;
+    }
 
     final metadata = BookMetadata(
       id: hash,
@@ -367,7 +392,10 @@ class BookNotifier extends StateNotifier<BookState> {
     String? libraryPath,
   }) async {
     final generation = _sessionGeneration;
-    if (bookHash != _expectedBookHash) _expectedLibraryPath = null;
+    if (bookHash != _expectedBookHash) {
+      _expectedLibraryPath = null;
+      ++_shareGeneration;
+    }
     _expectedBookHash = bookHash;
     // The path arrives in a room broadcast; anything but a plain object name
     // in the library bucket is ignored. The download is hash-checked anyway.

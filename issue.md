@@ -736,6 +736,8 @@
   收書端 `expectBook(hash, download: ...)` 直接從 Storage 下載、以 hash 驗證；
   下載失敗或超過 `defaultDirectDownloadGrace`（60 秒）才向房內持有者要，兩邊誰先完成用誰。
   分享者也不再 push 整本書。測試：`test/file_transfer_service_test.dart` 的 `library books` 群組。
+  分享者自己的下載可能要一分鐘，期間別人換了書，下載完成時不能把房間換回去——
+  `BookNotifier._shareGeneration` 在換書時遞增來淘汰它（`test/book_provider_test.dart`）。
 - **還剩的**：使用者自己的檔案仍然只走 broadcast。改成上傳到 Storage 牽涉到儲存成本與
   版權／隱私的產品決定（使用者的私人書檔會經過伺服器），所以沒有一起改。
   晚加入的成員也還拿不到下載位置，見 #Z。
