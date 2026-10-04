@@ -4,9 +4,11 @@ import 'dart:typed_data';
 
 import 'package:cotime_book/models/library_book.dart';
 import 'package:cotime_book/providers/book_provider.dart';
+import 'package:cotime_book/providers/presence_provider.dart';
 import 'package:cotime_book/providers/room_provider.dart';
 import 'package:cotime_book/services/epub_storage_service.dart';
 import 'package:cotime_book/services/library_service.dart';
+import 'package:cotime_book/services/realtime_service.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -39,6 +41,24 @@ class SlowLibrary implements LibraryService {
   @override
   Future<Uint8List> download(String path) =>
       (downloads[path] = Completer<Uint8List>()).future;
+}
+
+/// Runs [onHoldingBook] while this device announces it holds a book: the
+/// moment another member's share can arrive mid-announcement.
+class HookedPresence extends PresenceNotifier {
+  Future<void> Function(String bookHash)? onHoldingBook;
+
+  HookedPresence() : super(RealtimeService());
+
+  @override
+  Future<void> updateHasBook(bool hasBook, {String? bookHash}) async {
+    final hook = onHoldingBook;
+    if (hasBook && bookHash != null && hook != null) {
+      onHoldingBook = null;
+      await hook(bookHash);
+    }
+    await super.updateHasBook(hasBook, bookHash: bookHash);
+  }
 }
 
 void main() {
@@ -120,5 +140,41 @@ void main() {
       container.read(roomProvider).currentRoom?.currentBookHash,
       otherBook,
     );
+  });
+
+  test('a share that arrives while this one is being announced wins', () async {
+    // Regression: the Presence update was the last await before the
+    // broadcast, and nothing checked for a newer share after it. Everyone who
+    // had already moved to the newer book was pulled back.
+    final storage = MemoryEpubStorage();
+    addTearDown(() => storage.dir.deleteSync(recursive: true));
+    final library = SlowLibrary();
+    final presence = HookedPresence();
+    final container = ProviderContainer(
+      overrides: [
+        epubStorageProvider.overrideWithValue(storage),
+        libraryServiceProvider.overrideWithValue(library),
+        roomProvider.overrideWith((ref) => RoomNotifier(FakeRoomService())),
+        presenceProvider.overrideWith((ref) => presence),
+      ],
+    );
+    addTearDown(container.dispose);
+    await container.read(roomProvider.notifier).createRoom('Alice');
+    final books = container.read(bookProvider.notifier);
+
+    final bobHash = sha256.convert([7, 7, 7]).toString();
+    presence.onHoldingBook = (_) => books.prepareForSharedBook(bobHash);
+    final aliceBook = Uint8List.fromList(List.generate(4000, (i) => i % 13));
+    final sharing = books.shareLibraryBook(
+      const LibraryBook(path: 'Alice.epub'),
+    );
+    library.downloads['Alice.epub']!.complete(aliceBook);
+    await sharing;
+
+    final state = container.read(bookProvider);
+    // Announcing would have failed without a channel and left an error.
+    expect(state.error, isNull);
+    expect(state.isLoading, isFalse);
+    expect(books.hasBook(sha256.convert(aliceBook).toString()), isFalse);
   });
 }

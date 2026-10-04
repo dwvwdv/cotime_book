@@ -224,9 +224,20 @@ class BookNotifier extends StateNotifier<BookState> {
     final generation = _sessionGeneration;
     final shareGeneration = ++_shareGeneration;
     state = state.copyWith(isLoading: true, error: null);
+    final Uint8List bytes;
     try {
-      final bytes = await _library.download(book.path);
-      if (!_isCurrent(generation)) return;
+      bytes = await _library.download(book.path);
+    } catch (e) {
+      if (_isCurrent(generation)) {
+        state = state.copyWith(
+          isLoading: false,
+          error: 'Could not get "${book.title}" from the library: $e',
+        );
+      }
+      return;
+    }
+    if (!_isCurrent(generation)) return;
+    try {
       await _shareBytes(
         bytes: bytes,
         title: book.title,
@@ -237,10 +248,7 @@ class BookNotifier extends StateNotifier<BookState> {
       );
     } catch (e) {
       if (_isCurrent(generation)) {
-        state = state.copyWith(
-          isLoading: false,
-          error: 'Could not get "${book.title}" from the library: $e',
-        );
+        state = state.copyWith(isLoading: false, error: e.toString());
       }
     }
   }
@@ -253,12 +261,7 @@ class BookNotifier extends StateNotifier<BookState> {
     required int shareGeneration,
     String? libraryPath,
   }) async {
-    if (shareGeneration != _shareGeneration) {
-      // Another book was shared meanwhile and is the room's book now. Share
-      // is disabled while loading, so that came from someone else.
-      state = state.copyWith(isLoading: false);
-      return;
-    }
+    if (!_isCurrentShare(generation, shareGeneration)) return;
     if (bytes.isEmpty) throw Exception('The book file is empty');
     if (bytes.length > AppConstants.maxFileSize) {
       throw Exception(
@@ -269,13 +272,7 @@ class BookNotifier extends StateNotifier<BookState> {
 
     final hash = await _storageService.computeHash(bytes);
     final savedFile = await _storageService.saveBook(hash, bytes);
-    if (!_isCurrent(generation)) return;
-    if (shareGeneration != _shareGeneration) {
-      // Another book was shared meanwhile and is the room's book now. Share
-      // is disabled while loading, so that came from someone else.
-      state = state.copyWith(isLoading: false);
-      return;
-    }
+    if (!_isCurrentShare(generation, shareGeneration)) return;
 
     final metadata = BookMetadata(
       id: hash,
@@ -299,13 +296,7 @@ class BookNotifier extends StateNotifier<BookState> {
       if (roomBookHash != null) await prepareForSharedBook(roomBookHash);
       return;
     }
-    if (shareGeneration != _shareGeneration) {
-      // A share that committed after this one was announced while the write
-      // was finishing. It is the room's book; announcing this one now would
-      // move everyone back to a book the database no longer has.
-      state = state.copyWith(isLoading: false);
-      return;
-    }
+    if (!_isCurrentShare(generation, shareGeneration)) return;
 
     state = state.copyWith(
       currentBook: metadata,
@@ -320,7 +311,7 @@ class BookNotifier extends StateNotifier<BookState> {
     await ref
         .read(presenceProvider.notifier)
         .updateHasBook(true, bookHash: hash);
-    if (!_isCurrent(generation)) return;
+    if (!_isCurrentShare(generation, shareGeneration)) return;
 
     // Broadcast book_shared event
     final realtimeService = ref.read(realtimeServiceProvider);
@@ -328,13 +319,29 @@ class BookNotifier extends StateNotifier<BookState> {
       event: 'book_shared',
       payload: metadata.toJson(),
     );
-    if (!_isCurrent(generation)) return;
+    // Pushing would also hold this book again and stop receiving the newer
+    // one.
+    if (!_isCurrentShare(generation, shareGeneration)) return;
 
     // A library book is downloaded by each receiver; pushing 40MB through
     // Realtime as well would only race those downloads.
     if (libraryPath != null) return;
     // Push to everyone now; anyone who misses part of it asks for the rest.
     await _transferService?.shareBook(fileBytes: bytes, bookHash: hash);
+  }
+
+  /// Whether a share is still the newest thing that happened to the room's
+  /// book. Every await in [_shareBytes] is a window for another member's
+  /// share to arrive; once one has, it is the room's book (it committed after
+  /// this one, or this one would have lost the write) and announcing or
+  /// serving this one would move the room back to a book the database no
+  /// longer has.
+  bool _isCurrentShare(int generation, int shareGeneration) {
+    if (!_isCurrent(generation)) return false;
+    if (shareGeneration == _shareGeneration) return true;
+    // Share is disabled while loading, so the newer share is someone else's.
+    state = state.copyWith(isLoading: false);
+    return false;
   }
 
   static String _megabytes(int bytes) =>

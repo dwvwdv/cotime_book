@@ -740,7 +740,8 @@
   `BookNotifier._shareGeneration` 在換書時遞增來淘汰它（`test/book_provider_test.dart`）。
   兩人幾乎同時分享時，以**先寫進資料庫的那本**為準：`RoomNotifier.updateBookShared` 遇到
   revision conflict 而資料庫的書已經被換掉時不再重試覆寫，回傳 false，後到的那台改跟隨房間的書；
-  寫入成功但寫入期間收到了更晚的分享，也不再宣告自己的書。
+  寫入成功後，`_shareBytes` 的每一個 await（寫 DB、更新 Presence、broadcast）之後都用
+  `_isCurrentShare` 比對，期間收到了更晚的分享就不再宣告、也不再 push 自己的書。
   仍然存在的窗口：自己的 `book_shared` 已送出之後才有人分享，兩則 broadcast 抵達各裝置的順序
   不保證——這是 #16 之前就有的行為，房內的人可以再分享一次來收斂。
 - **還剩的**：使用者自己的檔案仍然只走 broadcast。改成上傳到 Storage 牽涉到儲存成本與
