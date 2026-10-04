@@ -287,6 +287,26 @@ class BookNotifier extends StateNotifier<BookState> {
       libraryPath: libraryPath,
     );
 
+    final isRoomBook = await ref
+        .read(roomProvider.notifier)
+        .updateBookShared(bookTitle: metadata.title, bookHash: hash);
+    if (!_isCurrent(generation)) return;
+    if (!isRoomBook) {
+      // Someone else's book reached the room first. Follow it: its share
+      // broadcast may have arrived already, or may never arrive.
+      state = state.copyWith(isLoading: false);
+      final roomBookHash = ref.read(roomProvider).currentRoom?.currentBookHash;
+      if (roomBookHash != null) await prepareForSharedBook(roomBookHash);
+      return;
+    }
+    if (shareGeneration != _shareGeneration) {
+      // A share that committed after this one was announced while the write
+      // was finishing. It is the room's book; announcing this one now would
+      // move everyone back to a book the database no longer has.
+      state = state.copyWith(isLoading: false);
+      return;
+    }
+
     state = state.copyWith(
       currentBook: metadata,
       bookFile: savedFile,
@@ -297,11 +317,6 @@ class BookNotifier extends StateNotifier<BookState> {
     _expectedLibraryPath = libraryPath;
     _transferService?.holdBook(hash, bytes: bytes);
 
-    // Update room with book info
-    await ref
-        .read(roomProvider.notifier)
-        .updateBookShared(bookTitle: metadata.title, bookHash: hash);
-    if (!_isCurrent(generation)) return;
     await ref
         .read(presenceProvider.notifier)
         .updateHasBook(true, bookHash: hash);

@@ -550,6 +550,29 @@ void main() {
       expect(notifier.state.currentRoom?.revision, 8);
       expect(notifier.state.currentRoom?.currentBookHash, bookHash);
     });
+
+    test('a book someone else shared first is not overwritten on the retry', () async {
+      // Regression: the conflict retry took the newer revision and wrote over
+      // the book another member had just shared.
+      final otherBook = List.filled(64, 'c').join();
+      final service = FakeRoomService()
+        ..bookConflicts = 1
+        ..conflictRoom = testRoom(
+          revision: 7,
+        ).copyWith(currentBookTitle: 'Bob', currentBookHash: otherBook);
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      final isRoomBook = await notifier.updateBookShared(
+        bookTitle: 'Alice',
+        bookHash: List.filled(64, 'b').join(),
+      );
+
+      expect(isRoomBook, isFalse);
+      expect(service.bookExpectedRevisions, [0]);
+      expect(notifier.state.currentRoom?.currentBookHash, otherBook);
+    });
   });
 }
 
