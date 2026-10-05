@@ -78,6 +78,11 @@ app's library browser searches and filters by. For each book, add a row to
 | `author` | `曹雪芹` | Optional |
 | `language` | `zh-Hant` | Optional BCP 47 tag; `en`, `zh-Hant`, `zh-Hans`, `ja`… are shown by name |
 | `category` | `Classics` | Optional; shown as written, one filter per distinct value |
+| `cover_path` | `covers/hongloumeng.jpg` | Optional; an image in the same bucket (about 400px wide JPEG), added by `20261005130000_library_covers.sql` |
+
+Upload covers to the `covers/` folder of the bucket; most EPUBs carry one
+(the `cover-image` item in the book's OPF). A book without a cover shows a
+plain book symbol.
 
 A book without a row is still listed, titled by its file name
 (`The_Time_Machine.epub` shows as "The Time Machine"), and only appears when no

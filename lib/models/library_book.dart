@@ -15,6 +15,9 @@ class LibraryBook {
   final String? language;
   final String? category;
 
+  /// An image object in the library bucket, shown as the book's cover.
+  final String? coverPath;
+
   const LibraryBook({
     required this.path,
     this.sizeBytes,
@@ -22,6 +25,7 @@ class LibraryBook {
     this.author,
     this.language,
     this.category,
+    this.coverPath,
   }) : _catalogTitle = title;
 
   /// A row of `cotime_book.library_catalog`. Blank catalog fields read as
@@ -36,6 +40,7 @@ class LibraryBook {
       author: _text(row['author']),
       language: _text(row['language']),
       category: _text(row['category']),
+      coverPath: _text(row['cover_path']),
     );
   }
 
@@ -81,11 +86,19 @@ class LibraryBook {
       other._catalogTitle == _catalogTitle &&
       other.author == author &&
       other.language == language &&
-      other.category == category;
+      other.category == category &&
+      other.coverPath == coverPath;
 
   @override
-  int get hashCode =>
-      Object.hash(path, sizeBytes, _catalogTitle, author, language, category);
+  int get hashCode => Object.hash(
+    path,
+    sizeBytes,
+    _catalogTitle,
+    author,
+    language,
+    category,
+    coverPath,
+  );
 }
 
 /// Names a BCP 47 tag. The catalog is filled in by hand, so the same language

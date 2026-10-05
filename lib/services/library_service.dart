@@ -13,6 +13,9 @@ abstract interface class LibraryService {
   Future<List<LibraryBook>> listBooks();
 
   Future<Uint8List> download(String path);
+
+  /// Where a cover image in the library can be loaded from.
+  String coverUrl(String path);
 }
 
 class SupabaseLibraryService implements LibraryService {
@@ -40,6 +43,11 @@ class SupabaseLibraryService implements LibraryService {
 
   @override
   Future<Uint8List> download(String path) => _bucket.download(path);
+
+  /// The bucket is public, so covers load as plain images with no token and
+  /// can be cached like any other.
+  @override
+  String coverUrl(String path) => _bucket.getPublicUrl(path);
 }
 
 /// Keeps only what a reader can open, sorted by title.

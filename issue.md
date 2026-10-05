@@ -670,16 +670,22 @@
     呼叫者本來就讀不到的 bucket。
   - `SupabaseLibraryService.listBooks()` 改讀 view；`LibraryBook` 加上 author / language / category，
     空白欄位視為沒有。分享圖書館的書時，作者也一起帶進 `BookMetadata`。
+  - 封面：`20261005130000_library_covers.sql` 加上 `cover_path`（同一個 bucket 裡的圖，慣例是
+    `covers/<name>.jpg`、約 400px 寬）。bucket 是 public，App 用 `LibraryService.coverUrl()` 的 public URL
+    載入，`LibraryCover` 固定 48×72、依顯示大小解碼（`cacheWidth`），載入前與失敗時都顯示書本符號，
+    不淡入（e-ink）。view 只列 `*.epub`，封面圖不會被當成書。
   - `language` 存 BCP 47 tag，App 用 `describeLanguage()` 轉成名稱；`zh-TW` 與 `zh-Hant` 都是
     「Chinese (Traditional)」，篩選時也算同一種語言（目錄是手填的，寫法不會一致）。
-- **正式庫狀態（2026-10-05）**：已套用。用 `execute_sql` 在一個 transaction 裡執行 migration 本體，
-  並以檔名的版本號 `20261005120000` 寫入 `supabase_migrations.schema_migrations`
-  （`apply_migration` 會改用當下時間當版本號）。已用 authenticated 身分驗證：view 列出 bucket 裡的
-  5 本書（目前都還沒有目錄列，標題沿用檔名），`anon` 沒有任何權限。
-- **測試**：`supabase/tests/database/library_catalog.test.sql`（7 項：含資料夾的列表、目錄欄位、
+- **正式庫狀態（2026-10-05）**：兩個 migration 都已套用。用 `execute_sql` 在 transaction 裡執行本體，
+  並以檔名的版本號（`20261005120000`、`20261005130000`）寫入 `supabase_migrations.schema_migrations`
+  （`apply_migration` 會改用當下時間當版本號）。bucket 裡的 5 本書都已建目錄（書名、作者、語言、分類、
+  `cover_path`），以 authenticated 身分驗證過 view；`anon` 沒有任何權限。
+  封面圖由維護者從 dashboard 上傳到 `covers/`（Claude Code session 沒有 Storage 的寫入金鑰）；
+  上傳前 App 顯示書本符號。
+- **測試**：`supabase/tests/database/library_catalog.test.sql`（7 項：含資料夾的列表（不含封面圖）、目錄欄位與封面、
   沒有目錄列的書仍列出、不列其他 bucket、讀者不能新增或修改目錄、未登入不能讀）；
   `test/library_test.dart` → `catalogued books by their catalog title, the rest by file name`、
-  `the catalog lists the same bucket the app downloads from`
+  `the catalog lists the same bucket the app downloads from`、`shows a cover where the catalog has one`
 
 ### [x] #AB 圖書館塞在「Share Book」裡，而且無法搜尋
 

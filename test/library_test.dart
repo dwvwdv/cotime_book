@@ -17,6 +17,7 @@ Map<String, dynamic> row(
   String? author,
   String? language,
   String? category,
+  String? cover,
 }) => {
   'path': path,
   'size_bytes': size,
@@ -24,6 +25,7 @@ Map<String, dynamic> row(
   'author': author,
   'language': language,
   'category': category,
+  'cover_path': cover,
 };
 
 class FakeLibrary implements LibraryService {
@@ -37,6 +39,9 @@ class FakeLibrary implements LibraryService {
 
   @override
   Future<Uint8List> download(String path) async => Uint8List(0);
+
+  @override
+  String coverUrl(String path) => 'https://library.test/$path';
 }
 
 void main() {
@@ -51,8 +56,9 @@ void main() {
           author: '曹雪芹',
           language: 'zh-Hant',
           category: 'Classics',
+          cover: 'covers/hongloumeng.jpg',
         ),
-        row('Alice in Wonderland.EPUB', title: '  ', author: ''),
+        row('Alice in Wonderland.EPUB', title: '  ', author: '', cover: ' '),
       ]);
 
       expect(books.map((book) => book.title), [
@@ -62,6 +68,8 @@ void main() {
       ]);
       // A blank catalog field is no field, not an empty label.
       expect(books.first.author, isNull);
+      expect(books.first.coverPath, isNull);
+      expect(books.last.coverPath, 'covers/hongloumeng.jpg');
       expect(books.last.author, '曹雪芹');
       expect(books.last.languageName, 'Chinese (Traditional)');
       expect(books.last.fileName, 'hongloumeng.epub');
@@ -284,6 +292,36 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(picked()?.path, 'The_Time_Machine.epub');
+    });
+
+    testWidgets('shows a cover where the catalog has one', (tester) async {
+      await openBrowser(
+        tester,
+        FakeLibrary([
+          () async => const [
+            LibraryBook(path: 'alice.epub', coverPath: 'covers/alice.jpg'),
+            LibraryBook(path: 'bare.epub'),
+          ],
+        ]),
+      );
+
+      final images = tester.widgetList<Image>(find.byType(Image)).toList();
+      expect(images, hasLength(1));
+      final provider = images.single.image as ResizeImage;
+      expect(
+        (provider.imageProvider as NetworkImage).url,
+        'https://library.test/covers/alice.jpg',
+      );
+      // Loading (and, in tests, failing) leaves the book symbol in place of
+      // the cover rather than an empty or broken box.
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byType(LibraryCover),
+          matching: find.byIcon(Icons.menu_book_outlined),
+        ),
+        findsNWidgets(2),
+      );
     });
 
     testWidgets('finds a book by its name', (tester) async {

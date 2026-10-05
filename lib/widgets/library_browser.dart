@@ -252,7 +252,14 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final book = shown[index];
-        return _BookRow(book: book, onTap: () => widget.onSelected(book));
+        final coverPath = book.coverPath;
+        return _BookRow(
+          book: book,
+          coverUrl: coverPath == null
+              ? null
+              : widget.library.coverUrl(coverPath),
+          onTap: () => widget.onSelected(book),
+        );
       },
     );
   }
@@ -354,9 +361,14 @@ class _FilterChoice extends StatelessWidget {
 
 class _BookRow extends StatelessWidget {
   final LibraryBook book;
+  final String? coverUrl;
   final VoidCallback onTap;
 
-  const _BookRow({required this.book, required this.onTap});
+  const _BookRow({
+    required this.book,
+    required this.coverUrl,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -372,7 +384,7 @@ class _BookRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 12),
         child: Row(
           children: [
-            const Icon(Icons.menu_book_outlined, size: 22),
+            LibraryCover(url: coverUrl),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -404,6 +416,49 @@ class _BookRow extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// A book's cover at list size, or a ruled box with a book in it when there
+/// is no cover or it cannot be loaded.
+///
+/// Always the same size, so rows do not jump as covers arrive, and a cover
+/// appears in one step rather than fading in: a fade is a dozen partial
+/// refreshes on e-ink.
+class LibraryCover extends StatelessWidget {
+  static const width = 48.0;
+  static const height = 72.0;
+
+  final String? url;
+
+  const LibraryCover({super.key, required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    const placeholder = Center(child: Icon(Icons.menu_book_outlined, size: 22));
+    final url = this.url;
+    return Container(
+      width: width,
+      height: height,
+      decoration: const BoxDecoration(
+        color: AppTheme.paper,
+        border: Border.fromBorderSide(AppTheme.rule),
+      ),
+      child: url == null
+          ? placeholder
+          : Image.network(
+              url,
+              fit: BoxFit.cover,
+              // Decoded at the size it is shown, not the 400px it is stored
+              // at: a long list of covers stays small in memory.
+              cacheWidth: (width * MediaQuery.devicePixelRatioOf(context))
+                  .round(),
+              excludeFromSemantics: true,
+              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
+                  frame == null ? placeholder : child,
+              errorBuilder: (context, error, stackTrace) => placeholder,
+            ),
     );
   }
 }

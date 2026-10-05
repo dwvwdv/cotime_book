@@ -14,14 +14,20 @@ values
   ('cotime-book-library', 'classics/hongloumeng.epub', '{"size": 2048}'),
   ('cotime-book-library', 'The_Time_Machine.epub', '{"size": 1024}'),
   ('cotime-book-library', 'classics/.emptyFolderPlaceholder', '{"size": 0}'),
+  ('cotime-book-library', 'covers/hongloumeng.jpg', '{"size": 30000}'),
   ('catalog-test-private', 'secret.epub', '{"size": 1024}');
 
-insert into cotime_book.library_books (path, title, author, language, category)
+insert into cotime_book.library_books (
+  path, title, author, language, category, cover_path
+)
 values
-  ('classics/hongloumeng.epub', '紅樓夢', '曹雪芹', 'zh-Hant', 'Classics'),
+  (
+    'classics/hongloumeng.epub', '紅樓夢', '曹雪芹', 'zh-Hant', 'Classics',
+    'covers/hongloumeng.jpg'
+  ),
   -- Catalogued, but the file was never uploaded (or was removed).
-  ('missing.epub', 'Missing Book', null, 'en', 'Classics'),
-  ('secret.epub', 'Secret', null, 'en', 'Private');
+  ('missing.epub', 'Missing Book', null, 'en', 'Classics', null),
+  ('secret.epub', 'Secret', null, 'en', 'Private', null);
 
 set local role authenticated;
 select set_config(
@@ -36,26 +42,31 @@ select is(
     from cotime_book.library_catalog
   ),
   array['The_Time_Machine.epub', 'classics/hongloumeng.epub'],
-  'the catalog lists the EPUB files in the library bucket, folders included'
+  'the catalog lists the EPUB files in the library bucket, folders included, and not their covers'
 );
 
 select is(
   (
-    select row(title, author, language, category, size_bytes)::text
+    select row(title, author, language, category, size_bytes, cover_path)::text
     from cotime_book.library_catalog
     where path = 'classics/hongloumeng.epub'
   ),
-  row('紅樓夢', '曹雪芹', 'zh-Hant', 'Classics', 2048::bigint)::text,
-  'a catalogued book carries its title, author, language and category'
+  row(
+    '紅樓夢', '曹雪芹', 'zh-Hant', 'Classics', 2048::bigint,
+    'covers/hongloumeng.jpg'
+  )::text,
+  'a catalogued book carries its title, author, language, category and cover'
 );
 
 select is(
   (
-    select row(title, author, language, category, size_bytes)::text
+    select row(title, author, language, category, size_bytes, cover_path)::text
     from cotime_book.library_catalog
     where path = 'The_Time_Machine.epub'
   ),
-  row(null::text, null::text, null::text, null::text, 1024::bigint)::text,
+  row(
+    null::text, null::text, null::text, null::text, 1024::bigint, null::text
+  )::text,
   'a book with no catalog row is still listed'
 );
 
