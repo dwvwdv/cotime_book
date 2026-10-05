@@ -82,7 +82,7 @@ app's library browser searches and filters by. For each book, add a row to
 
 Upload covers to the `covers/` folder of the bucket; most EPUBs carry one
 (the `cover-image` item in the book's OPF). A book without a cover shows a
-plain book symbol.
+plain jacket with its title.
 
 A book without a row is still listed, titled by its file name
 (`The_Time_Machine.epub` shows as "The Time Machine"), and only appears when no
@@ -125,7 +125,7 @@ Then run: `chmod +x run.sh && ./run.sh`
 - Real-time updates when room members change pages
 - Anonymous authentication (no sign-up required)
 - EPUB book support (up to 40MB per book)
-- A public library of open-source books any room can read, searchable by title, author, category and language
+- A public library of open-source books any room can read, shown as a shelf of covers, searchable by title or author and filterable by category and language
 
 ## 🛠️ Development
 

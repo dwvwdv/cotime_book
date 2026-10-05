@@ -219,7 +219,7 @@ void main() {
 
       expect(find.text('Public Library'), findsOneWidget);
       expect(find.byType(TextField), findsOneWidget);
-      expect(find.text('紅樓夢'), findsOneWidget);
+      expect(find.text('紅樓夢'), findsWidgets);
       expect(library.listCalls, 1);
 
       Navigator.of(tester.element(find.text('Public Library'))).pop();

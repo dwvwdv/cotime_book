@@ -672,7 +672,7 @@
     空白欄位視為沒有。分享圖書館的書時，作者也一起帶進 `BookMetadata`。
   - 封面：`20261005130000_library_covers.sql` 加上 `cover_path`（同一個 bucket 裡的圖，慣例是
     `covers/<name>.jpg`、約 400px 寬）。bucket 是 public，App 用 `LibraryService.coverUrl()` 的 public URL
-    載入，`LibraryCover` 固定 48×72、依顯示大小解碼（`cacheWidth`），載入前與失敗時都顯示書本符號，
+    載入，`LibraryCover` 依顯示大小解碼（`cacheWidth`），載入前與失敗時顯示素面書衣，
     不淡入（e-ink）。view 只列 `*.epub`，封面圖不會被當成書。
   - `language` 存 BCP 47 tag，App 用 `describeLanguage()` 轉成名稱；`zh-TW` 與 `zh-Hant` 都是
     「Chinese (Traditional)」，篩選時也算同一種語言（目錄是手填的，寫法不會一致）。
@@ -681,7 +681,7 @@
   （`apply_migration` 會改用當下時間當版本號）。bucket 裡的 5 本書都已建目錄（書名、作者、語言、分類、
   `cover_path`），以 authenticated 身分驗證過 view；`anon` 沒有任何權限。
   封面圖由維護者從 dashboard 上傳到 `covers/`（Claude Code session 沒有 Storage 的寫入金鑰）；
-  上傳前 App 顯示書本符號。
+  上傳前 App 顯示素面書衣。
 - **測試**：`supabase/tests/database/library_catalog.test.sql`（7 項：含資料夾的列表（不含封面圖）、目錄欄位與封面、
   沒有目錄列的書仍列出、不列其他 bucket、讀者不能新增或修改目錄、未登入不能讀）；
   `test/library_test.dart` → `catalogued books by their catalog title, the rest by file name`、
@@ -699,16 +699,22 @@
   - `LibraryBrowser` 是獨立元件（`onSelected` 回呼），`showLibraryBrowser()` 把它包成固定高度的
     paper sheet——篩選後書變少時 sheet 不會縮在手指底下，只在搜尋時讓出鍵盤的空間。
   - 搜尋比對書名、作者與檔名，不分大小寫；多個詞要全部出現、順序不拘；中文沒有空格，整段當一個詞。
-    分類、語言各一列互斥選項（「All」在最前），可以橫向捲動，再點一次已選的選項就取消。
-    目錄沒有任何分類（或語言）時，那一列整個不顯示，不會只剩一個「All」。
+  - 分類、語言是進階篩選：搜尋框右邊的篩選按鈕按下才展開面板（標籤在上、選項換行排列，
+    「All」在最前，再點一次已選的選項就取消）。有篩選生效時按鈕反白，面板收起來也看得出清單被縮小了。
+    目錄沒有任何分類與語言時不顯示按鈕。面板和書一起捲動——手機開著鍵盤時，固定在上方的面板會把書擠掉。
+  - 書以封面網格呈現（手機至少 3 欄，寬螢幕依寬度增加欄數而不是放大封面），封面下只有書名，最多兩行。
+    每格高度固定為封面 + 兩行書名，短書名不會讓同一列錯位。沒有封面或還沒載入時是一張
+    「素面書衣」（書名印在上面），一整排沒封面的書仍然分得出來。
   - 整份目錄載入一次、在裝置上篩選：打字不必等網路，電子紙上也不會閃「Loading」。
   - 沒有符合的書時顯示「No books match.」與「Clear Search and Filters」——
-    造成零結果的那個選項可能已經捲出畫面，不給這顆按鈕就是死路。
+    造成零結果的篩選可能收在面板裡，不給這顆按鈕就是死路。
   - 選中的選項用黑底白字（反轉）而不是顏色，符合 Paper 設計。
+- **第一版的問題（同一個 PR 內修正）**：分類與語言一開始是常駐在搜尋框下方的兩列，
+  左側標籤固定 84px 寬，在實機上「CATEGORY」被斷成「CATEGOR / Y」；書單是列表，資訊太多又看不到封面。
 - **測試**：`test/library_test.dart` 的 `searching the library` 群組（書名／作者／檔名、
   多詞、分類與語言組合、選項去重、語言名稱）與 `the library browser` 群組
-  （點書回傳、用書名找、分類與語言篩選與取消、零結果一鍵清除、沒有目錄時不顯示空的篩選列、
-  空圖書館、離線重試）；`test/room_lobby_screen_test.dart` →
+  （點書回傳且只顯示書名、封面與素面書衣、用書名找、篩選收在按鈕後、分類與語言篩選與取消、
+  收起面板仍保留篩選、零結果一鍵清除、沒有目錄時不顯示篩選按鈕、空圖書館、離線重試）；`test/room_lobby_screen_test.dart` →
   `the library has its own button, apart from Share Book`
 
 ## 開放中

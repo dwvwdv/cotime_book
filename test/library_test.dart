@@ -244,21 +244,28 @@ void main() {
       return () => picked;
     }
 
-    /// A filter choice, not a book whose details read the same.
+    /// A book on the shelf by the title under its cover, not the title set
+    /// on a plain jacket.
+    Finder shelved(String title) => find.byElementPredicate(
+      (element) =>
+          element.widget is Text &&
+          (element.widget as Text).data == title &&
+          element.findAncestorWidgetOfExactType<LibraryCover>() == null,
+    );
+
     Finder choice(String label) => find.descendant(
-      of: find.byWidgetPredicate(
-        (widget) =>
-            widget is SingleChildScrollView &&
-            widget.scrollDirection == Axis.horizontal,
-      ),
+      of: find.byKey(const Key('library-filters')),
       matching: find.text(label),
     );
 
-    /// Scrolls the filter row to [label] first, as a reader would.
-    Future<void> tapChoice(WidgetTester tester, String label) async {
-      await tester.ensureVisible(choice(label));
+    Future<void> openFilters(WidgetTester tester) async {
+      await tester.tap(find.byTooltip('Filters'));
       await tester.pump();
+    }
+
+    Future<void> tapChoice(WidgetTester tester, String label) async {
       await tester.tap(choice(label));
+      await tester.pump();
     }
 
     const catalog = [
@@ -287,8 +294,9 @@ void main() {
       );
 
       expect(find.text('3 books'), findsOneWidget);
-      expect(find.text('Lewis Carroll · Children · English · 1 KB'), findsOne);
-      await tester.tap(find.text('The Time Machine'));
+      // Only titles: the shelf is for finding a book, not reading its record.
+      expect(find.textContaining('Lewis Carroll'), findsNothing);
+      await tester.tap(shelved('The Time Machine'));
       await tester.pumpAndSettle();
 
       expect(picked()?.path, 'The_Time_Machine.epub');
@@ -312,15 +320,22 @@ void main() {
         (provider.imageProvider as NetworkImage).url,
         'https://library.test/covers/alice.jpg',
       );
-      // Loading (and, in tests, failing) leaves the book symbol in place of
-      // the cover rather than an empty or broken box.
+      // Until a cover loads, and when it cannot (as in tests), the book wears
+      // a plain jacket with its title rather than an empty or broken box.
       await tester.pumpAndSettle();
       expect(
         find.descendant(
           of: find.byType(LibraryCover),
-          matching: find.byIcon(Icons.menu_book_outlined),
+          matching: find.text('alice'),
         ),
-        findsNWidgets(2),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(LibraryCover),
+          matching: find.text('bare'),
+        ),
+        findsOneWidget,
       );
     });
 
@@ -330,29 +345,48 @@ void main() {
       await tester.enterText(find.byType(TextField), '紅樓');
       await tester.pump();
 
-      expect(find.text('紅樓夢'), findsOneWidget);
-      expect(find.text('The Time Machine'), findsNothing);
+      expect(shelved('紅樓夢'), findsOneWidget);
+      expect(shelved('The Time Machine'), findsNothing);
       expect(find.text('1 of 3 books'), findsOneWidget);
+    });
+
+    testWidgets('filters wait behind a button next to the search', (
+      tester,
+    ) async {
+      await openBrowser(tester, FakeLibrary([() async => catalog]));
+
+      expect(find.text('CATEGORY'), findsNothing);
+      expect(choice('English'), findsNothing);
+
+      await openFilters(tester);
+      expect(find.text('CATEGORY'), findsOneWidget);
+      expect(find.text('LANGUAGE'), findsOneWidget);
+
+      await openFilters(tester);
+      expect(find.text('CATEGORY'), findsNothing);
     });
 
     testWidgets('narrows by category and by language', (tester) async {
       await openBrowser(tester, FakeLibrary([() async => catalog]));
+      await openFilters(tester);
 
       await tapChoice(tester, 'English');
-      await tester.pump();
-      expect(find.text('紅樓夢'), findsNothing);
-      expect(find.text('The Time Machine'), findsOneWidget);
-      expect(find.text("Alice's Adventures in Wonderland"), findsOneWidget);
+      expect(shelved('紅樓夢'), findsNothing);
+      expect(shelved('The Time Machine'), findsOneWidget);
+      expect(shelved("Alice's Adventures in Wonderland"), findsOneWidget);
 
       await tapChoice(tester, 'Children');
-      await tester.pump();
-      expect(find.text('The Time Machine'), findsNothing);
-      expect(find.text("Alice's Adventures in Wonderland"), findsOneWidget);
+      expect(shelved('The Time Machine'), findsNothing);
+      expect(shelved("Alice's Adventures in Wonderland"), findsOneWidget);
 
       // Tapping the chosen category again lets go of it.
       await tapChoice(tester, 'Children');
-      await tester.pump();
-      expect(find.text('The Time Machine'), findsOneWidget);
+      expect(shelved('The Time Machine'), findsOneWidget);
+
+      // Closing the panel keeps the filter, and the list says it is narrowed.
+      await openFilters(tester);
+      expect(shelved('紅樓夢'), findsNothing);
+      expect(find.text('2 of 3 books'), findsOneWidget);
     });
 
     testWidgets('a search with no result can be cleared in one tap', (
@@ -360,7 +394,9 @@ void main() {
     ) async {
       await openBrowser(tester, FakeLibrary([() async => catalog]));
 
+      await openFilters(tester);
       await tapChoice(tester, 'Classics');
+      await openFilters(tester);
       await tester.enterText(find.byType(TextField), 'carroll');
       await tester.pump();
       expect(find.text('No books match.'), findsOneWidget);
@@ -368,7 +404,7 @@ void main() {
       await tester.tap(find.text('Clear Search and Filters'));
       await tester.pump();
       expect(find.text('3 books'), findsOneWidget);
-      expect(find.text('紅樓夢'), findsOneWidget);
+      expect(shelved('紅樓夢'), findsOneWidget);
     });
 
     testWidgets('an uncatalogued library offers no empty filters', (
@@ -381,9 +417,8 @@ void main() {
         ]),
       );
 
-      expect(find.text('Alice'), findsOneWidget);
-      expect(find.text('CATEGORY'), findsNothing);
-      expect(find.text('LANGUAGE'), findsNothing);
+      expect(shelved('Alice'), findsOneWidget);
+      expect(find.byTooltip('Filters'), findsNothing);
     });
 
     testWidgets('says when the library is empty', (tester) async {
@@ -405,7 +440,7 @@ void main() {
       await tester.tap(find.text('Try Again'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Alice'), findsOneWidget);
+      expect(shelved('Alice'), findsOneWidget);
       expect(library.listCalls, 2);
     });
   });
