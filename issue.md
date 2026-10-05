@@ -654,6 +654,57 @@
 
 ---
 
+### [x] #AA 圖書館的書名只來自檔名
+
+- **檔案**：`supabase/migrations/20261005120000_library_catalog.sql`、`lib/models/library_book.dart`、
+  `lib/services/library_service.dart`
+- **症狀**：圖書館只看得到檔名，沒有作者、語言、分類；而 Storage 的 object key 只接受
+  `[A-Za-z0-9_/!.*'() &$=@;:+,?-]`，中文書名放不進檔名，只能用英文或拼音命名。
+- **原因**：當時刻意不做目錄表，書名直接取 Storage 物件的檔名。
+- **修法**：
+  - 新增 `cotime_book.library_books`（path, title, author, language, category），由維護者在
+    dashboard 填寫；`authenticated` 只有 SELECT，沒有任何寫入權限。
+  - 新增 `cotime_book.library_catalog` view（`security_invoker`）：列出 `cotime-book-library`
+    bucket 裡的 `*.epub`（含資料夾內的），left join 目錄。所以**只丟進 bucket、還沒建目錄的書照樣列出**
+    （標題退回檔名）；目錄裡有、但檔案不存在的列不會出現。用 invoker 權限，所以 view 開不了
+    呼叫者本來就讀不到的 bucket。
+  - `SupabaseLibraryService.listBooks()` 改讀 view；`LibraryBook` 加上 author / language / category，
+    空白欄位視為沒有。分享圖書館的書時，作者也一起帶進 `BookMetadata`。
+  - `language` 存 BCP 47 tag，App 用 `describeLanguage()` 轉成名稱；`zh-TW` 與 `zh-Hant` 都是
+    「Chinese (Traditional)」，篩選時也算同一種語言（目錄是手填的，寫法不會一致）。
+- **正式庫狀態**：migration **尚未套用**。新版 APK 發佈前要先套用，否則 Library 會顯示
+  「The library could not be opened.」（可以重試，不會影響其他功能）。這個 migration 只有
+  `create table` / `create view` / `grant`，沒有 `DROP` 或含 `delete` / `update` 的函式，
+  用 Supabase MCP 套用不會被攔下。
+- **測試**：`supabase/tests/database/library_catalog.test.sql`（7 項：含資料夾的列表、目錄欄位、
+  沒有目錄列的書仍列出、不列其他 bucket、讀者不能新增或修改目錄、未登入不能讀）；
+  `test/library_test.dart` → `catalogued books by their catalog title, the rest by file name`、
+  `the catalog lists the same bucket the app downloads from`
+
+### [x] #AB 圖書館塞在「Share Book」裡，而且無法搜尋
+
+- **檔案**：`lib/widgets/library_browser.dart`、`lib/screens/room_lobby_screen.dart`
+- **症狀**：要找圖書館的書得先按「Share Book」，再從一張同時放著「選這台裝置上的檔案」的 sheet 裡
+  一本一本往下捲；書一多就找不到，也沒辦法只看某一類或某種語言的書。
+- **修法**：
+  - 拿掉 `ShareBookSheet`。lobby 改成兩個並排的按鈕：「Share Book」直接開檔案選擇器，
+    「Library」開獨立的 `LibraryBrowser`；「Start / Join Reading」移到下一列、全寬。
+    lobby 不在 viewer 周圍，改變它的高度不會影響分頁（#13 / #20）。
+  - `LibraryBrowser` 是獨立元件（`onSelected` 回呼），`showLibraryBrowser()` 把它包成固定高度的
+    paper sheet——篩選後書變少時 sheet 不會縮在手指底下，只在搜尋時讓出鍵盤的空間。
+  - 搜尋比對書名、作者與檔名，不分大小寫；多個詞要全部出現、順序不拘；中文沒有空格，整段當一個詞。
+    分類、語言各一列互斥選項（「All」在最前），可以橫向捲動，再點一次已選的選項就取消。
+    目錄沒有任何分類（或語言）時，那一列整個不顯示，不會只剩一個「All」。
+  - 整份目錄載入一次、在裝置上篩選：打字不必等網路，電子紙上也不會閃「Loading」。
+  - 沒有符合的書時顯示「No books match.」與「Clear Search and Filters」——
+    造成零結果的那個選項可能已經捲出畫面，不給這顆按鈕就是死路。
+  - 選中的選項用黑底白字（反轉）而不是顏色，符合 Paper 設計。
+- **測試**：`test/library_test.dart` 的 `searching the library` 群組（書名／作者／檔名、
+  多詞、分類與語言組合、選項去重、語言名稱）與 `the library browser` 群組
+  （點書回傳、用書名找、分類與語言篩選與取消、零結果一鍵清除、沒有目錄時不顯示空的篩選列、
+  空圖書館、離線重試）；`test/room_lobby_screen_test.dart` →
+  `the library has its own button, apart from Share Book`
+
 ## 開放中
 
 ### [~] #H reader_screen.dart 沒有任何測試
@@ -757,17 +808,6 @@
 - **為什麼先不動**：要讓資料庫記住來源，得在 `rooms` 加欄位並改 `update_room_book` 相關的寫入路徑
   與 pgTAP；這次先把圖書館本身做起來。做的時候 `prepareForSharedBook` 已經接受 `libraryPath`，
   lobby 進場的 `loadExistingBook` 只要把它一路帶進去即可。
-
-### [ ] #AA 圖書館的書名只來自檔名
-
-- **檔案**：`lib/models/library_book.dart`、`lib/services/library_service.dart`
-- **問題**：目前沒有目錄表，書名就是 Storage 物件的檔名（去掉 `.epub`、底線換成空白），
-  沒有作者、封面或分類。而 Storage 的 object key 只接受
-  `[A-Za-z0-9_/!.*'() &$=@;:+,?-]`（storage-api `src/storage/limits.ts` 的 `VALID_OBJECT_KEY`），
-  **中文書名放不進檔名**，只能用英文或拼音命名。
-- **為什麼先不動**：使用者明確要求「檔案直接存 storage，後續需要擴展再說」。
-  擴展時的方向：在 `cotime_book` schema 加 `library_books`（path、title、author、size），
-  或上傳時寫入物件的 `user_metadata`；列表改讀它，`libraryBooksFromObjects` 留作沒有目錄時的退路。
 
 ### [ ] #N Realtime log 出現對已無成員房間的 `Unauthorized` 訂閱
 

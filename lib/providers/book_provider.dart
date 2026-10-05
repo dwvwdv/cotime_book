@@ -239,6 +239,7 @@ class BookNotifier extends StateNotifier<BookState> {
       await _shareBytes(
         bytes: bytes,
         title: book.title,
+        author: book.author,
         fileName: book.fileName,
         libraryPath: book.path,
         generation: generation,
@@ -266,6 +267,7 @@ class BookNotifier extends StateNotifier<BookState> {
     required String fileName,
     required int generation,
     required int shareGeneration,
+    String? author,
     String? libraryPath,
   }) async {
     if (!_isCurrentShare(generation, shareGeneration)) return;
@@ -284,7 +286,7 @@ class BookNotifier extends StateNotifier<BookState> {
     final metadata = BookMetadata(
       id: hash,
       title: title,
-      author: 'Unknown',
+      author: author ?? 'Unknown',
       fileName: fileName,
       fileSizeBytes: bytes.length,
       fileHash: hash,

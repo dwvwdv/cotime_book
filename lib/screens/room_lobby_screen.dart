@@ -12,10 +12,10 @@ import '../providers/presence_provider.dart';
 import '../providers/room_provider.dart';
 import '../services/presence_merge.dart';
 import '../services/realtime_service.dart';
+import '../widgets/library_browser.dart';
 import '../widgets/member_list.dart';
 import '../widgets/paper.dart';
 import '../widgets/room_code_display.dart';
-import '../widgets/share_book_sheet.dart';
 import '../widgets/transfer_progress_widget.dart';
 
 class RoomLobbyScreen extends ConsumerStatefulWidget {
@@ -405,7 +405,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                       const SizedBox(height: 16),
                     ],
 
-                    // Action buttons
+                    // Action buttons: where the book comes from, then reading.
                     Row(
                       children: [
                         Expanded(
@@ -422,21 +422,28 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: _isLeaving || !lobby.canOpenReader
+                          child: OutlinedButton.icon(
+                            onPressed:
+                                _isLeaving || bookState.isLoading
                                 ? null
-                                : lobby.isHostStart
-                                ? _startReading
-                                : () => _enterReader(fromHost: false),
-                            icon: const Icon(Icons.auto_stories_outlined),
-                            label: Text(
-                              lobby.isHostStart
-                                  ? 'Start Reading'
-                                  : 'Join Reading',
-                            ),
+                                : _browseLibrary,
+                            icon: const Icon(Icons.local_library_outlined),
+                            label: const Text('Library'),
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 12),
+                    ElevatedButton.icon(
+                      onPressed: _isLeaving || !lobby.canOpenReader
+                          ? null
+                          : lobby.isHostStart
+                          ? _startReading
+                          : () => _enterReader(fromHost: false),
+                      icon: const Icon(Icons.auto_stories_outlined),
+                      label: Text(
+                        lobby.isHostStart ? 'Start Reading' : 'Join Reading',
+                      ),
                     ),
                     // A disabled button with no reason reads as broken.
                     if (lobby.hint != null) ...[
@@ -476,21 +483,19 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     );
   }
 
+  /// Shares an EPUB file from this device.
   Future<void> _shareBook() async {
-    final choice = await showPaperSheet<ShareBookChoice>(
+    await ref.read(bookProvider.notifier).pickAndShareBook();
+  }
+
+  /// Shares a book from the public library.
+  Future<void> _browseLibrary() async {
+    final book = await showLibraryBrowser(
       context: context,
-      builder: (_) => ShareBookSheet(library: ref.read(libraryServiceProvider)),
+      library: ref.read(libraryServiceProvider),
     );
-    if (!mounted || _isLeaving) return;
-    final books = ref.read(bookProvider.notifier);
-    switch (choice) {
-      case ShareFromDevice():
-        await books.pickAndShareBook();
-      case ShareFromLibrary(:final book):
-        await books.shareLibraryBook(book);
-      case null:
-        break;
-    }
+    if (book == null || !mounted || _isLeaving) return;
+    await ref.read(bookProvider.notifier).shareLibraryBook(book);
   }
 
   Future<void> _startReading() async {

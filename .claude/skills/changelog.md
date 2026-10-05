@@ -9,6 +9,12 @@
 - 同一個 PR 只有一個版本條目（見 `version-update.md`）；review 修復追加在同一條目下。
 - 只動文件、`.claude/`、`.github/` 的 PR 不 bump 版號，不必新增條目。
 
+### v1.0.3+7 (2026-10-05)
+
+- ✨ 圖書館獨立成自己的元件：lobby 多一個「Library」按鈕，打開後可以用書名或作者搜尋，並依分類、語言篩選；「Share Book」回到直接選這台裝置上的檔案（issue #AB）。
+- ✨ 圖書館有了目錄：維護者在 `cotime_book.library_books` 填書名、作者、語言、分類，中文書名終於能顯示；還沒建目錄的書照樣列出，標題沿用檔名（issue #AA）。發佈前要先在正式庫套用 `20261005120000_library_catalog.sql`。
+- 🎨 lobby 的按鈕改成兩列：「Share Book / Library」並排，「Start Reading」在下方全寬。
+
 ### v1.0.2+6 (2026-10-04)
 
 - ✨ 公共圖書館：lobby 的「Share Book」改成先選來源——這台裝置上的檔案，或圖書館裡的書。圖書館就是 Supabase Storage 的 `cotime-book-library` bucket，維護者把開源 EPUB 放進去，檔名就是書名；App 只能列出與下載。
