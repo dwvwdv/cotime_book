@@ -256,12 +256,16 @@ class RoomNotifier extends StateNotifier<RoomState> {
     }
   }
 
-  Future<void> updateBookShared({
+  /// Makes [bookHash] the room's book. Returns false when another member's
+  /// book reached the room first: two shares racing each other resolve to the
+  /// one that committed first, and the other device follows it instead of
+  /// overwriting it on the conflict retry.
+  Future<bool> updateBookShared({
     required String bookTitle,
     required String bookHash,
   }) async {
     final room = state.currentRoom;
-    if (room == null) return;
+    if (room == null) return false;
     final roomSessionGeneration = _roomSessionGeneration;
 
     var writeOrigin = room;
@@ -279,11 +283,18 @@ class RoomNotifier extends StateNotifier<RoomState> {
         if (!_isCurrentRoomSession(room.id, roomSessionGeneration)) {
           throw RoomSessionChangedException(room.id);
         }
+        final committedBook = error.currentRoom.currentBookHash;
+        final sharedMeanwhile =
+            committedBook != writeOrigin.currentBookHash &&
+            committedBook != bookHash;
         _applyRoomUpdate(
           error.currentRoom,
           originRoom: writeOrigin,
           roomSessionGeneration: roomSessionGeneration,
         );
+        // Retrying would put this book over one the room may already be
+        // reading. Only revisions bumped by anything else are retried.
+        if (sharedMeanwhile) return false;
         writeOrigin = state.currentRoom!;
         if (attempt == 1) rethrow;
       } on RoomSessionRevokedException catch (error) {
@@ -322,6 +333,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
     );
 
     await refreshMembers();
+    return true;
   }
 
   /// Fetch the latest room data from DB (e.g. to get updated CFI on re-entry).

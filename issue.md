@@ -726,13 +726,48 @@
   否則把 App 切到背景幾分鐘的人會被踢出房間。這是產品取捨，而且需要 migration 與 pgTAP，
   應該單獨一個 PR。
 
-### [ ] #M 傳書仍然走 Realtime broadcast
+### [~] #M 傳書仍然走 Realtime broadcast
 
 - **檔案**：`lib/services/file_transfer_service.dart`
-- **問題**：#16 讓傳輸可以自我修復，但 10MB 的書仍是約 320 個 broadcast（每 100ms 一個），
-  受 Realtime 的訊息配額限制，大房間或付費方案以外可能很慢。
-- **建議**：若可以接受書檔經過伺服器，改用 Supabase Storage（上傳一次、各自 HTTP 下載，
-  RLS 依房間成員授權）。這牽涉到儲存成本與版權／隱私的產品決定，所以沒有在這次改。
+- **問題**：#16 讓傳輸可以自我修復，但書仍是逐塊 broadcast（32KB 一塊、每 100ms 一塊），
+  受 Realtime 的訊息配額限制，大房間或付費方案以外可能很慢。上限提高到 40MB 之後，
+  一本滿額的書是 1280 個 broadcast、最快也要兩分多鐘。
+- **部分緩解（v1.0.2+6）**：圖書館的書不走這條路。`book_shared` 帶 `library_path`，
+  收書端 `expectBook(hash, download: ...)` 直接從 Storage 下載、以 hash 驗證；
+  下載失敗或超過 `defaultDirectDownloadGrace`（60 秒）才向房內持有者要，兩邊誰先完成用誰。
+  分享者也不再 push 整本書。測試：`test/file_transfer_service_test.dart` 的 `library books` 群組。
+  分享者自己的下載可能要一分鐘，期間別人換了書，下載完成時不能把房間換回去——
+  `BookNotifier._shareGeneration` 在換書時遞增來淘汰它（`test/book_provider_test.dart`）。
+  兩人幾乎同時分享時，以**先寫進資料庫的那本**為準：`RoomNotifier.updateBookShared` 遇到
+  revision conflict 而資料庫的書已經被換掉時不再重試覆寫，回傳 false，後到的那台改跟隨房間的書；
+  寫入成功後，`_shareBytes` 的每一個 await（寫 DB、更新 Presence、broadcast）之後都用
+  `_isCurrentShare` 比對，期間收到了更晚的分享就不再宣告、也不再 push 自己的書。
+  仍然存在的窗口：自己的 `book_shared` 已送出之後才有人分享，兩則 broadcast 抵達各裝置的順序
+  不保證——這是 #16 之前就有的行為，房內的人可以再分享一次來收斂。
+- **還剩的**：使用者自己的檔案仍然只走 broadcast。改成上傳到 Storage 牽涉到儲存成本與
+  版權／隱私的產品決定（使用者的私人書檔會經過伺服器），所以沒有一起改。
+  晚加入的成員也還拿不到下載位置，見 #Z。
+
+### [ ] #Z 晚加入的成員收不到圖書館書的下載位置
+
+- **檔案**：`lib/screens/room_lobby_screen.dart`、`lib/providers/book_provider.dart`
+- **問題**：`library_path` 只在 `book_shared` broadcast 裡。分享之後才進 lobby 的人只看得到
+  資料庫的 `current_book_hash`，於是退回 #16 的 P2P 傳輸——書仍然收得到，只是比較慢，
+  而且需要房內有持有者在線。
+- **為什麼先不動**：要讓資料庫記住來源，得在 `rooms` 加欄位並改 `update_room_book` 相關的寫入路徑
+  與 pgTAP；這次先把圖書館本身做起來。做的時候 `prepareForSharedBook` 已經接受 `libraryPath`，
+  lobby 進場的 `loadExistingBook` 只要把它一路帶進去即可。
+
+### [ ] #AA 圖書館的書名只來自檔名
+
+- **檔案**：`lib/models/library_book.dart`、`lib/services/library_service.dart`
+- **問題**：目前沒有目錄表，書名就是 Storage 物件的檔名（去掉 `.epub`、底線換成空白），
+  沒有作者、封面或分類。而 Storage 的 object key 只接受
+  `[A-Za-z0-9_/!.*'() &$=@;:+,?-]`（storage-api `src/storage/limits.ts` 的 `VALID_OBJECT_KEY`），
+  **中文書名放不進檔名**，只能用英文或拼音命名。
+- **為什麼先不動**：使用者明確要求「檔案直接存 storage，後續需要擴展再說」。
+  擴展時的方向：在 `cotime_book` schema 加 `library_books`（path、title、author、size），
+  或上傳時寫入物件的 `user_metadata`；列表改讀它，`libraryBooksFromObjects` 留作沒有目錄時的退路。
 
 ### [ ] #N Realtime log 出現對已無成員房間的 `Unauthorized` 訂閱
 

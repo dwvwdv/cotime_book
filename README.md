@@ -59,6 +59,18 @@ This will create:
 - Least-privilege grants and Row Level Security (RLS) policies
 - Private Realtime Broadcast and Presence authorization
 
+### Public library
+
+`supabase/migrations/20261004200000_public_library_bucket.sql` creates the public
+Storage bucket `cotime-book-library` (40MB per file, the same limit as the app).
+To add a book, upload an `.epub` file to that bucket from the Supabase Dashboard
+(**Storage → cotime-book-library**). The file name is the title shown in the app,
+so name it the way it should read (`The_Time_Machine.epub` shows as
+"The Time Machine"). Storage only accepts ASCII letters, digits, spaces and
+`_/!.*'()&$=@;:+,?-` in object names, so titles in other scripts cannot be used
+yet (issue #AA). App users can list and download books but cannot add,
+change, or remove them.
+
 ### 2. Get Your Supabase Credentials
 
 1. In your Supabase Dashboard, go to **Settings** → **API**
@@ -94,7 +106,8 @@ Then run: `chmod +x run.sh && ./run.sh`
 - Collaborative reading with synchronized page positions
 - Real-time updates when room members change pages
 - Anonymous authentication (no sign-up required)
-- EPUB book support
+- EPUB book support (up to 40MB per book)
+- A public library of open-source books any room can read
 
 ## 🛠️ Development
 

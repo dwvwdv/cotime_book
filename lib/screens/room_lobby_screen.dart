@@ -15,6 +15,7 @@ import '../services/realtime_service.dart';
 import '../widgets/member_list.dart';
 import '../widgets/paper.dart';
 import '../widgets/room_code_display.dart';
+import '../widgets/share_book_sheet.dart';
 import '../widgets/transfer_progress_widget.dart';
 
 class RoomLobbyScreen extends ConsumerStatefulWidget {
@@ -116,9 +117,15 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       ) {
         final bookHash = payload['file_hash'] as String?;
         final bookTitle = payload['title'] as String?;
+        final libraryPath = payload['library_path'];
         if (bookHash != null) {
           unawaited(
-            ref.read(bookProvider.notifier).prepareForSharedBook(bookHash),
+            ref
+                .read(bookProvider.notifier)
+                .prepareForSharedBook(
+                  bookHash,
+                  libraryPath: libraryPath is String ? libraryPath : null,
+                ),
           );
           final roomNotifier = ref.read(roomProvider.notifier);
           roomNotifier.onBookSharedReceived(
@@ -470,7 +477,20 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
   }
 
   Future<void> _shareBook() async {
-    await ref.read(bookProvider.notifier).pickAndShareBook();
+    final choice = await showPaperSheet<ShareBookChoice>(
+      context: context,
+      builder: (_) => ShareBookSheet(library: ref.read(libraryServiceProvider)),
+    );
+    if (!mounted || _isLeaving) return;
+    final books = ref.read(bookProvider.notifier);
+    switch (choice) {
+      case ShareFromDevice():
+        await books.pickAndShareBook();
+      case ShareFromLibrary(:final book):
+        await books.shareLibraryBook(book);
+      case null:
+        break;
+    }
   }
 
   Future<void> _startReading() async {

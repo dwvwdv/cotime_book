@@ -55,6 +55,9 @@ abstract interface class BookBytesStore {
   Future<Uint8List?> readBook(String hash);
 }
 
+/// Fetches the room's book from outside the room (the public library).
+typedef BookDownload = Future<Uint8List> Function();
+
 /// Moves the room's EPUB between devices over Realtime broadcast.
 ///
 /// Broadcast is fire-and-forget: packets are dropped under rate limits, and
@@ -73,6 +76,9 @@ abstract interface class BookBytesStore {
 /// * A holder serves requests from one send queue, so several receivers asking
 ///   at once share the same broadcast instead of multiplying it.
 /// * The initial share is still pushed to everyone; it is just the fast path.
+/// * A library book is downloaded straight from Storage instead. The room is
+///   only the fallback: if the download fails or takes too long, the receive
+///   carries on as above.
 class FileTransferService {
   static const chunkEvent = 'book_chunk';
   static const requestEvent = 'transfer_request';
@@ -80,12 +86,17 @@ class FileTransferService {
   static const defaultFirstRequestDelay = Duration(seconds: 2);
   static const defaultStallTimeout = Duration(seconds: 6);
 
+  /// How long a library download runs alone before the room is asked too.
+  /// The download keeps going after this; whichever finishes first wins.
+  static const defaultDirectDownloadGrace = Duration(seconds: 60);
+
   final BookTransferTransport _transport;
   final BookBytesStore _store;
   final String _currentUserId;
   final Duration _chunkDelay;
   final Duration _firstRequestDelay;
   final Duration _stallTimeout;
+  final Duration _directDownloadGrace;
 
   final _stateController = StreamController<TransferState>.broadcast();
   final List<StreamSubscription<Map<String, dynamic>>> _subscriptions = [];
@@ -103,6 +114,7 @@ class FileTransferService {
   int _requestAttempt = 0;
   bool _assembling = false;
   bool _waitingForHolder = false;
+  bool _downloading = false;
   Timer? _repairTimer;
 
   /// Bumped whenever the wanted book changes, so an assembly or a timer from
@@ -129,12 +141,14 @@ class FileTransferService {
     Duration chunkDelay = AppConstants.chunkDelay,
     Duration firstRequestDelay = defaultFirstRequestDelay,
     Duration stallTimeout = defaultStallTimeout,
+    Duration directDownloadGrace = defaultDirectDownloadGrace,
   }) : _transport = transport,
        _store = store,
        _currentUserId = currentUserId,
        _chunkDelay = chunkDelay,
        _firstRequestDelay = firstRequestDelay,
-       _stallTimeout = stallTimeout;
+       _stallTimeout = stallTimeout,
+       _directDownloadGrace = directDownloadGrace;
 
   Stream<TransferState> get stateStream => _stateController.stream;
   TransferState get currentState => _state;
@@ -202,13 +216,28 @@ class FileTransferService {
   }
 
   /// The room's book is [bookHash] and this device does not have it.
-  void expectBook(String bookHash) {
+  ///
+  /// [download] fetches it without the room (a library book). The room is
+  /// asked only when that fails or runs past [defaultDirectDownloadGrace].
+  void expectBook(String bookHash, {BookDownload? download}) {
     if (_disposed) return;
     final hash = _normalizeHash(bookHash);
-    if (_heldHash == hash || _wantedHash == hash) return;
+    if (_heldHash == hash) return;
+    if (_wantedHash == hash) {
+      // Lobby entry can expect the book before the share broadcast says where
+      // to download it from.
+      if (download != null && !_downloading && !_assembling) {
+        _startDirectDownload(hash, download);
+      }
+      return;
+    }
 
     _stopReceiving();
     _wantedHash = hash;
+    if (download != null) {
+      _startDirectDownload(hash, download);
+      return;
+    }
     _updateState(
       TransferState(
         status: TransferStatus.waiting,
@@ -321,21 +350,7 @@ class FileTransferService {
       }
       await _store.saveBook(hash, bytes);
       if (_disposed || generation != _receiveGeneration) return;
-
-      _stopReceiving();
-      _heldHash = hash;
-      _heldBytes = bytes;
-      _updateState(
-        TransferState(
-          status: TransferStatus.completed,
-          bookHash: hash,
-          totalBytes: bytes.length,
-          transferredBytes: bytes.length,
-          totalChunks: _chunkCount(bytes.length),
-          receivedChunks: _chunkCount(bytes.length),
-        ),
-      );
-      debugPrint('Book received and saved: $hash');
+      _completeReceive(hash, bytes);
     } catch (error) {
       if (_disposed || generation != _receiveGeneration) return;
       debugPrint('Book assembly failed, asking again: $error');
@@ -352,6 +367,80 @@ class FileTransferService {
       );
       _scheduleRepair(Duration.zero);
     }
+  }
+
+  void _startDirectDownload(String hash, BookDownload download) {
+    _downloading = true;
+    if (_receivedChunks.isEmpty) {
+      _updateState(
+        TransferState(
+          status: TransferStatus.waiting,
+          bookHash: hash,
+          message: 'Downloading the book from the library...',
+        ),
+      );
+    }
+    // Asking the room right away would have a holder broadcast the whole book
+    // while it is also being downloaded.
+    _scheduleRepair(_directDownloadGrace);
+    unawaited(_downloadDirect(hash, download, _receiveGeneration));
+  }
+
+  Future<void> _downloadDirect(
+    String hash,
+    BookDownload download,
+    int generation,
+  ) async {
+    Uint8List? bytes;
+    try {
+      bytes = await download();
+      if (bytes.isEmpty ||
+          bytes.length > AppConstants.maxFileSize ||
+          sha256.convert(bytes).toString() != hash) {
+        // The library file changed after it was shared, or the download was
+        // cut short. Only the room can have the exact book now.
+        throw const FormatException('The library copy is not the shared book');
+      }
+    } catch (error) {
+      if (_disposed || generation != _receiveGeneration) return;
+      _downloading = false;
+      debugPrint('Library download failed, asking the room: $error');
+      if (!_assembling) _scheduleRepair(Duration.zero);
+      return;
+    }
+    if (_disposed || generation != _receiveGeneration) return;
+    _downloading = false;
+    // The room got there first and its copy is being saved.
+    if (_assembling) return;
+    _assembling = true;
+    try {
+      await _store.saveBook(hash, bytes);
+    } catch (error) {
+      if (_disposed || generation != _receiveGeneration) return;
+      _assembling = false;
+      debugPrint('Saving the library download failed, asking the room: $error');
+      _scheduleRepair(Duration.zero);
+      return;
+    }
+    if (_disposed || generation != _receiveGeneration) return;
+    _completeReceive(hash, bytes);
+  }
+
+  void _completeReceive(String hash, Uint8List bytes) {
+    _stopReceiving();
+    _heldHash = hash;
+    _heldBytes = bytes;
+    _updateState(
+      TransferState(
+        status: TransferStatus.completed,
+        bookHash: hash,
+        totalBytes: bytes.length,
+        transferredBytes: bytes.length,
+        totalChunks: _chunkCount(bytes.length),
+        receivedChunks: _chunkCount(bytes.length),
+      ),
+    );
+    debugPrint('Book received and saved: $hash');
   }
 
   void _scheduleRepair(Duration delay) {
@@ -462,6 +551,7 @@ class FileTransferService {
     _wantedHash = null;
     _assembling = false;
     _waitingForHolder = false;
+    _downloading = false;
     _requestAttempt = 0;
     _clearChunks();
   }
