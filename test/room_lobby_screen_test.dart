@@ -1,5 +1,7 @@
+import 'package:cotime_book/models/library_book.dart';
 import 'package:cotime_book/models/room_member.dart';
 import 'package:cotime_book/providers/auth_provider.dart';
+import 'package:cotime_book/providers/book_provider.dart';
 import 'package:cotime_book/providers/presence_provider.dart';
 import 'package:cotime_book/providers/room_provider.dart';
 import 'package:cotime_book/screens/room_lobby_screen.dart';
@@ -10,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
     show RealtimeSubscribeStatus;
 
+import 'library_test.dart' show FakeLibrary;
 import 'room_provider_test.dart' show FakeRoomService, testRoom;
 
 void main() {
@@ -192,6 +195,38 @@ void main() {
       await disposeLobby(tester, container);
     });
   });
+
+  group('RoomLobbyScreen library', () {
+    testWidgets('the library has its own button, apart from Share Book', (
+      tester,
+    ) async {
+      final library = FakeLibrary([
+        () async => const [LibraryBook(path: 'hongloumeng.epub', title: '紅樓夢')],
+      ]);
+      final container = await joinedContainer(
+        tester,
+        FakeRoomService()..members = [testMember('alice')],
+        library: library,
+      );
+      await pumpLobby(tester, container);
+
+      expect(find.text('Share Book'), findsOneWidget);
+      expect(library.listCalls, 0);
+
+      await tester.tap(find.text('Library'));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Public Library'), findsOneWidget);
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.text('紅樓夢'), findsWidgets);
+      expect(library.listCalls, 1);
+
+      Navigator.of(tester.element(find.text('Public Library'))).pop();
+      await tester.pump();
+      await disposeLobby(tester, container);
+    });
+  });
 }
 
 RoomMember testMember(String userId) => RoomMember(
@@ -210,8 +245,9 @@ class _SignedInAuth extends AuthNotifier {
 
 Future<ProviderContainer> joinedContainer(
   WidgetTester tester,
-  FakeRoomService rooms,
-) async {
+  FakeRoomService rooms, {
+  FakeLibrary? library,
+}) async {
   final realtime = RealtimeService(
     channelFactory: (name, key) => _SilentChannel(),
   );
@@ -220,6 +256,7 @@ Future<ProviderContainer> joinedContainer(
       roomServiceProvider.overrideWithValue(rooms),
       realtimeServiceProvider.overrideWithValue(realtime),
       authProvider.overrideWith((ref) => _SignedInAuth()),
+      if (library != null) libraryServiceProvider.overrideWithValue(library),
     ],
   );
   await container

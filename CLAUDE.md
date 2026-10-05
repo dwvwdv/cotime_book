@@ -96,6 +96,10 @@ supabase/
    公共圖書館的書（Storage bucket `cotime-book-library`）例外地先由收書端直接下載、
    以 hash 驗證，失敗或逾時才回到上面的 P2P 路徑（issue #M）。圖書館只能讀，
    書由維護者從 dashboard 放進去；bucket 的大小上限必須等於 `AppConstants.maxFileSize`。
+   書名、作者、語言、分類、封面（`cover_path`）來自目錄表 `cotime_book.library_books`；App 讀的是
+   `cotime_book.library_catalog` view（bucket left join 目錄），沒有目錄列的書仍要列得出來。
+   瀏覽與搜尋在獨立的 `LibraryBrowser`（lobby 的「Library」按鈕），不要塞回「Share Book」
+   （issue #AB）。
 
 7. **錯誤狀態要能自己收斂。**
    `PageSyncState.error` 會在 `defaultErrorAutoClearDelay` 後自動回到 idle。

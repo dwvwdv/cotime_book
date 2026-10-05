@@ -41,6 +41,9 @@ class SlowLibrary implements LibraryService {
   @override
   Future<Uint8List> download(String path) =>
       (downloads[path] = Completer<Uint8List>()).future;
+
+  @override
+  String coverUrl(String path) => 'https://library.test/$path';
 }
 
 /// Runs [onHoldingBook] while this device announces it holds a book: the

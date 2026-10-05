@@ -654,6 +654,69 @@
 
 ---
 
+### [x] #AA 圖書館的書名只來自檔名
+
+- **檔案**：`supabase/migrations/20261005120000_library_catalog.sql`、`lib/models/library_book.dart`、
+  `lib/services/library_service.dart`
+- **症狀**：圖書館只看得到檔名，沒有作者、語言、分類；而 Storage 的 object key 只接受
+  `[A-Za-z0-9_/!.*'() &$=@;:+,?-]`，中文書名放不進檔名，只能用英文或拼音命名。
+- **原因**：當時刻意不做目錄表，書名直接取 Storage 物件的檔名。
+- **修法**：
+  - 新增 `cotime_book.library_books`（path, title, author, language, category），由維護者在
+    dashboard 填寫；`authenticated` 只有 SELECT，沒有任何寫入權限。
+  - 新增 `cotime_book.library_catalog` view（`security_invoker`）：列出 `cotime-book-library`
+    bucket 裡的 `*.epub`（含資料夾內的），left join 目錄。所以**只丟進 bucket、還沒建目錄的書照樣列出**
+    （標題退回檔名）；目錄裡有、但檔案不存在的列不會出現。用 invoker 權限，所以 view 開不了
+    呼叫者本來就讀不到的 bucket。
+  - `SupabaseLibraryService.listBooks()` 改讀 view；`LibraryBook` 加上 author / language / category，
+    空白欄位視為沒有。分享圖書館的書時，作者也一起帶進 `BookMetadata`。
+  - 封面：`20261005130000_library_covers.sql` 加上 `cover_path`（同一個 bucket 裡的圖，慣例是
+    `covers/<name>.jpg`、約 400px 寬）。bucket 是 public，App 用 `LibraryService.coverUrl()` 的 public URL
+    載入，`LibraryCover` 依顯示大小解碼（`cacheWidth`），載入前與失敗時顯示素面書衣，
+    不淡入（e-ink）。view 只列 `*.epub`，封面圖不會被當成書。
+  - `language` 存 BCP 47 tag，App 用 `describeLanguage()` 轉成名稱；`zh-TW` 與 `zh-Hant` 都是
+    「Chinese (Traditional)」，篩選時也算同一種語言（目錄是手填的，寫法不會一致）。
+- **正式庫狀態（2026-10-05）**：兩個 migration 都已套用。用 `execute_sql` 在 transaction 裡執行本體，
+  並以檔名的版本號（`20261005120000`、`20261005130000`）寫入 `supabase_migrations.schema_migrations`
+  （`apply_migration` 會改用當下時間當版本號）。bucket 裡的 5 本書都已建目錄（書名、作者、語言、分類、
+  `cover_path`），以 authenticated 身分驗證過 view；`anon` 沒有任何權限。
+  封面圖由維護者從 dashboard 上傳到 `covers/`（Claude Code session 沒有 Storage 的寫入金鑰）；
+  上傳前 App 顯示素面書衣。
+- **測試**：`supabase/tests/database/library_catalog.test.sql`（7 項：含資料夾的列表（不含封面圖）、目錄欄位與封面、
+  沒有目錄列的書仍列出、不列其他 bucket、讀者不能新增或修改目錄、未登入不能讀）；
+  `test/library_test.dart` → `catalogued books by their catalog title, the rest by file name`、
+  `the catalog lists the same bucket the app downloads from`、`shows a cover where the catalog has one`
+
+### [x] #AB 圖書館塞在「Share Book」裡，而且無法搜尋
+
+- **檔案**：`lib/widgets/library_browser.dart`、`lib/screens/room_lobby_screen.dart`
+- **症狀**：要找圖書館的書得先按「Share Book」，再從一張同時放著「選這台裝置上的檔案」的 sheet 裡
+  一本一本往下捲；書一多就找不到，也沒辦法只看某一類或某種語言的書。
+- **修法**：
+  - 拿掉 `ShareBookSheet`。lobby 改成兩個並排的按鈕：「Share Book」直接開檔案選擇器，
+    「Library」開獨立的 `LibraryBrowser`；「Start / Join Reading」移到下一列、全寬。
+    lobby 不在 viewer 周圍，改變它的高度不會影響分頁（#13 / #20）。
+  - `LibraryBrowser` 是獨立元件（`onSelected` 回呼），`showLibraryBrowser()` 把它包成固定高度的
+    paper sheet——篩選後書變少時 sheet 不會縮在手指底下，只在搜尋時讓出鍵盤的空間。
+  - 搜尋比對書名、作者與檔名，不分大小寫；多個詞要全部出現、順序不拘；中文沒有空格，整段當一個詞。
+  - 分類、語言是進階篩選：搜尋框右邊的篩選按鈕按下才展開面板（標籤在上、選項換行排列，
+    「All」在最前，再點一次已選的選項就取消）。有篩選生效時按鈕反白，面板收起來也看得出清單被縮小了。
+    目錄沒有任何分類與語言時不顯示按鈕。面板和書一起捲動——手機開著鍵盤時，固定在上方的面板會把書擠掉。
+  - 書以封面網格呈現（手機至少 3 欄，寬螢幕依寬度增加欄數而不是放大封面），封面下只有書名，最多兩行。
+    每格高度固定為封面 + 兩行書名，短書名不會讓同一列錯位。沒有封面或還沒載入時是一張
+    「素面書衣」（書名印在上面），一整排沒封面的書仍然分得出來。
+  - 整份目錄載入一次、在裝置上篩選：打字不必等網路，電子紙上也不會閃「Loading」。
+  - 沒有符合的書時顯示「No books match.」與「Clear Search and Filters」——
+    造成零結果的篩選可能收在面板裡，不給這顆按鈕就是死路。
+  - 選中的選項用黑底白字（反轉）而不是顏色，符合 Paper 設計。
+- **第一版的問題（同一個 PR 內修正）**：分類與語言一開始是常駐在搜尋框下方的兩列，
+  左側標籤固定 84px 寬，在實機上「CATEGORY」被斷成「CATEGOR / Y」；書單是列表，資訊太多又看不到封面。
+- **測試**：`test/library_test.dart` 的 `searching the library` 群組（書名／作者／檔名、
+  多詞、分類與語言組合、選項去重、語言名稱）與 `the library browser` 群組
+  （點書回傳且只顯示書名、封面與素面書衣、用書名找、篩選收在按鈕後、分類與語言篩選與取消、
+  收起面板仍保留篩選、零結果一鍵清除、沒有目錄時不顯示篩選按鈕、空圖書館、離線重試）；`test/room_lobby_screen_test.dart` →
+  `the library has its own button, apart from Share Book`
+
 ## 開放中
 
 ### [~] #H reader_screen.dart 沒有任何測試
@@ -757,17 +820,6 @@
 - **為什麼先不動**：要讓資料庫記住來源，得在 `rooms` 加欄位並改 `update_room_book` 相關的寫入路徑
   與 pgTAP；這次先把圖書館本身做起來。做的時候 `prepareForSharedBook` 已經接受 `libraryPath`，
   lobby 進場的 `loadExistingBook` 只要把它一路帶進去即可。
-
-### [ ] #AA 圖書館的書名只來自檔名
-
-- **檔案**：`lib/models/library_book.dart`、`lib/services/library_service.dart`
-- **問題**：目前沒有目錄表，書名就是 Storage 物件的檔名（去掉 `.epub`、底線換成空白），
-  沒有作者、封面或分類。而 Storage 的 object key 只接受
-  `[A-Za-z0-9_/!.*'() &$=@;:+,?-]`（storage-api `src/storage/limits.ts` 的 `VALID_OBJECT_KEY`），
-  **中文書名放不進檔名**，只能用英文或拼音命名。
-- **為什麼先不動**：使用者明確要求「檔案直接存 storage，後續需要擴展再說」。
-  擴展時的方向：在 `cotime_book` schema 加 `library_books`（path、title、author、size），
-  或上傳時寫入物件的 `user_metadata`；列表改讀它，`libraryBooksFromObjects` 留作沒有目錄時的退路。
 
 ### [ ] #N Realtime log 出現對已無成員房間的 `Unauthorized` 訂閱
 
