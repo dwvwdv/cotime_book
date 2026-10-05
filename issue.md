@@ -672,10 +672,10 @@
     空白欄位視為沒有。分享圖書館的書時，作者也一起帶進 `BookMetadata`。
   - `language` 存 BCP 47 tag，App 用 `describeLanguage()` 轉成名稱；`zh-TW` 與 `zh-Hant` 都是
     「Chinese (Traditional)」，篩選時也算同一種語言（目錄是手填的，寫法不會一致）。
-- **正式庫狀態**：migration **尚未套用**。新版 APK 發佈前要先套用，否則 Library 會顯示
-  「The library could not be opened.」（可以重試，不會影響其他功能）。這個 migration 只有
-  `create table` / `create view` / `grant`，沒有 `DROP` 或含 `delete` / `update` 的函式，
-  用 Supabase MCP 套用不會被攔下。
+- **正式庫狀態（2026-10-05）**：已套用。用 `execute_sql` 在一個 transaction 裡執行 migration 本體，
+  並以檔名的版本號 `20261005120000` 寫入 `supabase_migrations.schema_migrations`
+  （`apply_migration` 會改用當下時間當版本號）。已用 authenticated 身分驗證：view 列出 bucket 裡的
+  5 本書（目前都還沒有目錄列，標題沿用檔名），`anon` 沒有任何權限。
 - **測試**：`supabase/tests/database/library_catalog.test.sql`（7 項：含資料夾的列表、目錄欄位、
   沒有目錄列的書仍列出、不列其他 bucket、讀者不能新增或修改目錄、未登入不能讀）；
   `test/library_test.dart` → `catalogued books by their catalog title, the rest by file name`、
