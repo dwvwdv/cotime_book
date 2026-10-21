@@ -5,13 +5,14 @@
 
 - 寫給**之後要彙整發版說明的人**看：講使用者看得到的變化，再補一句為什麼。
   protocol 代碼與檔名可以出現，但不要整段只剩識別字。
-- 對應 `issue.md` 的項目時標出編號（`issue #21`），細節留在 issue.md，不要兩邊各寫一份。
+- 對應 GitHub issue 時標出編號（`#31`），細節留在 issue 與 PR，不要兩邊各寫一份。
+  既有條目裡的 `issue #21`、`issue #U` 是已移除的 `issue.md` 的舊編號（見 `CLAUDE.md`）。
 - 同一個 PR 只有一個版本條目（見 `version-update.md`）；review 修復追加在同一條目下。
 - 只動文件、`.claude/`、`.github/` 的 PR 不 bump 版號，不必新增條目。
 
 ### v1.0.5+9 (2026-10-21)
 
-- ✨ 可以一起讀 TXT 小說：「Share Book」接受 TXT，可以一次選多個檔案（例如分卷的小說），依檔名順序合成一本書，在這台裝置上轉成 EPUB 再分享，其他人收到的就是一般的 EPUB，舊版 App 也讀得了（issue #AC）。
+- ✨ 可以一起讀 TXT 小說：「Share Book」接受 TXT，可以一次選多個檔案（例如分卷的小說），依檔名順序合成一本書，在這台裝置上轉成 EPUB 再分享，其他人收到的就是一般的 EPUB，舊版 App 也讀得了（#27）。章節判斷與編碼的已知限制見 #42。
 - ✨ 分享 TXT 前會先確認：書名、作者、每個檔案的編碼（自動偵測 UTF-8／UTF-16／GBK／Big5，預覽是亂碼時可以換）、章數與順序。
 - ⚡ `tool/shared_page_check` 也檢查 TXT 轉出的書在兩台裝置上逐頁一致。
 
@@ -50,4 +51,4 @@
 - 🐛 Realtime channel 斷線時由 watchdog 重建（issue #17）、Presence 更新限流（issue #18）、有人重連中時全房暫停翻頁（issue #19）。
 - 🎨 UI 改為電子紙（e-ink）設計系統 Paper。
 
-> 更早的歷史見 `git log` 與 `issue.md` 的「已修復」。
+> 更早的歷史見 `git log` 與 `git show 0006270:issue.md` 的「已修復」。
