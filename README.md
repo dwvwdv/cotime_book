@@ -124,7 +124,7 @@ Then run: `chmod +x run.sh && ./run.sh`
 - Collaborative reading with synchronized page positions
 - Real-time updates when room members change pages
 - Anonymous authentication (no sign-up required)
-- EPUB book support (up to 40MB per book)
+- EPUB book support (up to 40MB per book), and TXT novels (UTF-8, UTF-16, GBK or Big5; several files become one book) converted to EPUB on the sharing device
 - A public library of open-source books any room can read, shown as a shelf of covers, searchable by title or author and filterable by category and language
 
 ## 🛠️ Development

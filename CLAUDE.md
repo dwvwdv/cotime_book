@@ -118,6 +118,9 @@ supabase/
    `cotime_book.library_catalog` view（bucket left join 目錄），沒有目錄列的書仍要列得出來。
    瀏覽與搜尋在獨立的 `LibraryBrowser`（lobby 的「Library」按鈕），不要塞回「Share Book」
    （issue #AB）。
+   TXT 只是匯入格式：分享端用 `lib/services/txt_book.dart` 轉成 EPUB 再分享，房間裡永遠只有
+   EPUB（PR #27）。不要讓 reader、傳書或儲存認得 TXT；轉換要保持可重現（沒有時間戳、
+   沒有隨機 identifier）。
 
 7. **錯誤狀態要能自己收斂。**
    `PageSyncState.error` 會在 `defaultErrorAutoClearDelay` 後自動回到 idle。
