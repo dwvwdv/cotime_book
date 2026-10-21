@@ -6,11 +6,11 @@
 
 - `lib/`、`assets/`、`android/` 的任何功能調整或 bug 修復
 - 依賴升級（`pubspec.yaml` 的 dependencies）
-- 會改變房間行為的 Supabase migration（舊版 App 會連到同一個正式庫，見 issue #K）
+- 會改變房間行為的 Supabase migration（舊版 App 會連到同一個正式庫，見 GitHub issue #33）
 
 ⚠️ **每次功能調整或修復都必須更新版本號。**
 
-只動 `CLAUDE.md`、`issue.md`、`README.md`、`.claude/`、`.github/` 這類**不進 APK** 的 PR
+只動 `CLAUDE.md`、`AGENTS.md`、`README.md`、`.claude/`、`.github/` 這類**不進 APK** 的 PR
 不需要 bump——版本碼是 Google Play 的稀缺資源（每次上傳都要新的），而這些 PR 的產物
 與上一版完全相同。
 

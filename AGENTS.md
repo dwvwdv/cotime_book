@@ -2,15 +2,16 @@
 
 ## 專案文件
 
-在進行任何程式碼修改、分析或 Pull Request Review 之前，**必須先閱讀根目錄的 `CLAUDE.md` 與 `issue.md`**。
+在進行任何程式碼修改、分析或 Pull Request Review 之前，**必須先閱讀根目錄的 `CLAUDE.md` 與 repo 的 GitHub issues**。
 
 - `CLAUDE.md` 是本專案主要的開發與架構文件：翻頁共識協定、Presence 與資料庫的權威分工、
   房間成員只能經 RPC 變動、Realtime 斷線與限流、e-ink 的 UI 限制、開發與測試慣例。
-- `issue.md` 記錄已修復（有回歸測試守著）與開放中的問題，包含**刻意先不修**的理由。
+- GitHub issues 記錄開放中的問題，包含**刻意先不修**的理由。程式碼裡的 `issue #14`、`issue #R`
+  這類舊編號指的是已移除的 `issue.md`（對照方式見 `CLAUDE.md`「舊的 `issue #N` 編號」）。
 
 不要只根據目前 PR diff 推測專案規則。
 
-如果某段程式碼看起來可以「更完整」、「更安全」或「更通用」，但 `CLAUDE.md` 或 `issue.md`
+如果某段程式碼看起來可以「更完整」、「更安全」或「更通用」，但 `CLAUDE.md` 或 GitHub issue
 已明確記錄這是刻意接受的 trade-off，**不要把它重新提出為 Review finding**，除非這次 PR
 改變了原本成立的前提。
 
@@ -54,7 +55,7 @@
 - 現有行為在正常產品使用範圍內已經正確，只是還可以做更多 defensive hardening
 - 主要收益只是架構更漂亮、更加通用、未來可能更容易擴充，而不是修正實際問題
 - 與本 PR 無直接關係的既有問題，除非它會直接讓這次修改無法正確運作
-- `CLAUDE.md` / `issue.md` 已明確記錄並接受的 trade-off，且本 PR 沒有改變相關前提
+- `CLAUDE.md` / GitHub issue 已明確記錄並接受的 trade-off，且本 PR 沒有改變相關前提
 
 ### Edge case 處理原則
 
@@ -72,7 +73,7 @@
 3. 有明確的使用者影響
 4. 問題的嚴重程度值得增加程式碼與長期維護成本
 5. 沒有更簡單的產品限制能合理解決
-6. `CLAUDE.md` / `issue.md` 沒有已經把這件事列為刻意接受的限制
+6. `CLAUDE.md` / GitHub issue 沒有已經把這件事列為刻意接受的限制
 
 每個 finding 應說明：
 

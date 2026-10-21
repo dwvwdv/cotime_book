@@ -5,7 +5,8 @@
 
 - 寫給**之後要彙整發版說明的人**看：講使用者看得到的變化，再補一句為什麼。
   protocol 代碼與檔名可以出現，但不要整段只剩識別字。
-- 對應 `issue.md` 的項目時標出編號（`issue #21`），細節留在 issue.md，不要兩邊各寫一份。
+- 對應 GitHub issue 時標出編號（`#31`），細節留在 issue 與 PR，不要兩邊各寫一份。
+  既有條目裡的 `issue #21`、`issue #U` 是已移除的 `issue.md` 的舊編號（見 `CLAUDE.md`）。
 - 同一個 PR 只有一個版本條目（見 `version-update.md`）；review 修復追加在同一條目下。
 - 只動文件、`.claude/`、`.github/` 的 PR 不 bump 版號，不必新增條目。
 
@@ -44,4 +45,4 @@
 - 🐛 Realtime channel 斷線時由 watchdog 重建（issue #17）、Presence 更新限流（issue #18）、有人重連中時全房暫停翻頁（issue #19）。
 - 🎨 UI 改為電子紙（e-ink）設計系統 Paper。
 
-> 更早的歷史見 `git log` 與 `issue.md` 的「已修復」。
+> 更早的歷史見 `git log` 與 `git show 0006270:issue.md` 的「已修復」。

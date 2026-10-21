@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     branches: [ master ]
-    # 只動文件的 push（issue.md、CLAUDE.md、.claude/ 的 skill）不重新出版：tag 取自
+    # 只動文件的 push（CLAUDE.md、AGENTS.md、.claude/ 的 skill）不重新出版：tag 取自
     # pubspec 的版號，而文件 PR 不 bump（見 .claude/skills/version-update.md），
     # 觸發了只會把同一份 build 再掛到同一個 release 上。
     paths-ignore:
