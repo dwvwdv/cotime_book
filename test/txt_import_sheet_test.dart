@@ -198,4 +198,45 @@ void main() {
     await tester.tap(find.text('Share Book'));
     expect(confirmed!.parts.map((p) => p.source.fileName), ['a.txt']);
   });
+
+  testWidgets('with the keyboard up on a short screen the sheet scrolls '
+      'instead of cutting off Share Book', (tester) async {
+    // A 640px screen with a 300px keyboard leaves the sheet 244px: less than
+    // the title and author fields and the buttons take on their own.
+    TxtBookRequest? confirmed;
+    final sources = [
+      utf8File('雨夜 上.txt', '第一章\n　　上。\n'),
+      utf8File('雨夜 下.txt', '第二章\n　　下。\n'),
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topCenter,
+            child: SizedBox(
+              height: 244,
+              child: TxtImportSheet(
+                draft: TxtImportDraft(
+                  sources: sources,
+                  analyses: [for (final s in sources) analyzeTxt(s)],
+                  title: '雨夜',
+                ),
+                onConfirm: (request) => confirmed = request,
+                onCancel: () {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.enterText(find.byKey(const ValueKey('txt-title')), '夜雨');
+    await tester.pump();
+    await tester.ensureVisible(find.text('Share Book'));
+    await tester.pump();
+    await tester.tap(find.text('Share Book'));
+
+    expect(confirmed!.title, '夜雨');
+  });
 }

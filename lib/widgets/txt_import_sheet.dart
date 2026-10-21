@@ -145,46 +145,46 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
       (n, row) => n + row.analysis.chapterCount,
     );
     final several = _rows.length > 1;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SectionHeader(label: 'Make a book from TXT'),
-        const SizedBox(height: 8),
-        Text(
-          several
-              ? 'These ${_rows.length} files become one book, in this order. '
-                    'Everyone in the room reads the same copy.'
-              : 'This file becomes a book. Everyone in the room reads the '
-                    'same copy.',
-          style: AppTheme.caption,
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          key: const ValueKey('txt-title'),
-          controller: _title,
-          onChanged: (_) => setState(() {}),
-          decoration: const InputDecoration(labelText: 'Title'),
-        ),
-        const SizedBox(height: 8),
-        TextField(
-          key: const ValueKey('txt-author'),
-          controller: _author,
-          decoration: const InputDecoration(labelText: 'Author (optional)'),
-        ),
-        const SizedBox(height: 16),
-        SectionHeader(
-          label: several ? 'Files' : 'File',
-          trailing: Text(
-            chapters == 0 ? 'No chapters found' : _count(chapters, 'chapter'),
+    // All of it scrolls, the buttons included: with the keyboard up for the
+    // title, a short screen has less room than the fields alone take.
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SectionHeader(label: 'Make a book from TXT'),
+          const SizedBox(height: 8),
+          Text(
+            several
+                ? 'These ${_rows.length} files become one book, in this order. '
+                      'Everyone in the room reads the same copy.'
+                : 'This file becomes a book. Everyone in the room reads the '
+                      'same copy.',
             style: AppTheme.caption,
           ),
-        ),
-        Flexible(
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: _rows.length,
-            itemBuilder: (context, index) => _FileTile(
+          const SizedBox(height: 12),
+          TextField(
+            key: const ValueKey('txt-title'),
+            controller: _title,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(labelText: 'Title'),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            key: const ValueKey('txt-author'),
+            controller: _author,
+            decoration: const InputDecoration(labelText: 'Author (optional)'),
+          ),
+          const SizedBox(height: 16),
+          SectionHeader(
+            label: several ? 'Files' : 'File',
+            trailing: Text(
+              chapters == 0 ? 'No chapters found' : _count(chapters, 'chapter'),
+              style: AppTheme.caption,
+            ),
+          ),
+          for (var index = 0; index < _rows.length; index++)
+            _FileTile(
               key: ObjectKey(_rows[index]),
               index: index,
               row: _rows[index],
@@ -193,31 +193,30 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
               onUp: index > 0 ? () => _move(index, -1) : null,
               onDown: index < _rows.length - 1 ? () => _move(index, 1) : null,
             ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: widget.onCancel,
-                child: const Text('Cancel'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton(
-                onPressed: _canShare ? _confirm : null,
-                child: Text(
-                  _rows.any((row) => row.isReading)
-                      ? 'Reading...'
-                      : 'Share Book',
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: widget.onCancel,
+                  child: const Text('Cancel'),
                 ),
               ),
-            ),
-          ],
-        ),
-      ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: _canShare ? _confirm : null,
+                  child: Text(
+                    _rows.any((row) => row.isReading)
+                        ? 'Reading...'
+                        : 'Share Book',
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
