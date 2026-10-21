@@ -6,6 +6,9 @@
 // page starts. Then it plays the page-turn protocol: the tablet display()s
 // each page start the phone reports, as a follower does with a commit, and
 // checks it lands on that page rather than the one before (issue #21).
+// Pages with nothing on them — where a chapter's empty tail spills onto a
+// page of its own — must never be turned to, and a page with only a picture
+// on it must be named by that picture (issue #22).
 //
 //   flutter pub get
 //   node tool/shared_page_check/check.js        (from the repo root)
@@ -46,9 +49,10 @@ execFileSync('flutter', ['test', 'tool/shared_page_check/make_txt_book_test.dart
 });
 
 const rules = JSON.parse(fs.readFileSync(path.join(work, 'rules.json'), 'utf8'));
+// `pictures`: the book has a picture-only page, which must be found.
 const books = {
-  'mixed EPUB': [...fs.readFileSync(path.join(work, 'book.epub'))],
-  'TXT import': [...fs.readFileSync(path.join(work, 'txt_book.epub'))],
+  'mixed EPUB': { bytes: [...fs.readFileSync(path.join(work, 'book.epub'))], pictures: true },
+  'TXT import': { bytes: [...fs.readFileSync(path.join(work, 'txt_book.epub'))], pictures: false },
 };
 let book;
 // SHARED_PAGE_SCRIPT runs another copy, e.g. the one before a change.
@@ -125,21 +129,85 @@ async function openBook(browser, device, shared) {
   return { context, tab };
 }
 
+/// What is on the page in view: 'text', 'picture' (and no text) or ''.
+/// Measured on screen, independently of how epub.js names the page.
+function pageShows() {
+  const box = document.getElementById('viewer').getBoundingClientRect();
+  const onPage = (frame, r) =>
+    r.width > 0 && r.height > 0 &&
+    frame.left + r.right > box.left + 1 && frame.left + r.left < box.right - 1 &&
+    frame.top + r.bottom > box.top + 1 && frame.top + r.top < box.bottom - 1;
+  let shows = '';
+  for (const iframe of document.querySelectorAll('#viewer iframe')) {
+    const frame = iframe.getBoundingClientRect();
+    const doc = iframe.contentDocument;
+    if (!doc || !doc.body) continue;
+    for (const el of doc.body.querySelectorAll('img, svg, video, canvas')) {
+      if (onPage(frame, el.getBoundingClientRect())) shows = 'picture';
+    }
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const text = node.textContent;
+      for (let i = 0; i < text.length; i++) {
+        if (/\s/.test(text[i])) continue;
+        const range = doc.createRange();
+        range.setStart(node, i);
+        range.setEnd(node, i + 1);
+        for (const r of range.getClientRects()) {
+          if (onPage(frame, r)) return 'text';
+        }
+      }
+    }
+  }
+  return shows;
+}
+
+/// Turns one page; resolves once the viewer has reported where it is.
+/// A turn that cannot move (the end of the book) never reports.
+function turn(tab, direction) {
+  return tab.evaluate(
+    (direction) => new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), 3000);
+      rendition.once('relocated', () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+      direction === 'next' ? rendition.next() : rendition.prev();
+    }),
+    direction,
+  );
+}
+
+/// Every page from the first to the last and back: where each starts, which
+/// show nothing at all, and which only a picture.
 async function pageStarts(browser, device, shared, turns) {
   const { context, tab } = await openBook(browser, device, shared);
   const starts = [];
-  for (let i = 0; i < turns; i++) {
-    await tab.waitForTimeout(60);
-    starts.push(await tab.evaluate(() => rendition.location.start.cfi));
-    await tab.evaluate(
-      () => new Promise((resolve) => {
-        rendition.once('relocated', resolve);
-        rendition.next();
-      }),
-    );
+  const blank = [];
+  const pictures = [];
+  const back = [];
+  for (const direction of ['next', 'prev']) {
+    const seen = direction === 'next' ? starts : back;
+    for (let i = 0; i < turns; i++) {
+      await tab.waitForTimeout(60);
+      const here = await tab.evaluate(() => rendition.location);
+      const cfi = here.start.cfi;
+      // A turn that did not move: the end of the book (or its start). Only
+      // on the shared page are page names distinct (issue #21); on its own
+      // screen a reader goes by epub.js's own idea of the end.
+      if (shared && seen.length > 0 && cfi === seen[seen.length - 1]) break;
+      seen.push(cfi);
+      const shows = await tab.evaluate(pageShows);
+      if (shows === '') blank.push(`${direction} ${i}`);
+      if (shows === 'picture' && direction === 'next') pictures.push(i);
+      if (!shared && (direction === 'next' ? here.atEnd : here.atStart)) break;
+      if (!(await turn(tab, direction))) break;
+    }
   }
+  back.reverse();
   await context.close();
-  return starts;
+  return { starts, blank, pictures, back };
 }
 
 /// How many of [starts] a follower on [device] does not land on.
@@ -169,23 +237,42 @@ async function missedCommits(browser, device, starts) {
 
 (async () => {
   const browser = await chromium.launch();
-  const turns = 120;
+  const turns = 400;
   let failed = false;
-  for (const [name, bytes] of Object.entries(books)) {
+  for (const [name, { bytes, pictures }] of Object.entries(books)) {
     book = bytes;
     console.log(`${name}:`);
     for (const shared of [false, true]) {
-      const a = await pageStarts(browser, devices.phone, shared, turns);
-      const b = await pageStarts(browser, devices.tablet, shared, turns);
+      const phone = await pageStarts(browser, devices.phone, shared, turns);
+      const tablet = await pageStarts(browser, devices.tablet, shared, turns);
+      const a = phone.starts;
+      const b = tablet.starts;
+      const pages = Math.max(a.length, b.length);
       const same = a.filter((cfi, i) => cfi === b[i]).length;
       const label = shared ? 'shared page ' : 'own screens ';
-      console.log(`${label}: ${same}/${turns} pages start at the same place`);
-      if (shared && same !== turns) {
+      console.log(`${label}: ${same}/${pages} pages start at the same place`);
+      if (shared && same !== pages) {
         const i = a.findIndex((cfi, j) => cfi !== b[j]);
         console.log(`  first difference at page ${i}: ${a[i]} vs ${b[i]}`);
         failed = true;
       }
       if (shared) {
+        const blank = [...phone.blank, ...tablet.blank];
+        console.log(`blank pages : ${blank.length} turned to`);
+        if (blank.length > 0) {
+          console.log(`  at ${blank.join(', ')}`);
+          failed = true;
+        }
+        // Without one the picture case would pass by not being there.
+        console.log(`pictures    : on page ${phone.pictures.join(', ') || 'none'}`);
+        if (pictures && phone.pictures.length === 0) failed = true;
+        const named = new Set(a).size;
+        console.log(`page names  : ${named}/${a.length} distinct`);
+        if (named !== a.length) failed = true;
+        const backSame = phone.back.length === a.length &&
+          phone.back.every((cfi, i) => cfi === a[i]);
+        console.log(`backwards   : ${backSame ? 'the same pages' : 'different pages'}`);
+        if (!backSame) failed = true;
         const { missed, of } = await missedCommits(browser, devices.tablet, a);
         console.log(`follower    : landed on ${of - missed}/${of} reported pages`);
         if (missed > 0) failed = true;
