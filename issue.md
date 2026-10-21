@@ -717,6 +717,42 @@
   收起面板仍保留篩選、零結果一鍵清除、沒有目錄時不顯示篩選按鈕、空圖書館、離線重試）；`test/room_lobby_screen_test.dart` →
   `the library has its own button, apart from Share Book`
 
+### [x] #AC 無法一起讀 TXT 小說
+
+- **檔案**：`lib/services/txt_book.dart`、`lib/widgets/txt_import_sheet.dart`、
+  `lib/providers/book_provider.dart`、`lib/screens/room_lobby_screen.dart`
+- **症狀**：很多中文小說只有 TXT，「Share Book」只接受 EPUB，使用者得先找別的工具轉檔。
+- **原因**：同步的每一層（`SharedPosition` 的 CFI、`shared_page.js` 的共享頁面與頁首計算、
+  傳書與儲存）都建立在 EPUB + epub.js 上。直接支援 TXT 等於另寫一套分頁器，並重做 #20 / #21。
+- **修法**：TXT 只是匯入格式，在分享端轉成 EPUB，房間裡永遠只有 EPUB：
+  - 「Share Book」的檔案選擇器接受 `.epub` 與 `.txt`，可以多選 TXT。多個 TXT 依檔名的
+    自然順序（`卷二` 排在 `卷十` 前面，`part2` 排在 `part10` 前面）合成**一本書**，一個檔案一卷；
+    EPUB 一次只能選一本，EPUB 與 TXT 混選會得到說明，不會分享。
+  - 分享前出現確認 sheet（`TxtImportSheet`）：書名（取檔名共同的部分）、作者（從開頭的
+    `作者：` 行抓）、每個檔案的編碼、章數與前幾行預覽、調整順序的上下按鈕。
+    編碼猜錯時預覽會是亂碼，可以當場換編碼重讀；重讀用 generation 擋掉較慢的舊結果。
+  - 編碼偵測：BOM → 一側全是 0 的 UTF-16 → 合法 UTF-8 → GBK 與 Big5 二選一。
+    GBK 與 Big5 的位元組範圍幾乎重疊，錯的那個也能「成功」解碼成亂碼，所以用
+    「解出來的字有多少是中文常用字」決定，平手時選 GBK。
+  - 章節：獨立成行、不超過 40 字的 `第…章／回／節／卷`、`序章`、`楔子`、`番外`、
+    `Chapter N` 等。`第二回合…`、`第一部分…` 這類只是開頭像的句子不算。
+    每章一個 XHTML；沒有標題或過長的章節以 20000 字為上限在段落邊界切開——
+    epub.js 一次載入一個檔案，好幾 MB 的單一檔案在電子紙上開起來像當機。
+  - EPUB 3（附 EPUB 2 的 `toc.ncx`），只帶段落間距的樣式；字型與行高由共享頁面決定（#20）。
+    XML 不允許的控制字元會被拿掉，否則一個字元就會讓整章解析失敗變成空白頁。
+  - 轉換結果可重現：沒有時間戳與隨機 identifier，zip 的時間固定（不取裝置時區），
+    同一版 App 匯入同一份 TXT 得到同一個 hash。
+  - 解碼與建書在 isolate 裡跑。總大小上限同 `AppConstants.maxFileSize`。
+  - shareGeneration 在使用者按下確認時才取：看檔案的期間別人分享的書，不會取消他確認的匯入。
+- **測試**：`test/txt_book_test.dart`（GBK／Big5／UTF-8／UTF-16 偵測、截斷的 UTF-8 樣本、
+  章節與誤判、自然排序、書名、EPUB 結構與 XML 合法性、可重現、多卷目錄、無標題切段、
+  控制字元、空檔案）；`test/txt_import_sheet_test.dart`（換編碼後預覽正確、舊的重讀不覆蓋新的、
+  調整順序、沒有書名不能分享、沒有文字的檔案被略過）；`test/book_provider_test.dart` 的
+  `TXT import` 群組（多卷合成一本並成為房間的書、取消不分享、sheet 開著時別人分享不會取消匯入、
+  超過大小上限）與 `a pick is one EPUB or any number of TXT files`。
+  `tool/shared_page_check/check.js` 也對 TXT 轉出的書跑一次：共享頁面 120/120 頁一致，
+  follower 109/109 落在回報的頁上。
+
 ## 開放中
 
 ### [~] #H reader_screen.dart 沒有任何測試
@@ -858,6 +894,15 @@
   或只在書沒有內嵌字型時才覆蓋——兩者都需要確認需求再做。
 - 另外，`flutter_epub_viewer` 的 `customCss` 送不進書（見 #20 原因），之後升級套件時
   若修好了，可以考慮改回用它，但 `shared_page.js` 仍需要負責頁框。
+
+### [ ] #AD TXT 匯入只能改編碼，不能修正章節判斷
+
+- **檔案**：`lib/services/txt_book.dart`（`_headingPatterns`）
+- **問題**：章節靠規則判斷。標題寫法特殊（例如只有 `一、`、`【01】`）的小說會被當成沒有章節、
+  以字數切段；反過來，罕見的句子仍可能被當成標題。確認 sheet 只顯示章數，使用者無法調整規則。
+  編碼只支援 UTF-8／UTF-16／GBK／Big5——GB18030 的四位元組字元、Shift_JIS 等會變成 `�`。
+- **為什麼先不動**：先看實際使用者的檔案再決定要加哪些規則；做成可編輯的規則對電子紙上的
+  使用者太複雜。切段不影響同步，只影響目錄。
 
 ### [ ] #X CI 沒有跑 `tool/shared_page_check`
 

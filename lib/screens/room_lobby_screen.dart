@@ -16,6 +16,7 @@ import '../widgets/library_browser.dart';
 import '../widgets/member_list.dart';
 import '../widgets/paper.dart';
 import '../widgets/room_code_display.dart';
+import '../widgets/txt_import_sheet.dart';
 import '../widgets/transfer_progress_widget.dart';
 
 class RoomLobbyScreen extends ConsumerStatefulWidget {
@@ -483,9 +484,16 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     );
   }
 
-  /// Shares an EPUB file from this device.
+  /// Shares an EPUB from this device, or TXT files made into one.
   Future<void> _shareBook() async {
-    await ref.read(bookProvider.notifier).pickAndShareBook();
+    await ref
+        .read(bookProvider.notifier)
+        .pickAndShareBook(
+          confirmTxt: (draft) async {
+            if (!mounted || _isLeaving) return null;
+            return showTxtImportSheet(context: context, draft: draft);
+          },
+        );
   }
 
   /// Shares a book from the public library.

@@ -11,6 +11,7 @@ import '../models/transfer_state.dart';
 import '../services/file_transfer_service.dart';
 import '../services/library_service.dart';
 import '../services/realtime_service.dart';
+import '../services/txt_book.dart';
 import 'presence_provider.dart';
 import 'room_provider.dart';
 
@@ -21,6 +22,27 @@ final epubStorageProvider = Provider<EpubStorageService>((ref) {
 final libraryServiceProvider = Provider<LibraryService>((ref) {
   return const SupabaseLibraryService();
 });
+
+/// Shows the reader the TXT files about to become a book; null backs out.
+typedef TxtImportConfirm =
+    Future<TxtBookRequest?> Function(TxtImportDraft draft);
+
+/// What a pick from the device is.
+enum PickedBookKind { epub, txt, mixed }
+
+/// One EPUB, or any number of TXT files; anything else is [mixed], which
+/// cannot be shared as one book.
+PickedBookKind pickedBookKind(List<String> fileNames) {
+  bool has(String name, String extension) =>
+      name.toLowerCase().endsWith(extension);
+  if (fileNames.isNotEmpty && fileNames.every((n) => has(n, '.txt'))) {
+    return PickedBookKind.txt;
+  }
+  if (fileNames.length == 1 && has(fileNames.single, '.epub')) {
+    return PickedBookKind.epub;
+  }
+  return PickedBookKind.mixed;
+}
 
 final bookProvider = StateNotifierProvider<BookNotifier, BookState>((ref) {
   return BookNotifier(
@@ -169,7 +191,10 @@ class BookNotifier extends StateNotifier<BookState> {
     });
   }
 
-  Future<void> pickAndShareBook() async {
+  /// Picks a book from this device and shares it: one EPUB as it is, or one
+  /// or more TXT files, which [confirmTxt] shows the reader before they are
+  /// converted into one EPUB (see [shareTxtBooks]).
+  Future<void> pickAndShareBook({TxtImportConfirm? confirmTxt}) async {
     final generation = _sessionGeneration;
     // Receiving (or serving) a book never blocks sharing a different one: the
     // new hash simply replaces what the transfer is working on. Refusing here
@@ -179,7 +204,8 @@ class BookNotifier extends StateNotifier<BookState> {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['epub'],
+        allowedExtensions: ['epub', 'txt'],
+        allowMultiple: confirmTxt != null,
         withData: true,
       );
 
@@ -189,19 +215,33 @@ class BookNotifier extends StateNotifier<BookState> {
         return;
       }
 
+      final files = result.files;
+      switch (pickedBookKind(files.map((f) => f.name).toList())) {
+        case PickedBookKind.txt when confirmTxt != null:
+          final sources = [
+            for (final file in files)
+              TxtSource(fileName: file.name, bytes: await _readPicked(file)),
+          ];
+          if (!_isCurrent(generation)) return;
+          await shareTxtBooks(sources, confirm: confirmTxt);
+          return;
+        case PickedBookKind.epub:
+          break;
+        case PickedBookKind.txt:
+        case PickedBookKind.mixed:
+          _failShare(
+            generation,
+            null,
+            'Pick one EPUB, or one or more TXT files to make a book of.',
+          );
+          return;
+      }
+
       // Taken after the picker closes: choosing a file is the decision, so a
       // book shared while the picker was open does not cancel it.
       shareGeneration = ++_shareGeneration;
-      final file = result.files.first;
-      final Uint8List bytes;
-
-      if (file.bytes != null) {
-        bytes = file.bytes!;
-      } else if (file.path != null) {
-        bytes = await File(file.path!).readAsBytes();
-      } else {
-        throw Exception('Cannot read file');
-      }
+      final file = files.single;
+      final bytes = await _readPicked(file);
 
       await _shareBytes(
         bytes: bytes,
@@ -210,6 +250,77 @@ class BookNotifier extends StateNotifier<BookState> {
         generation: generation,
         shareGeneration: shareGeneration,
       );
+    } catch (e) {
+      _failShare(generation, shareGeneration, e.toString());
+    }
+  }
+
+  static Future<Uint8List> _readPicked(PlatformFile file) async {
+    if (file.bytes != null) return file.bytes!;
+    if (file.path != null) return File(file.path!).readAsBytes();
+    throw Exception('Cannot read ${file.name}');
+  }
+
+  /// Converts [sources] into one EPUB and shares it.
+  ///
+  /// [confirm] gets the files in reading order with what each decodes to,
+  /// and answers with the book to build, or null to back out. The room only
+  /// ever sees the EPUB, so nothing about page sync or transfer changes.
+  Future<void> shareTxtBooks(
+    List<TxtSource> sources, {
+    required TxtImportConfirm confirm,
+  }) async {
+    final generation = _sessionGeneration;
+    state = state.copyWith(isLoading: true, error: null);
+    int? shareGeneration;
+    try {
+      final total = sources.fold<int>(0, (n, s) => n + s.bytes.length);
+      if (total > AppConstants.maxFileSize) {
+        throw FormatException(
+          '${sources.length == 1 ? 'This file is' : 'These files are'} '
+          '${_megabytes(total)}. A book can be made of at most '
+          '${_megabytes(AppConstants.maxFileSize)} of text.',
+        );
+      }
+      final ordered = [...sources]
+        ..sort((a, b) => naturalCompare(a.fileName, b.fileName));
+      final analyses = await Future.wait(
+        ordered.map((source) => analyzeTxtInBackground(source)),
+      );
+      if (!_isCurrent(generation)) return;
+
+      final request = await confirm(
+        TxtImportDraft(
+          sources: ordered,
+          analyses: analyses,
+          title: suggestTxtTitle(ordered.map((s) => s.fileName).toList()),
+          author: analyses
+              .map((a) => a.author)
+              .firstWhere((a) => a != null, orElse: () => null),
+        ),
+      );
+      if (!_isCurrent(generation)) return;
+      if (request == null) {
+        state = state.copyWith(isLoading: false);
+        return;
+      }
+
+      // Taken once the reader confirms: that is the decision, so a book
+      // shared while they were looking at the files does not cancel it.
+      shareGeneration = ++_shareGeneration;
+      final bytes = await buildTxtEpubInBackground(request);
+      final title = request.title.trim();
+      final author = request.author?.trim();
+      await _shareBytes(
+        bytes: bytes,
+        title: title,
+        author: author == null || author.isEmpty ? null : author,
+        fileName: '$title.epub',
+        generation: generation,
+        shareGeneration: shareGeneration,
+      );
+    } on FormatException catch (e) {
+      _failShare(generation, shareGeneration, e.message);
     } catch (e) {
       _failShare(generation, shareGeneration, e.toString());
     }

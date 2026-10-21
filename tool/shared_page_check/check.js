@@ -13,7 +13,8 @@
 // Needs Playwright with a Chromium (NODE_PATH pointing at its node_modules if
 // it is installed globally), python3 and fonts-dejavu / fonts-liberation /
 // fonts-wqy-zenhei / fonts-ipafont-gothic for the two devices' system fonts.
-// Exits non-zero when the pages differ.
+// Runs on two books: a mixed English and Chinese EPUB, and one the TXT
+// import built. Exits non-zero when the pages differ.
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -37,9 +38,19 @@ execFileSync('flutter', ['test', 'tool/shared_page_check/dump_rules_test.dart'],
   stdio: 'inherit',
 });
 execFileSync('python3', [path.join(__dirname, 'make_epub.py'), path.join(work, 'book.epub')]);
+// The same check on a book the TXT import made: what a Chinese novel shared
+// as TXT turns into.
+execFileSync('flutter', ['test', 'tool/shared_page_check/make_txt_book_test.dart'], {
+  cwd: root,
+  stdio: 'inherit',
+});
 
 const rules = JSON.parse(fs.readFileSync(path.join(work, 'rules.json'), 'utf8'));
-const book = [...fs.readFileSync(path.join(work, 'book.epub'))];
+const books = {
+  'mixed EPUB': [...fs.readFileSync(path.join(work, 'book.epub'))],
+  'TXT import': [...fs.readFileSync(path.join(work, 'txt_book.epub'))],
+};
+let book;
 // SHARED_PAGE_SCRIPT runs another copy, e.g. the one before a change.
 const script =
   process.env.SHARED_PAGE_SCRIPT || path.join(root, 'assets/reader/shared_page.js');
@@ -160,21 +171,25 @@ async function missedCommits(browser, device, starts) {
   const browser = await chromium.launch();
   const turns = 120;
   let failed = false;
-  for (const shared of [false, true]) {
-    const a = await pageStarts(browser, devices.phone, shared, turns);
-    const b = await pageStarts(browser, devices.tablet, shared, turns);
-    const same = a.filter((cfi, i) => cfi === b[i]).length;
-    const label = shared ? 'shared page ' : 'own screens ';
-    console.log(`${label}: ${same}/${turns} pages start at the same place`);
-    if (shared && same !== turns) {
-      const i = a.findIndex((cfi, j) => cfi !== b[j]);
-      console.log(`  first difference at page ${i}: ${a[i]} vs ${b[i]}`);
-      failed = true;
-    }
-    if (shared) {
-      const { missed, of } = await missedCommits(browser, devices.tablet, a);
-      console.log(`follower    : landed on ${of - missed}/${of} reported pages`);
-      if (missed > 0) failed = true;
+  for (const [name, bytes] of Object.entries(books)) {
+    book = bytes;
+    console.log(`${name}:`);
+    for (const shared of [false, true]) {
+      const a = await pageStarts(browser, devices.phone, shared, turns);
+      const b = await pageStarts(browser, devices.tablet, shared, turns);
+      const same = a.filter((cfi, i) => cfi === b[i]).length;
+      const label = shared ? 'shared page ' : 'own screens ';
+      console.log(`${label}: ${same}/${turns} pages start at the same place`);
+      if (shared && same !== turns) {
+        const i = a.findIndex((cfi, j) => cfi !== b[j]);
+        console.log(`  first difference at page ${i}: ${a[i]} vs ${b[i]}`);
+        failed = true;
+      }
+      if (shared) {
+        const { missed, of } = await missedCommits(browser, devices.tablet, a);
+        console.log(`follower    : landed on ${of - missed}/${of} reported pages`);
+        if (missed > 0) failed = true;
+      }
     }
   }
   await browser.close();
