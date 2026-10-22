@@ -119,6 +119,7 @@ void main() {
       'assets/fonts/literata/literata-latin-400-normal.woff2',
       'lib/services/shared_page_style.dart',
       'lib/services/txt_book.dart',
+      'lib/services/gb18030.dart',
       'tool/shared_page_check/check.js',
       'tool/shared_page_check/make_txt_book_test.dart',
       'tool/shared_page_check/make_epub.py',

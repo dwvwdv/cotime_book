@@ -18,12 +18,14 @@ on:
     # - assets/fonts/**：SharedPageStyle 把內建字型以 data URL 塞進 rules
     # - lib/services/shared_page*.dart：SharedPageStyle（dump_rules_test 匯出 rules）
     # - lib/services/txt_book.dart：第二本受檢的書由 TXT 匯入產生（make_txt_book_test）
+    # - lib/services/gb18030.dart：txt_book 解 GBK fixture 時委派給它（GH-42）
     # - pubspec.yaml / pubspec.lock：flutter_epub_viewer 的版本決定 epub.js 與 swipe.html
     paths:
       - 'assets/reader/**'
       - 'assets/fonts/**'
       - 'lib/services/shared_page*.dart'
       - 'lib/services/txt_book.dart'
+      - 'lib/services/gb18030.dart'
       - 'tool/shared_page_check/**'
       - 'pubspec.yaml'
       - 'pubspec.lock'
@@ -35,6 +37,7 @@ on:
       - 'assets/fonts/**'
       - 'lib/services/shared_page*.dart'
       - 'lib/services/txt_book.dart'
+      - 'lib/services/gb18030.dart'
       - 'tool/shared_page_check/**'
       - 'pubspec.yaml'
       - 'pubspec.lock'

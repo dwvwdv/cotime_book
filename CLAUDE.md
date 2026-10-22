@@ -171,7 +171,7 @@ supabase test db       # pgTAP
 CI（`.github/workflows/build-check.yml`）跑的是 Flutter 3.32.4：
 pgTAP 與 `flutter analyze` + `flutter test` + arm64 APK 是兩個平行的 job。
 動到排版相關來源（`assets/reader/**`、內建字型、`lib/services/shared_page*.dart`、
-`txt_book.dart`、`tool/shared_page_check/**`、pubspec）時，另有 `shared-page-check.yml` 在 Chromium 裡跑
+`txt_book.dart` / `gb18030.dart`、`tool/shared_page_check/**`、pubspec）時，另有 `shared-page-check.yml` 在 Chromium 裡跑
 `tool/shared_page_check`（GH-39）。
 **送 PR 前 `flutter analyze` 與 `flutter test` 必須是乾淨的。**
 Claude Code 雲端 session 由 `.claude/hooks/session-start.sh` 裝好同版本的 Flutter——

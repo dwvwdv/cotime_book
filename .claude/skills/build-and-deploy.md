@@ -138,7 +138,7 @@ build/app/outputs/bundle/release/app-release.aab
   （`fonts-dejavu-core`、`fonts-liberation`、`fonts-wqy-zenhei`、`fonts-ipafont-gothic`），
   放進 build-check 會讓每個 PR 都付這個成本。paths 要涵蓋 `check.js` 讀到的每一個來源：
   `assets/reader/**`、`assets/fonts/**`（字型以 data URL 進 rules）、`lib/services/shared_page*.dart`、
-  `lib/services/txt_book.dart`（第二本受檢的書由 TXT 匯入產生）、`tool/shared_page_check/**`、`pubspec.yaml` / `pubspec.lock`（flutter_epub_viewer 的版本就是
+  `lib/services/txt_book.dart`（第二本受檢的書由 TXT 匯入產生）與它解 GBK 用的 `lib/services/gb18030.dart`、`tool/shared_page_check/**`、`pubspec.yaml` / `pubspec.lock`（flutter_epub_viewer 的版本就是
   epub.js 的版本）與 workflow 本身；push 與 pull_request 兩份清單要一樣，
   `test/ci_workflow_test.dart` 會檢查。它固定跑在 `ubuntu-latest`，不吃 `CI_RUNNER`：
   要 sudo apt 裝依賴與字型，self-hosted runner 不一定有。Playwright 版本釘死
