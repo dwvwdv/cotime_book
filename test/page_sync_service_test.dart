@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/models/page_sync_state.dart';
 import 'package:cotime_book/services/page_sync_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -448,6 +449,33 @@ void main() {
     );
 
     test(
+      'a reader on an older app is named as needing an update (GH-33)',
+      () async {
+        // Their app listens for other events, so it never answers; "timed
+        // out" alone reads as a bad connection.
+        final room = FakeRoom();
+        final alice = room.join(
+          'alice',
+          'Alice',
+          requestTimeout: const Duration(milliseconds: 40),
+        );
+        room.join('bob', 'Bob');
+        room.setProtocol('bob', null);
+        addTearDown(room.dispose);
+        await flush();
+
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+
+        expect(
+          alice.service.currentState.errorMessage,
+          'Page turn timed out waiting for Bob. '
+          'Bob needs to update the app to read together',
+        );
+      },
+    );
+
+    test(
       'a transient failure clears itself instead of pinning the bar',
       () async {
         final room = FakeRoom();
@@ -794,6 +822,7 @@ class FakeRoom {
   }) {
     if (trackPresence) {
       _presence[userId] = {
+        'protocol': AppConstants.roomProtocolVersion,
         'user_id': userId,
         'nickname': nickname,
         'is_reading': isReading,
@@ -839,6 +868,18 @@ class FakeRoom {
     return reader;
   }
 
+  /// The app version [userId] announces; null is an app from before the
+  /// field existed.
+  void setProtocol(String userId, int? protocol) {
+    final meta = _presence[userId]!;
+    if (protocol == null) {
+      meta.remove('protocol');
+    } else {
+      meta['protocol'] = protocol;
+    }
+    _emitPresence();
+  }
+
   void setPresence(String userId, {bool? isReading, bool? readerReady}) {
     final meta = _presence[userId]!;
     if (isReading != null) meta['is_reading'] = isReading;
@@ -852,6 +893,7 @@ class FakeRoom {
     if (online) {
       offline.remove(userId);
       _presence[userId] = {
+        'protocol': AppConstants.roomProtocolVersion,
         'user_id': userId,
         'nickname': readers[userId]!.nickname,
         'is_reading': isReading,

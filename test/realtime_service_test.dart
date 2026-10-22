@@ -1,3 +1,4 @@
+import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/services/realtime_service.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/foundation.dart';
@@ -181,6 +182,134 @@ void main() {
       expect(built, hasLength(1));
     });
 
+    group('refused by the server (GH-36)', () {
+      late List<RealtimeAccessDenied> refusals;
+
+      void listenForRefusals() {
+        refusals = [];
+        realtime.accessDeniedStream.listen(refusals.add);
+      }
+
+      brokenChannelTest('is not rebuilt, and is reported once', (async) {
+        // Regression: the watchdog rebuilt a channel the server had refused
+        // because the user was no longer a member, logging "Unauthorized"
+        // every few seconds for as long as the app stayed open.
+        listenForRefusals();
+        joinAndSubscribe(async);
+        built.first.emitStatus(
+          RealtimeSubscribeStatus.channelError,
+          _unauthorized,
+        );
+        // Longer than both the recovery delay and the silent timeout.
+        async.elapse(const Duration(milliseconds: 150));
+
+        expect(built, hasLength(1));
+        expect(refusals, hasLength(1));
+        expect(refusals.single.roomCode, 'ABC234');
+        expect(realtime.isConnected, isFalse);
+        expect(statuses.last, RealtimeConnectionStatus.error);
+        // Dropped, so the library does not rejoin it on a socket reconnect;
+        // the socket stays for whatever comes next.
+        expect(built.first.releasedSocket, [false]);
+      });
+
+      brokenChannelTest('an app resume does not knock again', (async) {
+        listenForRefusals();
+        joinAndSubscribe(async);
+        built.first.emitStatus(
+          RealtimeSubscribeStatus.channelError,
+          _unauthorized,
+        );
+        realtime.checkConnection(delay: Duration.zero);
+        async.elapse(const Duration(milliseconds: 50));
+        expect(built, hasLength(1));
+      });
+
+      brokenChannelTest(
+        'is tried again when the room says this is still a member',
+        (async) {
+          listenForRefusals();
+          joinAndSubscribe(async);
+          built.first.emitStatus(
+            RealtimeSubscribeStatus.channelError,
+            _unauthorized,
+          );
+          async.flushMicrotasks();
+          expect(refusals, hasLength(1));
+
+          realtime.retryAfterAccessDenied(refusals.single.generation);
+          // Past the recovery delay, short of the new channel's silent
+          // timeout.
+          async.elapse(const Duration(milliseconds: 30));
+          expect(built, hasLength(2));
+          built.last.emitStatus(RealtimeSubscribeStatus.subscribed);
+          async.elapse(Duration.zero);
+          expect(realtime.isConnected, isTrue);
+          // The new channel announces this reader again.
+          expect(built.last.tracked.last['is_reading'], isTrue);
+        },
+      );
+
+      brokenChannelTest('a retry for a room already left does nothing', (
+        async,
+      ) {
+        listenForRefusals();
+        joinAndSubscribe(async);
+        built.first.emitStatus(
+          RealtimeSubscribeStatus.channelError,
+          _unauthorized,
+        );
+        async.flushMicrotasks();
+        expect(refusals, hasLength(1));
+        _settle(async, realtime.leaveRoom());
+
+        realtime.retryAfterAccessDenied(refusals.single.generation);
+        async.elapse(const Duration(milliseconds: 100));
+        expect(built, hasLength(1));
+        expect(realtime.roomCode, isNull);
+      });
+
+      brokenChannelTest('a dropped connection is still rebuilt', (async) {
+        listenForRefusals();
+        joinAndSubscribe(async);
+        built.first.emitStatus(
+          RealtimeSubscribeStatus.channelError,
+          Exception('socket closed'),
+        );
+        async.elapse(const Duration(milliseconds: 60));
+        expect(built, hasLength(2));
+        expect(refusals, isEmpty);
+      });
+    });
+
+    brokenChannelTest('is not rebuilt once leaving has started', (async) {
+      // Regression (GH-36): between the leave RPC and dropping the channel,
+      // a rebuilt channel was refused because the membership was gone.
+      joinAndSubscribe(async);
+      final refusals = <RealtimeAccessDenied>[];
+      realtime.accessDeniedStream.listen(refusals.add);
+
+      realtime.suspendRecovery();
+      built.first.emitStatus(RealtimeSubscribeStatus.closed);
+      async.elapse(const Duration(milliseconds: 150));
+      expect(built, hasLength(1));
+
+      // Nothing to tell anyone: this device is the one leaving.
+      built.first.emitStatus(
+        RealtimeSubscribeStatus.channelError,
+        _unauthorized,
+      );
+      async.flushMicrotasks();
+      expect(refusals, isEmpty);
+
+      _settle(async, realtime.leaveRoom());
+      // The next room is watched again.
+      joinAndSubscribe(async);
+      built.last.emitStatus(RealtimeSubscribeStatus.closed);
+      async.elapse(const Duration(milliseconds: 60));
+      expect(built, hasLength(3));
+    });
+
     brokenChannelTest('an app resume checks a channel that is down', (async) {
       joinAndSubscribe(async);
       built.first.emitStatus(RealtimeSubscribeStatus.timedOut);
@@ -318,6 +447,27 @@ void main() {
     expect(channels, hasLength(1));
     expect(channels.single.tracked.last['has_book'], isTrue);
     expect(channels.single.tracked.last['reader_ready'], isTrue);
+  });
+
+  test('Presence carries the protocol version in its first update', () async {
+    // GH-33: a member on another protocol must be recognisable. Static, so it
+    // goes out with the join's track and costs no update of its own.
+    await _join(service, 'ABC234');
+    channels.single.emitStatus(RealtimeSubscribeStatus.subscribed);
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+
+    expect(channels.single.tracked, hasLength(1));
+    expect(
+      channels.single.tracked.single['protocol'],
+      AppConstants.roomProtocolVersion,
+    );
+  });
+
+  test('only a refused topic counts as access denied', () {
+    // The shape realtime_client 2.10.0 reports a refused join in.
+    expect(isRealtimeAccessDenied(_unauthorized), isTrue);
+    expect(isRealtimeAccessDenied(Exception('"timeout"')), isFalse);
+    expect(isRealtimeAccessDenied(null), isFalse);
   });
 
   test('online users collapse a user with several connections', () async {
@@ -471,6 +621,12 @@ T _settle<T>(FakeAsync async, Future<T> future) {
   if (error != null) Error.throwWithStackTrace(error!, stackTrace!);
   return value;
 }
+
+/// A join refused because the user may not read the room's topic.
+final _unauthorized = Exception(
+  '"Unauthorized: You do not have permissions to read from this Channel '
+  'topic: cotime_book:room:ABC234"',
+);
 
 Future<void> _join(RealtimeService service, String code) {
   return service.joinRoom(

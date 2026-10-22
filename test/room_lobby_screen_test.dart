@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/models/library_book.dart';
+import 'package:cotime_book/models/room.dart';
 import 'package:cotime_book/models/room_member.dart';
 import 'package:cotime_book/providers/auth_provider.dart';
 import 'package:cotime_book/providers/book_provider.dart';
@@ -14,6 +16,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
     show RealtimeSubscribeStatus;
 
@@ -117,6 +120,59 @@ void main() {
       expect(lobby.isHostStart, isFalse);
     });
 
+    test('members on another app version are named, in words (GH-33)', () {
+      // Their page turns and transfers and this app's ignore each other.
+      final behind = readiness(
+        members: [member('host'), member('bob')],
+        onlineUsers: [
+          {
+            ...online('host'),
+            'protocols': [1],
+          },
+          {
+            ...online('bob'),
+            'protocols': [0],
+          },
+        ],
+      );
+      expect(
+        behind.versionNotice,
+        'Bob needs to update CoTime Book to read together.',
+      );
+      // Not a reason to keep the room from reading.
+      expect(behind.canOpenReader, isTrue);
+
+      final ahead = readiness(
+        members: [member('host'), member('bob')],
+        onlineUsers: [
+          {
+            ...online('host'),
+            'protocols': [1],
+          },
+          {
+            ...online('bob'),
+            'protocols': [99],
+          },
+        ],
+      );
+      expect(ahead.versionNotice, startsWith('Your app is out of date'));
+
+      final same = readiness(
+        members: [member('host'), member('bob')],
+        onlineUsers: [
+          {
+            ...online('host'),
+            'protocols': [1],
+          },
+          {
+            ...online('bob'),
+            'protocols': [1],
+          },
+        ],
+      );
+      expect(same.versionNotice, isNull);
+    });
+
     test('nobody can open the reader without the book on this device', () {
       expect(
         readiness(
@@ -198,6 +254,61 @@ void main() {
       await tester.pump(const Duration(seconds: 2));
       await tester.pump();
       expect(member('Bob'), findsNothing);
+      await disposeLobby(tester, container);
+    });
+  });
+
+  group('RoomLobbyScreen app versions', () {
+    testWidgets('a member on an older app is marked as needing an update', (
+      tester,
+    ) async {
+      // GH-33: an app from before the protocol field sends none.
+      final rooms = FakeRoomService()
+        ..members = [testMember('alice'), testMember('bob')];
+      final container = await joinedContainer(tester, rooms);
+      await pumpLobby(tester, container);
+      expect(find.text('Needs app update'), findsNothing);
+
+      _SilentChannel.last!.connect([
+        {
+          'user_id': 'alice',
+          'nickname': 'Alice',
+          'protocol': AppConstants.roomProtocolVersion,
+        },
+        {'user_id': 'bob', 'nickname': 'Bob'},
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Needs app update'), findsOneWidget);
+      expect(
+        find.text('Bob needs to update CoTime Book to read together.'),
+        findsOneWidget,
+      );
+      await disposeLobby(tester, container);
+    });
+  });
+
+  group('RoomLobbyScreen removed from the room', () {
+    testWidgets('goes home and says why when the membership is gone', (
+      tester,
+    ) async {
+      // GH-36: Realtime refused the channel, and the database agrees.
+      final rooms = FakeRoomService()..members = [testMember('alice')];
+      final container = await joinedContainer(tester, rooms);
+      await pumpRoutedLobby(tester, container);
+      expect(find.text('Room Lobby'), findsOneWidget);
+
+      rooms.roomRead = Completer<Room?>()..complete(null);
+      _SilentChannel.last!.refuse();
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+
+      expect(find.text('HOME'), findsOneWidget);
+      expect(find.text(RoomNotifier.removedFromRoomMessage), findsOneWidget);
+      // Said once; not left behind as a banner on Home.
+      expect(container.read(roomProvider).error, isNull);
       await disposeLobby(tester, container);
     });
   });
@@ -330,6 +441,38 @@ Future<void> pumpLobby(WidgetTester tester, ProviderContainer container) async {
   }
 }
 
+/// The lobby inside a router, for tests that leave it.
+Future<void> pumpRoutedLobby(
+  WidgetTester tester,
+  ProviderContainer container,
+) async {
+  final router = GoRouter(
+    initialLocation: '/lobby/${testRoom().code}',
+    routes: [
+      GoRoute(
+        path: '/',
+        name: 'home',
+        builder: (context, state) => const Scaffold(body: Text('HOME')),
+      ),
+      GoRoute(
+        path: '/lobby/:roomCode',
+        name: 'lobby',
+        builder: (context, state) =>
+            RoomLobbyScreen(roomCode: state.pathParameters['roomCode']!),
+      ),
+    ],
+  );
+  await tester.pumpWidget(
+    UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
+  for (var i = 0; i < 5; i++) {
+    await tester.pump(const Duration(milliseconds: 10));
+  }
+}
+
 /// A member row; the current user's row reads "Alice  (You)".
 Finder member(String nickname) =>
     find.textContaining(RegExp('^$nickname\\b'), findRichText: true);
@@ -370,6 +513,9 @@ class _PendingLibrary implements LibraryService {
 class _SilentChannel implements RoomRealtimeChannel {
   static _SilentChannel? last;
   final _callbacks = <String, ValueChanged<Map<String, dynamic>>>{};
+  void Function(RealtimeSubscribeStatus, Object?)? _status;
+  VoidCallback? _sync;
+  List<Map<String, dynamic>> presences = const [];
 
   _SilentChannel() {
     last = this;
@@ -378,8 +524,24 @@ class _SilentChannel implements RoomRealtimeChannel {
   void emit(String event, Map<String, dynamic> payload) =>
       _callbacks[event]?.call(payload);
 
+  /// Connects after all, with [presences] online.
+  void connect(List<Map<String, dynamic>> presences) {
+    this.presences = presences;
+    _status?.call(RealtimeSubscribeStatus.subscribed, null);
+    _sync?.call();
+  }
+
+  /// The server refuses this user the room's topic.
+  void refuse() => _status?.call(
+    RealtimeSubscribeStatus.channelError,
+    Exception(
+      '"Unauthorized: You do not have permissions to read from this Channel '
+      'topic: cotime_book:room:${testRoom().code}"',
+    ),
+  );
+
   @override
-  void onPresenceSync(VoidCallback callback) {}
+  void onPresenceSync(VoidCallback callback) => _sync = callback;
 
   @override
   void onPresenceJoin(ValueChanged<dynamic> callback) {}
@@ -395,7 +557,7 @@ class _SilentChannel implements RoomRealtimeChannel {
   @override
   void subscribe(
     void Function(RealtimeSubscribeStatus status, Object? error) callback,
-  ) {}
+  ) => _status = callback;
 
   @override
   Future<void> track(Map<String, dynamic> payload) async {}
@@ -410,7 +572,7 @@ class _SilentChannel implements RoomRealtimeChannel {
   ) async {}
 
   @override
-  List<Map<String, dynamic>> presencePayloads() => const [];
+  List<Map<String, dynamic>> presencePayloads() => presences;
 
   @override
   Future<void> remove({bool releaseSocket = true}) async {}

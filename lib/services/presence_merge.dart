@@ -1,3 +1,4 @@
+import '../config/app_constants.dart';
 import '../models/shared_page.dart';
 
 /// Collapses multiple device/connection metas into one logical room member.
@@ -42,6 +43,13 @@ List<Map<String, dynamic>> mergePresenceUsers(
           .map((meta) => PageFit.fromWire(meta['page_fit']))
           .whereType<PageFit>(),
     )?.toWire();
+    // Every protocol this person's connections speak, not the latest one: a
+    // person can follow the room on any device that understands it, and an
+    // expired meta from before an app update must not make them look out of
+    // date. See [presenceProtocolCompatibility].
+    latest.remove('protocol');
+    latest['protocols'] = (metas.map(presenceProtocol).toSet().toList()
+      ..sort());
     latest['session_count'] = metas.length;
     merged.add(latest);
   }
@@ -59,6 +67,50 @@ List<Map<String, dynamic>> mergePresenceUsers(
 bool presenceHoldsBook(Map<String, dynamic> user, String bookHash) {
   final hashes = user['ready_book_hashes'];
   return hashes is List && hashes.contains(bookHash);
+}
+
+/// How a room member's app relates to this one's wire protocol.
+enum ProtocolCompatibility {
+  /// At least one of their connections speaks this app's protocol.
+  compatible,
+
+  /// Their app is older: they need to update it to read along.
+  older,
+
+  /// Their app is newer: this app needs an update.
+  newer,
+}
+
+/// The wire protocol of one raw Presence meta. Apps from before the field
+/// existed send nothing and count as 0.
+int presenceProtocol(Map<String, dynamic> meta) {
+  final protocol = meta['protocol'];
+  return protocol is num ? protocol.toInt() : 0;
+}
+
+/// Whether the member in [user] — a merged row from [mergePresenceUsers] — can
+/// read in the same room as an app speaking [localProtocol].
+///
+/// A member with any connection on [localProtocol] is compatible: that device
+/// takes part, and a lingering meta from before an app update does not count
+/// against them. Otherwise any newer connection means this app is the one
+/// behind.
+ProtocolCompatibility presenceProtocolCompatibility(
+  Map<String, dynamic> user, {
+  int localProtocol = AppConstants.roomProtocolVersion,
+}) {
+  final listed = user['protocols'];
+  final protocols = listed is List
+      ? listed.whereType<num>().map((protocol) => protocol.toInt()).toList()
+      : <int>[];
+  if (protocols.isEmpty) protocols.add(presenceProtocol(user));
+  if (protocols.contains(localProtocol)) {
+    return ProtocolCompatibility.compatible;
+  }
+  if (protocols.any((protocol) => protocol > localProtocol)) {
+    return ProtocolCompatibility.newer;
+  }
+  return ProtocolCompatibility.older;
 }
 
 DateTime presenceTime(Map<String, dynamic> presence) {

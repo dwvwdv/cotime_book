@@ -20,4 +20,15 @@ class AppConstants {
 
   // Realtime
   static String roomChannelName(String roomCode) => 'cotime_book:room:$roomCode';
+
+  /// The version of the room's wire protocol — broadcast events and their
+  /// payloads, and the Presence fields others act on. Sent in Presence so a
+  /// room can tell members whose app speaks a different version apart:
+  /// otherwise both sides silently ignore each other (GH-33).
+  ///
+  /// Bump it in the same change that alters the wire in a way an app on the
+  /// previous version cannot follow (renamed or removed events, payload or
+  /// Presence fields it relies on). Additive, ignorable fields do not need a
+  /// bump. Apps from before this field existed send nothing and count as 0.
+  static const int roomProtocolVersion = 1;
 }

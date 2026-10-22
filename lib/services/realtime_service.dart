@@ -22,6 +22,39 @@ class RealtimeConnectionEvent {
   const RealtimeConnectionEvent(this.status, {this.error});
 }
 
+/// The server refused the room channel because this user may not read its
+/// topic — Realtime authorization follows room membership, so this normally
+/// means the membership is gone (left elsewhere, evicted, room closed).
+///
+/// The service stops rebuilding the channel when this happens; whoever owns
+/// the room session decides, from the database, whether to give up the room
+/// or to try again with [RealtimeService.retryAfterAccessDenied].
+class RealtimeAccessDenied {
+  final String roomCode;
+
+  /// Identifies the refused session for [RealtimeService.retryAfterAccessDenied].
+  final int generation;
+  final Object? error;
+
+  const RealtimeAccessDenied({
+    required this.roomCode,
+    required this.generation,
+    this.error,
+  });
+}
+
+/// Whether a subscribe error is the server refusing this user the topic, as
+/// opposed to a dropped connection worth rebuilding the channel for.
+///
+/// realtime_client reports a refused join as `channelError` with
+/// `Exception('"Unauthorized: You do not have permissions to read from this
+/// Channel topic: ..."')`, and a later refusal (e.g. re-checked on a token
+/// refresh) as a system event carrying the same message.
+bool isRealtimeAccessDenied(Object? error) {
+  if (error == null) return false;
+  return error.toString().contains('Unauthorized');
+}
+
 /// Small adapter around Supabase's channel so room-session behavior can be
 /// tested without opening a websocket.
 abstract interface class RoomRealtimeChannel {
@@ -179,6 +212,11 @@ class RealtimeService {
   Timer? _recoveryTimer;
   int _recoveryAttempts = 0;
 
+  /// Set when leaving starts: from the leave RPC on, the membership the
+  /// channel's authorization depends on may already be gone, and a rebuilt
+  /// channel would only be refused (GH-36).
+  bool _recoverySuspended = false;
+
   /// Supabase's per-client Presence window. See [_schedulePresenceTrack].
   static const defaultPresenceWindow = Duration(seconds: 30);
   final Duration _presenceWindow;
@@ -193,6 +231,8 @@ class RealtimeService {
       StreamController<Map<String, dynamic>>.broadcast();
   final _connectionController =
       StreamController<RealtimeConnectionEvent>.broadcast();
+  final _accessDeniedController =
+      StreamController<RealtimeAccessDenied>.broadcast();
   final _broadcastControllers =
       <String, StreamController<Map<String, dynamic>>>{};
 
@@ -261,6 +301,10 @@ class RealtimeService {
   Stream<RealtimeConnectionEvent> get connectionStream =>
       _connectionController.stream;
 
+  /// The server refused this user the room channel. See [RealtimeAccessDenied].
+  Stream<RealtimeAccessDenied> get accessDeniedStream =>
+      _accessDeniedController.stream;
+
   Stream<Map<String, dynamic>> broadcastStream(String event) {
     _ensureOpen();
     _broadcastControllers[event] ??=
@@ -293,6 +337,8 @@ class RealtimeService {
 
     return _serialize(() async {
       _ensureOpen();
+      // Joining means this device wants the room's channel again.
+      _recoverySuspended = false;
 
       final canReuseCurrentChannel =
           _connectionStatus == RealtimeConnectionStatus.connecting ||
@@ -384,6 +430,13 @@ class RealtimeService {
         _schedulePresenceTrack();
         return;
       }
+      // Not a connection problem: rebuilding the channel would be refused the
+      // same way, every few seconds, for as long as the app stays open.
+      if (status == RealtimeSubscribeStatus.channelError &&
+          isRealtimeAccessDenied(error)) {
+        _accessDenied(channel, generation, error);
+        return;
+      }
       // Our own leave bumps the generation before it unsubscribes, so a
       // close that reaches here came from the server or the library — e.g.
       // a rejoin that unsubscribed its own channel. The library never
@@ -399,6 +452,66 @@ class RealtimeService {
     _scheduleRecovery(generation, delay: _silentSubscribeTimeout);
   }
 
+  /// The server refused this user the channel. Stop the watchdog and drop the
+  /// channel — the library would otherwise rejoin it on every socket
+  /// reconnect — but keep the room's identity so the owner of the room session
+  /// can still [retryAfterAccessDenied] if the database says it is a member.
+  void _accessDenied(
+    RoomRealtimeChannel channel,
+    int generation,
+    Object? error,
+  ) {
+    final roomCode = _roomCode;
+    if (!_isCurrent(channel, generation) || roomCode == null) return;
+    debugPrint('Room channel refused: $error');
+    _recoveryTimer?.cancel();
+    _recoveryTimer = null;
+    _presenceTimer?.cancel();
+    _presenceTimer = null;
+    // Invalidates the channel's callbacks, and identifies this refusal.
+    final deniedGeneration = ++_generation;
+    _channel = null;
+    // No raw error: the lobby shows Presence errors verbatim, and this one is
+    // a server message, not something to tell a reader.
+    _emitConnection(RealtimeConnectionStatus.error);
+    if (!_recoverySuspended && !_accessDeniedController.isClosed) {
+      _accessDeniedController.add(
+        RealtimeAccessDenied(
+          roomCode: roomCode,
+          generation: deniedGeneration,
+          error: error,
+        ),
+      );
+    }
+    unawaited(
+      _serialize(() async {
+        try {
+          await channel.remove(releaseSocket: false);
+        } catch (removeError) {
+          debugPrint('Dropping the refused room channel failed: $removeError');
+        }
+      }),
+    );
+  }
+
+  /// Tries the refused channel again, after the usual backoff: the database
+  /// still lists this user as a member, so the refusal may have been a stale
+  /// token or a transient authorization failure. A no-op once the room was
+  /// left, rejoined or refused again since [deniedGeneration].
+  void retryAfterAccessDenied(int deniedGeneration) {
+    if (_channel != null) return;
+    _scheduleRecovery(deniedGeneration);
+  }
+
+  /// Leaving the room has started: stop rebuilding its channel. The leave RPC
+  /// may remove the membership before [leaveRoom] drops the channel, and a
+  /// channel rebuilt in between is refused by the server (GH-36).
+  void suspendRecovery() {
+    _recoverySuspended = true;
+    _recoveryTimer?.cancel();
+    _recoveryTimer = null;
+  }
+
   /// The channel stopped working. The library retries an errored channel on
   /// its own, so give it a moment; if it is still down then, rebuild it.
   void _channelInTrouble(int generation, Object? reason) {
@@ -408,7 +521,14 @@ class RealtimeService {
   }
 
   void _scheduleRecovery(int generation, {Duration? delay}) {
-    if (_isClosed || _channel == null || generation != _generation) return;
+    // _roomCode rather than _channel: a refused channel is already dropped
+    // but may still be retried (see retryAfterAccessDenied).
+    if (_isClosed ||
+        _recoverySuspended ||
+        _roomCode == null ||
+        generation != _generation) {
+      return;
+    }
     _recoveryTimer?.cancel();
     var backoff =
         delay ?? _recoveryDelay * (1 << _recoveryAttempts.clamp(0, 4));
@@ -425,7 +545,7 @@ class RealtimeService {
       final userId = _userId;
       final payload = _presencePayload;
       if (_isClosed ||
-          _channel == null ||
+          _recoverySuspended ||
           generation != _generation ||
           isConnected ||
           roomCode == null ||
@@ -440,6 +560,9 @@ class RealtimeService {
       } catch (error) {
         debugPrint('Refreshing realtime auth failed: $error');
       }
+      // Refused, or leaving, while the token was refreshed: a new channel
+      // would only be refused.
+      if (_recoverySuspended || generation != _generation) return;
       try {
         // Untracking a dead channel only waits out a timeout; leaving the
         // channel removes its presence on the server anyway.
@@ -451,7 +574,7 @@ class RealtimeService {
       } catch (error) {
         debugPrint('Dropping the broken room channel failed: $error');
       }
-      if (_isClosed) return;
+      if (_isClosed || _recoverySuspended) return;
       _openChannel(
         roomCode: roomCode,
         userId: userId,
@@ -571,7 +694,14 @@ class RealtimeService {
   }
 
   Future<void> leaveRoom() {
-    return _serialize(() => _leaveRoomInternal(emitDisconnected: true));
+    return _serialize(() async {
+      try {
+        await _leaveRoomInternal(emitDisconnected: true);
+      } finally {
+        // Nothing is left to recover; the next room starts unsuspended.
+        _recoverySuspended = false;
+      }
+    });
   }
 
   Future<void> close() {
@@ -589,6 +719,7 @@ class RealtimeService {
     }
     await _presenceController.close();
     await _connectionController.close();
+    await _accessDeniedController.close();
     for (final controller in _broadcastControllers.values) {
       await controller.close();
     }
@@ -680,6 +811,9 @@ class RealtimeService {
     required Map<String, dynamic>? pageFit,
   }) {
     return {
+      // Static, so it rides along with every track and never costs an
+      // update of its own (see _schedulePresenceTrack).
+      'protocol': AppConstants.roomProtocolVersion,
       'user_id': userId,
       'nickname': nickname,
       'avatar_color': avatarColorIndex,

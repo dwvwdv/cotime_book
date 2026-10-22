@@ -11,7 +11,8 @@ import '../services/supabase_service.dart';
 final roomServiceProvider = Provider<RoomService>((ref) => RoomService());
 
 final roomProvider = StateNotifierProvider<RoomNotifier, RoomState>((ref) {
-  return RoomNotifier(
+  final realtime = ref.read(realtimeServiceProvider);
+  final notifier = RoomNotifier(
     ref.read(roomServiceProvider),
     onSessionRevoked: () async {
       await Future.wait<void>([
@@ -20,6 +21,14 @@ final roomProvider = StateNotifierProvider<RoomNotifier, RoomState>((ref) {
       ]);
     },
   );
+  // Realtime refusing the room channel is a hint that the membership is gone,
+  // not proof of it: the database decides (GH-36).
+  final accessDenied = realtime.accessDeniedStream.listen((denied) async {
+    final stillMember = await notifier.confirmMembershipAfterAccessDenied();
+    if (stillMember) realtime.retryAfterAccessDenied(denied.generation);
+  });
+  ref.onDispose(accessDenied.cancel);
+  return notifier;
 });
 
 class RoomState {
@@ -553,6 +562,44 @@ class RoomNotifier extends StateNotifier<RoomState> {
     } finally {
       _heartbeatInFlight = false;
     }
+  }
+
+  /// Shown when this device finds it is no longer in the room it was in.
+  static const removedFromRoomMessage =
+      'You are no longer in this room. It may have closed, or you left it on '
+      'another device.';
+
+  /// Realtime refused this room's channel. That happens when the membership
+  /// is gone — left on another device, evicted after a long sleep, the room
+  /// closed — but the database is the authority on membership, so ask it.
+  ///
+  /// Returns whether this device is still in the room, i.e. whether the
+  /// channel is worth trying again. A failed read counts as still in: a
+  /// network error is no reason to throw the reader out of the room.
+  Future<bool> confirmMembershipAfterAccessDenied() async {
+    final room = state.currentRoom;
+    if (room == null) return false;
+    final roomSessionGeneration = _roomSessionGeneration;
+    final Room? current;
+    try {
+      current = await _roomService.getRoom(room.id);
+    } catch (_) {
+      return mounted && _isCurrentRoomSession(room.id, roomSessionGeneration);
+    }
+    // Left or replaced meanwhile: whoever did that owns the channel now.
+    if (!mounted || !_isCurrentRoomSession(room.id, roomSessionGeneration)) {
+      return false;
+    }
+    if (current == null) {
+      await _revokeSession(room.id, removedFromRoomMessage);
+      return false;
+    }
+    _applyRoomUpdate(
+      current,
+      originRoom: room,
+      roomSessionGeneration: roomSessionGeneration,
+    );
+    return true;
   }
 
   Future<void> _revokeSession(String roomId, String reason) async {

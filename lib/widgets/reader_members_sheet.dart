@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/theme.dart';
 import '../providers/presence_provider.dart';
+import '../services/presence_merge.dart';
 
 /// Who is in the room while reading, and who has stepped back to the lobby.
 ///
@@ -36,6 +37,7 @@ class ReaderMembersSheet extends ConsumerWidget {
                 _MemberRow(
                   nickname: user['nickname'] as String? ?? 'Unknown',
                   isReading: user['is_reading'] as bool? ?? false,
+                  version: presenceProtocolCompatibility(user),
                 ),
             ],
           ),
@@ -48,8 +50,13 @@ class ReaderMembersSheet extends ConsumerWidget {
 class _MemberRow extends StatelessWidget {
   final String nickname;
   final bool isReading;
+  final ProtocolCompatibility version;
 
-  const _MemberRow({required this.nickname, required this.isReading});
+  const _MemberRow({
+    required this.nickname,
+    required this.isReading,
+    required this.version,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -80,9 +87,26 @@ class _MemberRow extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          Text(
-            isReading ? 'Reading' : 'Left the reader',
-            style: AppTheme.caption,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                isReading ? 'Reading' : 'Left the reader',
+                style: AppTheme.caption,
+              ),
+              // Their page turns and this reader's never reach each other, so
+              // waiting on them is waiting forever (GH-33). Bold, not a colour.
+              if (version != ProtocolCompatibility.compatible)
+                Text(
+                  version == ProtocolCompatibility.older
+                      ? 'Needs app update'
+                      : 'Newer app — update yours',
+                  style: AppTheme.caption.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.ink,
+                  ),
+                ),
+            ],
           ),
         ],
       ),

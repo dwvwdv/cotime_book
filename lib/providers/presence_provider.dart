@@ -210,7 +210,12 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
   /// Broadcast while the caller is still a database member. Realtime channel
   /// authorization is evaluated against room membership, so this must happen
   /// before the leave RPC/delete removes that membership.
+  ///
+  /// This is where leaving starts, so it also stops the channel watchdog:
+  /// once the leave RPC lands, a channel rebuilt before [leaveRoom] drops it
+  /// would only be refused by the server (GH-36).
   Future<void> announceLeaving() async {
+    _realtimeService.suspendRecovery();
     await _announceMembership('leaving');
   }
 

@@ -2,16 +2,21 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/room_member.dart';
+import '../services/presence_merge.dart';
 import 'user_avatar.dart';
 
 class MemberList extends StatelessWidget {
   final List<RoomMember> members;
   final String? currentUserId;
 
+  /// Online members' app versions relative to this one, by user ID (GH-33).
+  final Map<String, ProtocolCompatibility> appVersions;
+
   const MemberList({
     super.key,
     required this.members,
     this.currentUserId,
+    this.appVersions = const {},
   });
 
   /// Online first, each group in join order. A member whose app was killed
@@ -44,6 +49,12 @@ class MemberList extends StatelessWidget {
       itemBuilder: (context, index) {
         final member = members[index];
         final isMe = member.userId == currentUserId;
+        final version = member.isOnline ? appVersions[member.userId] : null;
+        final versionLabel = switch (version) {
+          ProtocolCompatibility.older => 'Needs app update',
+          ProtocolCompatibility.newer => 'Newer app — update yours',
+          _ => null,
+        };
 
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -85,6 +96,16 @@ class MemberList extends StatelessWidget {
                       member.isOnline ? 'Online' : 'Away — not connected',
                       style: AppTheme.caption,
                     ),
+                    // Bold ink, not a colour: on e-ink red is just gray.
+                    if (versionLabel != null)
+                      Text(
+                        versionLabel,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.ink,
+                        ),
+                      ),
                   ],
                 ),
               ),

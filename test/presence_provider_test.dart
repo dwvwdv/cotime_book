@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cotime_book/models/shared_page.dart';
 import 'package:cotime_book/providers/presence_provider.dart';
+import 'package:cotime_book/services/presence_merge.dart';
 import 'package:cotime_book/services/realtime_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -42,6 +43,70 @@ void main() {
     expect(alice['ready_book_hashes'], ['book-a']);
     expect(alice['is_reading'], isTrue);
     expect(alice['reader_ready'], isTrue);
+  });
+
+  group('app versions in Presence (GH-33)', () {
+    Map<String, dynamic> meta(String userId, int? protocol, String at) => {
+      'user_id': userId,
+      if (protocol != null) 'protocol': protocol,
+      'online_at': at,
+    };
+
+    ProtocolCompatibility versionOf(
+      List<Map<String, dynamic>> metas, {
+      int localProtocol = 1,
+    }) => presenceProtocolCompatibility(
+      mergePresenceUsers(metas).single,
+      localProtocol: localProtocol,
+    );
+
+    test('an app from before the field counts as older', () {
+      expect(
+        versionOf([meta('bob', null, '2026-10-22T01:00:00Z')]),
+        ProtocolCompatibility.older,
+      );
+      expect(
+        versionOf([meta('bob', 1, '2026-10-22T01:00:00Z')]),
+        ProtocolCompatibility.compatible,
+      );
+      expect(
+        versionOf([meta('bob', 2, '2026-10-22T01:00:00Z')]),
+        ProtocolCompatibility.newer,
+      );
+    });
+
+    test('a meta left over from before an app update does not count', () {
+      // The old app's connection has not expired yet; the updated one is the
+      // device Bob reads on.
+      final merged = mergePresenceUsers([
+        meta('bob', null, '2026-10-22T01:00:00Z'),
+        meta('bob', 1, '2026-10-22T02:00:00Z'),
+      ]).single;
+      expect(merged['protocols'], [0, 1]);
+      expect(
+        presenceProtocolCompatibility(merged, localProtocol: 1),
+        ProtocolCompatibility.compatible,
+      );
+    });
+
+    test('any device on this protocol keeps a member compatible', () {
+      // Not just the device that tracked last: an older tablet tracking after
+      // the phone must not hide that the phone can read along.
+      expect(
+        versionOf([
+          meta('bob', 1, '2026-10-22T01:00:00Z'),
+          meta('bob', 0, '2026-10-22T02:00:00Z'),
+        ]),
+        ProtocolCompatibility.compatible,
+      );
+      expect(
+        versionOf([
+          meta('bob', 0, '2026-10-22T01:00:00Z'),
+          meta('bob', 2, '2026-10-22T02:00:00Z'),
+        ]),
+        ProtocolCompatibility.newer,
+      );
+    });
   });
 
   test(
@@ -115,6 +180,9 @@ void main() {
     );
     await notifier.announceLeaving();
 
+    // Leaving starts here, so the channel watchdog stops here too: once the
+    // leave RPC lands, a rebuilt channel would be refused (GH-36).
+    expect(realtime.suspendCalls, 1);
     expect(realtime.lastBroadcastEvent, 'membership_changed');
     expect(realtime.lastBroadcastPayload, {
       'action': 'leaving',
@@ -314,12 +382,19 @@ class _RecordingRealtimeService extends RealtimeService {
   Map<String, dynamic> lastPresence = {};
   String? lastBroadcastEvent;
   Map<String, dynamic>? lastBroadcastPayload;
+  int suspendCalls = 0;
 
   _RecordingRealtimeService()
     : super(channelFactory: (_, __) => throw StateError('not used'));
 
   @override
   bool get isConnected => true;
+
+  @override
+  void suspendRecovery() {
+    suspendCalls++;
+    super.suspendRecovery();
+  }
 
   @override
   Future<void> joinRoom({
