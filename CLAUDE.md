@@ -88,6 +88,11 @@ supabase/
      否則 CI 驗的仍是舊設定。
    改這個檔案前先讀 `test/page_sync_service_test.dart`——它用多 client 的 `FakeRoom`
    把遺失訊息、同時翻頁、斷線等情況都釘住了。
+   - **協定版本**（GH-33）：Presence 帶 `protocol`（`AppConstants.roomProtocolVersion`），
+     lobby 與 reader 對版本不同的成員標示「需要更新 App」。改了 broadcast 事件名稱或 payload、
+     或改了別人依賴的 Presence 欄位、而舊版跟不上時，同一個 PR 要把它 +1；只新增可被忽略的欄位
+     不用。版號只能往上加。舊版不送這個欄位，算成 0——0 同時涵蓋相容的上一版與更舊的不相容版本，
+     所以目前只提示、不把對方排除在共識之外。
 
 3. **房間成員的權威來源是資料庫，不是 Presence。**
    Presence 只負責 online / has_book 這層 overlay。
@@ -106,6 +111,9 @@ supabase/
 5. **Realtime 連線會斷，而且 library 不一定會自己接回來。** 裝置在讀一頁時休眠是常態。
    `RealtimeService` 有 watchdog 會重建壞掉的 channel（見 issue #17）。
    換 channel 時不要用 `removeChannel()`（它會在背景斷掉 socket），走 `remove(releaseSocket: false)`；
+   伺服器以 `Unauthorized` 拒絕 join 時不重建（GH-36）：`accessDeniedStream` 通知
+   `RoomNotifier` 向資料庫確認成員資格，已不在房內就回首頁，否則照常退避重試。
+   離開流程一開始就 `suspendRecovery()`，避免在 `leave_room` 之後重建出會被拒的 channel。
    任何依賴 Presence 的決策都要先確認 `isConnected`——斷線時的 Presence 是舊的或空的。
    **Presence 更新有每 client 每 30 秒 5 次的上限**（track + untrack），超過時伺服器直接關掉
    channel（`ClientPresenceRateLimitReached`）。`RealtimeService` 會合併並限流 Presence 更新；
