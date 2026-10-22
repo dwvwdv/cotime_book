@@ -42,17 +42,23 @@ class RoomState {
   bool get allMembersHaveBook =>
       members.isNotEmpty && members.every((m) => m.hasBook);
 
+  /// Keeps [error] unless a new one is given or [clearError] is set. Every
+  /// state update used to drop the error as a side effect, so whether a
+  /// message survived depended on which unrelated update happened to run next
+  /// (GH-30). Clearing is now a decision made where an operation starts over
+  /// or succeeds.
   RoomState copyWith({
     Room? currentRoom,
     List<RoomMember>? members,
     bool? isLoading,
     String? error,
+    bool clearError = false,
   }) {
     return RoomState(
       currentRoom: currentRoom ?? this.currentRoom,
       members: members ?? this.members,
       isLoading: isLoading ?? this.isLoading,
-      error: error,
+      error: clearError ? null : (error ?? this.error),
     );
   }
 }
@@ -116,7 +122,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
   Future<Room?> _enterRoom(Future<Room> Function() enter) async {
     final operationGeneration = ++_roomSessionGeneration;
     _resetMemberTracking();
-    state = state.copyWith(isLoading: true, error: null);
+    state = state.copyWith(isLoading: true, clearError: true);
     try {
       final room = await enter();
       final members = await _roomService.getRoomMembers(room.id);
@@ -125,6 +131,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
         currentRoom: room,
         members: members,
         isLoading: false,
+        clearError: true,
       );
       _startHeartbeat(room.id);
       return room;
@@ -161,8 +168,12 @@ class RoomNotifier extends StateNotifier<RoomState> {
         return;
       }
       _appliedMembersGeneration = fetchGeneration;
+      // A roster read that reached the database is as good a sign the
+      // connection is back as a heartbeat is; the lobby re-reads the roster
+      // every few seconds, so this is what retires a failed read's message.
       state = state.copyWith(
         members: _applyPresenceOverlay(members, _lastPresenceUsers),
+        clearError: true,
       );
     } catch (error) {
       if (_isCurrentRoomSession(room.id, roomSessionGeneration) &&
@@ -565,7 +576,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
 
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
-    state = state.copyWith(isLoading: true, error: null);
+    state = state.copyWith(isLoading: true, clearError: true);
     try {
       try {
         await _roomService.leaveRoom(roomId: room.id);
@@ -612,15 +623,12 @@ class RoomNotifier extends StateNotifier<RoomState> {
         identical(currentRoom, originRoom);
     if (!isNewer && !isUnchangedSnapshot) return false;
 
-    state = state.copyWith(
-      currentRoom: updatedRoom,
-      error: clearError ? null : state.error,
-    );
+    state = state.copyWith(currentRoom: updatedRoom, clearError: clearError);
     return true;
   }
 
   void clearError() {
-    state = state.copyWith(error: null);
+    state = state.copyWith(clearError: true);
   }
 
   @override

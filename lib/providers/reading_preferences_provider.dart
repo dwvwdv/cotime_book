@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_epub_viewer/flutter_epub_viewer.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../services/local_store.dart';
+import 'local_store_provider.dart';
 
 /// Preset reading themes for the EPUB reader.
 enum ReadingTheme {
@@ -13,6 +17,7 @@ class ReadingPreferences {
   static const double minFontSize = 12;
   static const double maxFontSize = 32;
   static const double fontSizeStep = 2;
+  static const double defaultFontSize = 18;
 
   final ReadingTheme theme;
 
@@ -27,9 +32,31 @@ class ReadingPreferences {
 
   const ReadingPreferences({
     this.theme = ReadingTheme.day,
-    this.fontSize = 18,
+    this.fontSize = defaultFontSize,
     this.volumeKeysTurnPages = false,
   });
+
+  /// What [store] remembers from earlier launches. Anything unusable falls
+  /// back to its default on its own, so one bad value never costs the others.
+  factory ReadingPreferences.restore(LocalStore store) {
+    final size = store.readingFontSize;
+    return ReadingPreferences(
+      // A theme this version no longer has is not an error: start on Paper.
+      theme:
+          ReadingTheme.values.asNameMap()[store.readingTheme] ??
+          ReadingTheme.day,
+      // Clamped the same way the size buttons are, since the room reads at
+      // the largest size anyone picked: an out-of-range size saved by some
+      // other build would otherwise set the type for everyone (issue #20).
+      fontSize: size != null && size.isFinite
+          ? clampFontSize(size)
+          : defaultFontSize,
+      volumeKeysTurnPages: store.volumeKeysTurnPages ?? false,
+    );
+  }
+
+  static double clampFontSize(double size) =>
+      size.clamp(minFontSize, maxFontSize).toDouble();
 
   String get themeLabel {
     switch (theme) {
@@ -104,28 +131,44 @@ class ReadingPreferences {
   }
 }
 
+/// Remembered between launches (GH-32): e-reader users turn the type up,
+/// and setting it again every time the app opened was the first thing they
+/// did in every session.
+///
+/// The saved values are read synchronously when the notifier is built — the
+/// preferences are loaded before the app starts — so the first state anyone
+/// sees is already the remembered one. The reader's first page fit therefore
+/// carries the remembered size, instead of publishing the default and then
+/// correcting it with a second Presence update (issue #18).
 class ReadingPreferencesNotifier extends StateNotifier<ReadingPreferences> {
-  ReadingPreferencesNotifier() : super(const ReadingPreferences());
+  final LocalStore _store;
+
+  ReadingPreferencesNotifier([LocalStore? store])
+    : this._(store ?? LocalStore());
+
+  ReadingPreferencesNotifier._(LocalStore store)
+    : _store = store,
+      super(ReadingPreferences.restore(store));
 
   void setTheme(ReadingTheme theme) {
     state = state.copyWith(theme: theme);
+    unawaited(_store.saveReadingTheme(theme.name));
   }
 
   void setFontSize(double size) {
-    state = state.copyWith(
-      fontSize: size.clamp(
-        ReadingPreferences.minFontSize,
-        ReadingPreferences.maxFontSize,
-      ),
-    );
+    if (!size.isFinite) return;
+    final clamped = ReadingPreferences.clampFontSize(size);
+    state = state.copyWith(fontSize: clamped);
+    unawaited(_store.saveReadingFontSize(clamped));
   }
 
   void setVolumeKeysTurnPages(bool enabled) {
     state = state.copyWith(volumeKeysTurnPages: enabled);
+    unawaited(_store.saveVolumeKeysTurnPages(enabled));
   }
 }
 
 final readingPreferencesProvider =
     StateNotifierProvider<ReadingPreferencesNotifier, ReadingPreferences>(
-  (ref) => ReadingPreferencesNotifier(),
+  (ref) => ReadingPreferencesNotifier(ref.read(localStoreProvider)),
 );

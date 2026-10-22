@@ -414,4 +414,36 @@ void main() {
     expect(pickedBookKind(['a.epub', 'b.epub']), PickedBookKind.mixed);
     expect(pickedBookKind(['a.pdf']), PickedBookKind.mixed);
   });
+
+  test('a failed share stays reported until the room has a book', () async {
+    // GH-30: the error used to survive only until the next state update of
+    // any kind; it now lasts until something actually resolves it.
+    final storage = MemoryEpubStorage();
+    addTearDown(() => storage.dir.deleteSync(recursive: true));
+    final library = SlowLibrary();
+    final container = ProviderContainer(
+      overrides: [
+        epubStorageProvider.overrideWithValue(storage),
+        libraryServiceProvider.overrideWithValue(library),
+      ],
+    );
+    addTearDown(container.dispose);
+    final books = container.read(bookProvider.notifier);
+
+    final sharing = books.shareLibraryBook(
+      const LibraryBook(path: 'Alice.epub'),
+    );
+    library.downloads['Alice.epub']!.completeError(Exception('timed out'));
+    await sharing;
+    expect(container.read(bookProvider).error, isNotNull);
+
+    final bytes = Uint8List.fromList([4, 5, 6]);
+    final hash = sha256.convert(bytes).toString();
+    await storage.saveBook(hash, bytes);
+    await books.loadExistingBook(hash);
+
+    final state = container.read(bookProvider);
+    expect(state.hasBook, isTrue);
+    expect(state.error, isNull);
+  });
 }

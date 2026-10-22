@@ -574,6 +574,93 @@ void main() {
       expect(notifier.state.currentRoom?.currentBookHash, otherBook);
     });
   });
+
+  // GH-30: copyWith used to drop the error on every update, so a message
+  // vanished whenever some unrelated update ran, and code that needed one to
+  // survive had to copy it across by hand.
+  group('room errors', () {
+    test('stay up through Presence and book updates that fix nothing', () async {
+      final service = FakeRoomService()..members = [testMember(roomId: 'room-a')];
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      service.heartbeatError = StateError('temporary network failure');
+      await expectLater(notifier.heartbeat(), throwsStateError);
+
+      notifier.updateMembersFromPresence([
+        {'user_id': 'user-a', 'has_book': true},
+      ]);
+      notifier.onBookSharedReceived(bookTitle: 'Moby-Dick', bookHash: 'hash');
+
+      expect(notifier.state.members.single.isOnline, isTrue);
+      expect(notifier.state.currentRoom?.currentBookTitle, 'Moby-Dick');
+      expect(notifier.state.error, contains('temporary network failure'));
+    });
+
+    test('a successful heartbeat clears the error', () async {
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      service.heartbeatError = StateError('temporary network failure');
+      await expectLater(notifier.heartbeat(), throwsStateError);
+      service
+        ..heartbeatError = null
+        ..nextRoom = testRoom(revision: 1);
+      await notifier.heartbeat();
+
+      expect(notifier.state.error, isNull);
+    });
+
+    test('a roster read that gets through clears a failed one', () async {
+      final service = FakeRoomService()..members = [testMember(roomId: 'room-a')];
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      service.memberRead = Completer()..completeError(StateError('offline'));
+      await notifier.refreshMembers();
+      expect(notifier.state.error, contains('offline'));
+
+      service.memberRead = null;
+      await notifier.refreshMembers();
+      expect(notifier.state.error, isNull);
+    });
+
+    test('a failed join is cleared by the next room entered', () async {
+      final service = FakeRoomService()
+        ..joinError = const RoomNotFoundException('ZZZZZZ');
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.joinRoom('ZZZZZZ', 'Alice');
+      expect(notifier.state.error, isNotNull);
+
+      expect(await notifier.createRoom('Alice'), isNotNull);
+      expect(notifier.state.error, isNull);
+    });
+
+    test('a revoked session stays explained until dismissed', () async {
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      service.heartbeatError = const RoomSessionRevokedException(
+        'membership expired',
+      );
+      await expectLater(
+        notifier.heartbeat(),
+        throwsA(isA<RoomSessionRevokedException>()),
+      );
+      expect(notifier.state.error, 'membership expired');
+
+      notifier.clearError();
+      expect(notifier.state.error, isNull);
+    });
+  });
 }
 
 Room testRoom({

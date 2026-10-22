@@ -67,17 +67,20 @@ class BookState {
 
   bool get hasBook => bookFile != null;
 
+  /// Keeps [error] unless a new one is given or [clearError] is set (GH-30):
+  /// a message must not disappear because some unrelated update ran.
   BookState copyWith({
     BookMetadata? currentBook,
     File? bookFile,
     bool? isLoading,
     String? error,
+    bool clearError = false,
   }) {
     return BookState(
       currentBook: currentBook ?? this.currentBook,
       bookFile: bookFile ?? this.bookFile,
       isLoading: isLoading ?? this.isLoading,
-      error: error,
+      error: clearError ? null : (error ?? this.error),
     );
   }
 }
@@ -199,7 +202,7 @@ class BookNotifier extends StateNotifier<BookState> {
     // Receiving (or serving) a book never blocks sharing a different one: the
     // new hash simply replaces what the transfer is working on. Refusing here
     // is what used to strand a room behind a stalled transfer.
-    state = state.copyWith(isLoading: true, error: null);
+    state = state.copyWith(isLoading: true, clearError: true);
     int? shareGeneration;
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -271,7 +274,7 @@ class BookNotifier extends StateNotifier<BookState> {
     required TxtImportConfirm confirm,
   }) async {
     final generation = _sessionGeneration;
-    state = state.copyWith(isLoading: true, error: null);
+    state = state.copyWith(isLoading: true, clearError: true);
     int? shareGeneration;
     try {
       final total = sources.fold<int>(0, (n, s) => n + s.bytes.length);
@@ -333,7 +336,7 @@ class BookNotifier extends StateNotifier<BookState> {
   Future<void> shareLibraryBook(LibraryBook book) async {
     final generation = _sessionGeneration;
     final shareGeneration = ++_shareGeneration;
-    state = state.copyWith(isLoading: true, error: null);
+    state = state.copyWith(isLoading: true, clearError: true);
     final Uint8List bytes;
     try {
       bytes = await _library.download(book.path);
@@ -368,7 +371,7 @@ class BookNotifier extends StateNotifier<BookState> {
     final superseded =
         shareGeneration != null && shareGeneration != _shareGeneration;
     state = superseded
-        ? state.copyWith(isLoading: false, error: state.error)
+        ? state.copyWith(isLoading: false)
         : state.copyWith(isLoading: false, error: error);
   }
 
@@ -422,6 +425,7 @@ class BookNotifier extends StateNotifier<BookState> {
       currentBook: metadata,
       bookFile: savedFile,
       isLoading: false,
+      clearError: true,
     );
     _loadedBookHash = hash;
     _expectedBookHash = hash;
@@ -488,7 +492,12 @@ class BookNotifier extends StateNotifier<BookState> {
         bookHash == _expectedBookHash &&
         _isCurrent(generation) &&
         transferGeneration == _transferGeneration) {
-      state = state.copyWith(bookFile: bookFile, isLoading: false);
+      // The room's book is here: whatever went wrong getting it is over.
+      state = state.copyWith(
+        bookFile: bookFile,
+        isLoading: false,
+        clearError: true,
+      );
       _loadedBookHash = bookHash;
       _expectedBookHash = bookHash;
 
@@ -509,7 +518,11 @@ class BookNotifier extends StateNotifier<BookState> {
     final file = await _storageService.getBookFile(bookHash);
     if (!_isCurrent(generation)) return;
     if (file != null) {
-      state = state.copyWith(bookFile: file, isLoading: false);
+      state = state.copyWith(
+        bookFile: file,
+        isLoading: false,
+        clearError: true,
+      );
       _loadedBookHash = bookHash;
       _expectedBookHash = bookHash;
       _transferService?.holdBook(bookHash);
