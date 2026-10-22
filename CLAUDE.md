@@ -88,11 +88,13 @@ supabase/
      否則 CI 驗的仍是舊設定。
    改這個檔案前先讀 `test/page_sync_service_test.dart`——它用多 client 的 `FakeRoom`
    把遺失訊息、同時翻頁、斷線等情況都釘住了。
-   - **協定版本**（GH-33）：Presence 帶 `protocol`（`AppConstants.roomProtocolVersion`），
-     lobby 與 reader 對版本不同的成員標示「需要更新 App」。改了 broadcast 事件名稱或 payload、
-     或改了別人依賴的 Presence 欄位、而舊版跟不上時，同一個 PR 要把它 +1；只新增可被忽略的欄位
-     不用。版號只能往上加。舊版不送這個欄位，算成 0——0 同時涵蓋相容的上一版與更舊的不相容版本，
-     所以目前只提示、不把對方排除在共識之外。
+   - **協定版本**（GH-33）：Presence 帶 `protocol`（`AppConstants.roomProtocolVersion`）與
+     `protocol_min`（`minCompatibleRoomProtocol`，還能一起讀的最舊版本）。雙方的版本都不低於
+     對方的 `protocol_min` 才算相容；不相容的成員在 lobby 與 reader 標示「需要更新 App」。
+     改了 broadcast 事件名稱或 payload、或改了別人依賴的 Presence 欄位時，同一個 PR 要把
+     `roomProtocolVersion` +1；舊版跟不上時，`minCompatibleRoomProtocol` 也要拉到新版本。
+     只新增可被忽略的欄位不用改。版號只能往上加。舊版（v1.0.5 以前）不送這兩個欄位，算成 0，
+     與目前的版本相容。只提示、不把對方排除在共識之外。
 
 3. **房間成員的權威來源是資料庫，不是 Presence。**
    Presence 只負責 online / has_book 這層 overlay。

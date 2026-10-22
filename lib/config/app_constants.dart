@@ -31,4 +31,13 @@ class AppConstants {
   /// Presence fields it relies on). Additive, ignorable fields do not need a
   /// bump. Apps from before this field existed send nothing and count as 0.
   static const int roomProtocolVersion = 1;
+
+  /// The oldest [roomProtocolVersion] this app still reads together with,
+  /// also sent in Presence. Members below it are told to update; an app whose
+  /// own minimum is above this app's version tells this one to update.
+  ///
+  /// 0 because version 1 only added the version fields: apps from before
+  /// them (v1.0.5) speak the same wire. Raise it to the new version when a
+  /// bump is one the previous apps cannot follow.
+  static const int minCompatibleRoomProtocol = 0;
 }

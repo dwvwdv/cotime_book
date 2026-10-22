@@ -125,6 +125,42 @@ void main() {
       expect(teardownCalls, 1);
     });
 
+    test('a heartbeat refused after leaving does not report a revocation', () async {
+      // Regression: a heartbeat still in flight when the user tapped Leave
+      // came back refused (the leave RPC had run first), and home showed
+      // "membership expired" after an ordinary leave.
+      final service = FakeRoomService()
+        ..heartbeatReply = Completer<Room>()
+        ..leaveReply = Completer<void>();
+      var teardownCalls = 0;
+      final notifier = RoomNotifier(
+        service,
+        onSessionRevoked: () async {
+          teardownCalls++;
+        },
+      );
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      final heartbeat = notifier.heartbeat();
+      final leaving = notifier.leaveRoom();
+      // The server ran leave_room first, so the heartbeat is refused while
+      // the leave's own reply is still on its way.
+      service.heartbeatReply!.completeError(
+        const RoomSessionRevokedException('membership expired'),
+      );
+      await expectLater(
+        heartbeat,
+        throwsA(isA<RoomSessionRevokedException>()),
+      );
+      service.leaveReply!.complete();
+      await leaving;
+
+      expect(notifier.state.currentRoom, isNull);
+      expect(notifier.state.error, isNull);
+      expect(teardownCalls, 0);
+    });
+
     test('transient heartbeat failure preserves the active session', () async {
       final service = FakeRoomService()
         ..heartbeatError = StateError('temporary network failure');
@@ -742,6 +778,7 @@ RoomMember testMember({
 class FakeRoomService extends RoomService {
   Room nextRoom = testRoom();
   Object? heartbeatError;
+  Completer<Room>? heartbeatReply;
   Object? cfiError;
   Object? bookError;
   Completer<Room>? cfiWrite;
@@ -804,6 +841,8 @@ class FakeRoomService extends RoomService {
 
   @override
   Future<Room> heartbeatRoom(String roomId) async {
+    final reply = heartbeatReply;
+    if (reply != null) return reply.future;
     final error = heartbeatError;
     if (error != null) throw error;
     return nextRoom;
@@ -858,10 +897,13 @@ class FakeRoomService extends RoomService {
 
   int leaveFailures = 0;
   int leaveCalls = 0;
+  Completer<void>? leaveReply;
 
   @override
   Future<Map<String, dynamic>> leaveRoom({required String roomId}) async {
     leaveCalls++;
+    final reply = leaveReply;
+    if (reply != null) await reply.future;
     if (leaveFailures > 0) {
       leaveFailures--;
       throw StateError('connection reset');

@@ -814,6 +814,7 @@ class RealtimeService {
       // Static, so it rides along with every track and never costs an
       // update of its own (see _schedulePresenceTrack).
       'protocol': AppConstants.roomProtocolVersion,
+      'protocol_min': AppConstants.minCompatibleRoomProtocol,
       'user_id': userId,
       'nickname': nickname,
       'avatar_color': avatarColorIndex,

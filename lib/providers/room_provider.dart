@@ -272,7 +272,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
       if (!_isCurrentRoomSession(room.id, roomSessionGeneration)) return;
       await refreshMembers();
     } on RoomSessionRevokedException catch (error) {
-      await _revokeSession(room.id, error.message);
+      await _revokeSession(room.id, error.message, roomSessionGeneration);
     } catch (error) {
       if (_isCurrentRoomSession(room.id, roomSessionGeneration)) {
         state = state.copyWith(error: error.toString());
@@ -328,7 +328,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
         writeOrigin = state.currentRoom!;
         if (attempt == 1) rethrow;
       } on RoomSessionRevokedException catch (error) {
-        await _revokeSession(room.id, error.message);
+        await _revokeSession(room.id, error.message, roomSessionGeneration);
         rethrow;
       }
     }
@@ -348,7 +348,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
           hasBook: true,
         );
       } on RoomSessionRevokedException catch (error) {
-        await _revokeSession(room.id, error.message);
+        await _revokeSession(room.id, error.message, roomSessionGeneration);
         rethrow;
       }
     }
@@ -384,6 +384,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
           await _revokeSession(
             room.id,
             'This room membership is inactive or has expired.',
+            roomSessionGeneration,
           );
         }
         return null;
@@ -446,7 +447,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
         writeOrigin = state.currentRoom!;
         if (attempt == 1) rethrow;
       } on RoomSessionRevokedException catch (error) {
-        await _revokeSession(roomId, error.message);
+        await _revokeSession(roomId, error.message, roomSessionGeneration);
         rethrow;
       }
     }
@@ -552,7 +553,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
         clearError: true,
       );
     } on RoomSessionRevokedException catch (error) {
-      await _revokeSession(roomId, error.message);
+      await _revokeSession(roomId, error.message, roomSessionGeneration);
       if (rethrowError) rethrow;
     } catch (error) {
       if (_isCurrentRoomSession(roomId, roomSessionGeneration)) {
@@ -591,7 +592,11 @@ class RoomNotifier extends StateNotifier<RoomState> {
       return false;
     }
     if (current == null) {
-      await _revokeSession(room.id, removedFromRoomMessage);
+      await _revokeSession(
+        room.id,
+        removedFromRoomMessage,
+        roomSessionGeneration,
+      );
       return false;
     }
     _applyRoomUpdate(
@@ -602,8 +607,18 @@ class RoomNotifier extends StateNotifier<RoomState> {
     return true;
   }
 
-  Future<void> _revokeSession(String roomId, String reason) async {
-    if (_revocationInProgress || state.currentRoom?.id != roomId) return;
+  /// [roomSessionGeneration] is the session the refusal was for. A request
+  /// sent before a leave can come back refused after the leave RPC ran; that
+  /// is the leave itself, not a revocation to report.
+  Future<void> _revokeSession(
+    String roomId,
+    String reason,
+    int roomSessionGeneration,
+  ) async {
+    if (_revocationInProgress ||
+        !_isCurrentRoomSession(roomId, roomSessionGeneration)) {
+      return;
+    }
     _revocationInProgress = true;
     _roomSessionGeneration++;
     _resetMemberTracking();

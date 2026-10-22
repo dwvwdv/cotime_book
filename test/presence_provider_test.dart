@@ -46,32 +46,61 @@ void main() {
   });
 
   group('app versions in Presence (GH-33)', () {
-    Map<String, dynamic> meta(String userId, int? protocol, String at) => {
+    Map<String, dynamic> meta(
+      String userId,
+      int? protocol,
+      String at, {
+      int? oldest,
+    }) => {
       'user_id': userId,
       if (protocol != null) 'protocol': protocol,
+      if (oldest != null) 'protocol_min': oldest,
       'online_at': at,
     };
 
     ProtocolCompatibility versionOf(
       List<Map<String, dynamic>> metas, {
       int localProtocol = 1,
+      int localOldest = 0,
     }) => presenceProtocolCompatibility(
       mergePresenceUsers(metas).single,
       localProtocol: localProtocol,
+      localOldestCompatible: localOldest,
     );
 
-    test('an app from before the field counts as older', () {
+    test('the app from before the field reads along with this one', () {
+      // Regression: v1.0.5 sends no version but speaks the same wire, and was
+      // labelled "Needs app update" in every room.
       expect(
         versionOf([meta('bob', null, '2026-10-22T01:00:00Z')]),
-        ProtocolCompatibility.older,
-      );
-      expect(
-        versionOf([meta('bob', 1, '2026-10-22T01:00:00Z')]),
         ProtocolCompatibility.compatible,
       );
       expect(
-        versionOf([meta('bob', 2, '2026-10-22T01:00:00Z')]),
+        presenceProtocolCompatibility({'user_id': 'bob'}),
+        ProtocolCompatibility.compatible,
+      );
+    });
+
+    test('a version this app no longer supports is older', () {
+      expect(
+        versionOf(
+          [meta('bob', null, '2026-10-22T01:00:00Z')],
+          localProtocol: 2,
+          localOldest: 2,
+        ),
+        ProtocolCompatibility.older,
+      );
+    });
+
+    test('an app that no longer supports this one is newer', () {
+      expect(
+        versionOf([meta('bob', 3, '2026-10-22T01:00:00Z', oldest: 2)]),
         ProtocolCompatibility.newer,
+      );
+      // A newer app that still supports this version reads along.
+      expect(
+        versionOf([meta('bob', 3, '2026-10-22T01:00:00Z', oldest: 1)]),
+        ProtocolCompatibility.compatible,
       );
     });
 
@@ -80,11 +109,19 @@ void main() {
       // device Bob reads on.
       final merged = mergePresenceUsers([
         meta('bob', null, '2026-10-22T01:00:00Z'),
-        meta('bob', 1, '2026-10-22T02:00:00Z'),
+        meta('bob', 2, '2026-10-22T02:00:00Z', oldest: 2),
+        meta('bob', 2, '2026-10-22T03:00:00Z', oldest: 2),
       ]).single;
-      expect(merged['protocols'], [0, 1]);
+      expect(merged['protocols'], [
+        [0, 0],
+        [2, 2],
+      ]);
       expect(
-        presenceProtocolCompatibility(merged, localProtocol: 1),
+        presenceProtocolCompatibility(
+          merged,
+          localProtocol: 2,
+          localOldestCompatible: 2,
+        ),
         ProtocolCompatibility.compatible,
       );
     });
@@ -93,17 +130,21 @@ void main() {
       // Not just the device that tracked last: an older tablet tracking after
       // the phone must not hide that the phone can read along.
       expect(
-        versionOf([
-          meta('bob', 1, '2026-10-22T01:00:00Z'),
-          meta('bob', 0, '2026-10-22T02:00:00Z'),
-        ]),
+        versionOf(
+          [
+            meta('bob', 2, '2026-10-22T01:00:00Z', oldest: 2),
+            meta('bob', 0, '2026-10-22T02:00:00Z'),
+          ],
+          localProtocol: 2,
+          localOldest: 2,
+        ),
         ProtocolCompatibility.compatible,
       );
       expect(
         versionOf([
           meta('bob', 0, '2026-10-22T01:00:00Z'),
-          meta('bob', 2, '2026-10-22T02:00:00Z'),
-        ]),
+          meta('bob', 3, '2026-10-22T02:00:00Z', oldest: 3),
+        ], localOldest: 1),
         ProtocolCompatibility.newer,
       );
     });
@@ -258,7 +299,8 @@ void main() {
   });
 
   test('a failed join announcement retries while still connected', () async {
-    final realtime = _DeferredConnectionRealtimeService()..failNextBroadcast = true;
+    final realtime = _DeferredConnectionRealtimeService()
+      ..failNextBroadcast = true;
     final notifier = PresenceNotifier(
       realtime,
       joinAnnouncementRetryDelay: const Duration(milliseconds: 10),

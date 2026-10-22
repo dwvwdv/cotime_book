@@ -143,7 +143,8 @@ select is(
   're-sharing the same book without a path keeps the path that locates it'
 );
 
--- An older app shares a different book: it writes only title and hash.
+-- A different book written with title and hash only: an older app, or a
+-- current app sharing a book that is not from the library.
 set local role authenticated;
 update cotime_book.rooms
 set current_book_title = 'Old app book',

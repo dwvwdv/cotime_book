@@ -30,10 +30,12 @@ alter table cotime_book.rooms
 -- changes and the same update does not also change the path, the path is
 -- cleared and late joiners fall back to peer-to-peer, as before.
 --
--- Current apps always write the path together with the hash (null for a book
--- that is not from the library). The one write this rule gets wrong is a new
--- hash at the very path the room already had, which only happens if a
--- maintainer replaced a library file in place and the room re-shares it. It
+-- Current apps write the path together with the hash for a library book and
+-- leave it out otherwise, relying on this rule to clear it (so sharing still
+-- works against a database without the column). The one write this rule gets
+-- wrong is a new hash at the very path the room already had, which only
+-- happens if a maintainer replaced a library file in place and the room
+-- re-shares it. It
 -- errs towards no path, which costs speed, never the wrong book. Receivers
 -- verify the download against the hash in any case, so even a stale path
 -- could only fail over to peer-to-peer.

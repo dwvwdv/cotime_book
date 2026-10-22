@@ -127,11 +127,17 @@ void main() {
         onlineUsers: [
           {
             ...online('host'),
-            'protocols': [1],
+            'protocols': [
+              [1, 0],
+            ],
           },
           {
             ...online('bob'),
-            'protocols': [0],
+            // Below what this app supports; set by hand, since no released
+            // app is that old yet.
+            'protocols': [
+              [-1, -1],
+            ],
           },
         ],
       );
@@ -147,11 +153,15 @@ void main() {
         onlineUsers: [
           {
             ...online('host'),
-            'protocols': [1],
+            'protocols': [
+              [1, 0],
+            ],
           },
           {
             ...online('bob'),
-            'protocols': [99],
+            'protocols': [
+              [99, 99],
+            ],
           },
         ],
       );
@@ -162,11 +172,15 @@ void main() {
         onlineUsers: [
           {
             ...online('host'),
-            'protocols': [1],
+            'protocols': [
+              [1, 0],
+            ],
           },
           {
             ...online('bob'),
-            'protocols': [1],
+            'protocols': [
+              [1, 0],
+            ],
           },
         ],
       );
@@ -259,30 +273,47 @@ void main() {
   });
 
   group('RoomLobbyScreen app versions', () {
-    testWidgets('a member on an older app is marked as needing an update', (
+    testWidgets('a member whose app moved past this one is marked', (
       tester,
     ) async {
-      // GH-33: an app from before the protocol field sends none.
+      // GH-33: an app from before the protocol field (Bob) still reads along;
+      // one that dropped this version (Carol) does not.
+      // Tall enough for all three rows (see GH-45).
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
       final rooms = FakeRoomService()
-        ..members = [testMember('alice'), testMember('bob')];
+        ..members = [
+          testMember('alice'),
+          testMember('bob'),
+          testMember('carol'),
+        ];
       final container = await joinedContainer(tester, rooms);
       await pumpLobby(tester, container);
-      expect(find.text('Needs app update'), findsNothing);
+      expect(find.text('Newer app — update yours'), findsNothing);
 
       _SilentChannel.last!.connect([
         {
           'user_id': 'alice',
           'nickname': 'Alice',
           'protocol': AppConstants.roomProtocolVersion,
+          'protocol_min': AppConstants.minCompatibleRoomProtocol,
         },
         {'user_id': 'bob', 'nickname': 'Bob'},
+        {
+          'user_id': 'carol',
+          'nickname': 'Carol',
+          'protocol': 99,
+          'protocol_min': 99,
+        },
       ]);
       await tester.pump();
       await tester.pump();
 
-      expect(find.text('Needs app update'), findsOneWidget);
+      expect(find.text('Needs app update'), findsNothing);
+      expect(find.text('Newer app — update yours'), findsOneWidget);
       expect(
-        find.text('Bob needs to update CoTime Book to read together.'),
+        find.textContaining('Your app is out of date: Carol'),
         findsOneWidget,
       );
       await disposeLobby(tester, container);

@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:cotime_book/models/page_sync_state.dart';
 import 'package:cotime_book/models/room.dart';
 import 'package:cotime_book/models/book_metadata.dart';
+import 'package:cotime_book/services/room_service.dart';
 
 void main() {
   group('PageTurnRequest', () {
@@ -113,6 +114,24 @@ void main() {
       expect(restored.currentBookTitle, room.currentBookTitle);
       expect(restored.currentBookLibraryPath, 'classics/test.epub');
       expect(restored.isActive, room.isActive);
+    });
+
+    test('only a library book writes the library path column', () {
+      // A book from this device leaves the column out: the database clears a
+      // stale path itself, and sharing keeps working against a database that
+      // does not have the column yet (GH-28).
+      expect(
+        roomBookUpdate(bookTitle: 'Notes', bookHash: 'abc'),
+        {'current_book_title': 'Notes', 'current_book_hash': 'abc'},
+      );
+      expect(
+        roomBookUpdate(
+          bookTitle: 'Moby Dick',
+          bookHash: 'def',
+          libraryPath: 'classics/moby-dick.epub',
+        )['current_book_library_path'],
+        'classics/moby-dick.epub',
+      );
     });
 
     test('a room row from before the library path column has no path', () {

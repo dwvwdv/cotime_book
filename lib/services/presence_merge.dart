@@ -43,13 +43,19 @@ List<Map<String, dynamic>> mergePresenceUsers(
           .map((meta) => PageFit.fromWire(meta['page_fit']))
           .whereType<PageFit>(),
     )?.toWire();
-    // Every protocol this person's connections speak, not the latest one: a
-    // person can follow the room on any device that understands it, and an
-    // expired meta from before an app update must not make them look out of
-    // date. See [presenceProtocolCompatibility].
+    // Every connection's protocol range, not the latest one: a person can
+    // follow the room on any device that understands it, and an expired meta
+    // from before an app update must not make them look out of date. See
+    // [presenceProtocolCompatibility].
     latest.remove('protocol');
-    latest['protocols'] = (metas.map(presenceProtocol).toSet().toList()
-      ..sort());
+    latest.remove('protocol_min');
+    latest['protocols'] =
+        metas
+            .map(presenceProtocolRange)
+            .toSet()
+            .map((range) => [range.version, range.oldestCompatible])
+            .toList()
+          ..sort((a, b) => a[0] != b[0] ? a[0] - b[0] : a[1] - b[1]);
     latest['session_count'] = metas.length;
     merged.add(latest);
   }
@@ -71,43 +77,76 @@ bool presenceHoldsBook(Map<String, dynamic> user, String bookHash) {
 
 /// How a room member's app relates to this one's wire protocol.
 enum ProtocolCompatibility {
-  /// At least one of their connections speaks this app's protocol.
+  /// At least one of their connections reads together with this app.
   compatible,
 
-  /// Their app is older: they need to update it to read along.
+  /// Their app is older than this one supports: they need to update it.
   older,
 
-  /// Their app is newer: this app needs an update.
+  /// Their app no longer supports this one: this app needs an update.
   newer,
 }
 
-/// The wire protocol of one raw Presence meta. Apps from before the field
-/// existed send nothing and count as 0.
-int presenceProtocol(Map<String, dynamic> meta) {
-  final protocol = meta['protocol'];
-  return protocol is num ? protocol.toInt() : 0;
+/// What one Presence connection speaks: its protocol [version], and the
+/// oldest version it still reads together with.
+class ProtocolRange {
+  const ProtocolRange(this.version, this.oldestCompatible);
+
+  final int version;
+  final int oldestCompatible;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ProtocolRange &&
+      other.version == version &&
+      other.oldestCompatible == oldestCompatible;
+
+  @override
+  int get hashCode => Object.hash(version, oldestCompatible);
+}
+
+/// The protocol range of one raw Presence meta. Apps from before the fields
+/// existed send nothing and count as version 0 with no older versions.
+ProtocolRange presenceProtocolRange(Map<String, dynamic> meta) {
+  final version = meta['protocol'];
+  final oldest = meta['protocol_min'];
+  final v = version is num ? version.toInt() : 0;
+  return ProtocolRange(v, oldest is num ? oldest.toInt() : v);
 }
 
 /// Whether the member in [user] — a merged row from [mergePresenceUsers] — can
-/// read in the same room as an app speaking [localProtocol].
+/// read in the same room as an app speaking [localProtocol] that still
+/// supports versions back to [localOldestCompatible].
 ///
-/// A member with any connection on [localProtocol] is compatible: that device
-/// takes part, and a lingering meta from before an app update does not count
-/// against them. Otherwise any newer connection means this app is the one
-/// behind.
+/// Two connections read together when each one's version is at least the
+/// other's oldest supported version. A member with any such connection is
+/// compatible: that device takes part, and a lingering meta from before an
+/// app update does not count against them. Otherwise any connection that has
+/// moved past this app's version means this app is the one behind.
 ProtocolCompatibility presenceProtocolCompatibility(
   Map<String, dynamic> user, {
   int localProtocol = AppConstants.roomProtocolVersion,
+  int localOldestCompatible = AppConstants.minCompatibleRoomProtocol,
 }) {
   final listed = user['protocols'];
-  final protocols = listed is List
-      ? listed.whereType<num>().map((protocol) => protocol.toInt()).toList()
-      : <int>[];
-  if (protocols.isEmpty) protocols.add(presenceProtocol(user));
-  if (protocols.contains(localProtocol)) {
+  final ranges = <ProtocolRange>[
+    if (listed is List)
+      for (final entry in listed)
+        if (entry is List &&
+            entry.length == 2 &&
+            entry[0] is num &&
+            entry[1] is num)
+          ProtocolRange((entry[0] as num).toInt(), (entry[1] as num).toInt()),
+  ];
+  if (ranges.isEmpty) ranges.add(presenceProtocolRange(user));
+  if (ranges.any(
+    (range) =>
+        range.version >= localOldestCompatible &&
+        range.oldestCompatible <= localProtocol,
+  )) {
     return ProtocolCompatibility.compatible;
   }
-  if (protocols.any((protocol) => protocol > localProtocol)) {
+  if (ranges.any((range) => range.oldestCompatible > localProtocol)) {
     return ProtocolCompatibility.newer;
   }
   return ProtocolCompatibility.older;
