@@ -22,17 +22,21 @@ class AuthState {
 
   bool get isAuthenticated => userId != null;
 
+  /// Keeps [error] unless a new one is given or [clearError] is set (GH-30).
+  /// Typing a nickname used to erase a failed sign-in's message while the app
+  /// was still not connected.
   AuthState copyWith({
     String? userId,
     String? nickname,
     bool? isLoading,
     String? error,
+    bool clearError = false,
   }) {
     return AuthState(
       userId: userId ?? this.userId,
       nickname: nickname ?? this.nickname,
       isLoading: isLoading ?? this.isLoading,
-      error: error,
+      error: clearError ? null : (error ?? this.error),
     );
   }
 }
@@ -50,12 +54,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
       super(AuthState(nickname: store.nickname));
 
   Future<void> signInAnonymously() async {
-    state = state.copyWith(isLoading: true, error: null);
+    state = state.copyWith(isLoading: true, clearError: true);
     try {
       await SupabaseService.signInAnonymously();
       state = state.copyWith(
         userId: SupabaseService.currentUserId,
         isLoading: false,
+        clearError: true,
       );
     } catch (e) {
       state = state.copyWith(
@@ -73,7 +78,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> checkExistingSession() async {
     final userId = SupabaseService.currentUserId;
     if (userId != null) {
-      state = state.copyWith(userId: userId);
+      // A session is a successful sign-in, so an earlier failure is moot.
+      state = state.copyWith(userId: userId, clearError: true);
     }
   }
 }

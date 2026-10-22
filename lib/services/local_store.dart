@@ -13,10 +13,17 @@ import '../models/recent_room.dart';
 class LocalStore {
   static const _nicknameKey = 'nickname';
   static const _recentRoomsKey = 'recent_rooms';
+  static const _readingThemeKey = 'reading_theme';
+  static const _readingFontSizeKey = 'reading_font_size';
+  static const _volumeKeysTurnPagesKey = 'volume_keys_turn_pages';
 
   final SharedPreferences? _prefs;
   String? _nickname;
   List<RecentRoom>? _recentRooms;
+
+  /// What was saved this session, so a store without preferences still
+  /// remembers it until the app closes.
+  final Map<String, Object> _saved = {};
 
   LocalStore([this._prefs]);
 
@@ -37,6 +44,46 @@ class LocalStore {
         jsonEncode([for (final room in rooms) room.toJson()]),
       ),
     );
+  }
+
+  // Reading preferences come back as whatever was on disk: null when missing
+  // or of the wrong type. Whether a value is usable (a theme that still
+  // exists, a size in range) is the reader's call, not the store's.
+
+  String? get readingTheme => _read<String>(_readingThemeKey);
+
+  Future<void> saveReadingTheme(String theme) => _save(
+    _readingThemeKey,
+    theme,
+    () => _prefs?.setString(_readingThemeKey, theme),
+  );
+
+  double? get readingFontSize => _read<num>(_readingFontSizeKey)?.toDouble();
+
+  Future<void> saveReadingFontSize(double size) => _save(
+    _readingFontSizeKey,
+    size,
+    () => _prefs?.setDouble(_readingFontSizeKey, size),
+  );
+
+  bool? get volumeKeysTurnPages => _read<bool>(_volumeKeysTurnPagesKey);
+
+  Future<void> saveVolumeKeysTurnPages(bool enabled) => _save(
+    _volumeKeysTurnPagesKey,
+    enabled,
+    () => _prefs?.setBool(_volumeKeysTurnPagesKey, enabled),
+  );
+
+  /// The typed getters of [SharedPreferences] throw on a value of another
+  /// type (an older format, a hand-edited file); this reads it as missing.
+  T? _read<T>(String key) {
+    final value = _saved.containsKey(key) ? _saved[key] : _prefs?.get(key);
+    return value is T ? value : null;
+  }
+
+  Future<void> _save(String key, Object value, Future<bool>? Function() write) {
+    _saved[key] = value;
+    return _write(write);
   }
 
   List<RecentRoom> _readRecentRooms() {

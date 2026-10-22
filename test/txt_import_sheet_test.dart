@@ -87,7 +87,7 @@ void main() {
     await tester.pump();
 
     expect(find.textContaining('第一章 雨夜'), findsOneWidget);
-    expect(find.text('Encoding: GBK'), findsOneWidget);
+    expect(find.text('Encoding: GBK / GB18030'), findsOneWidget);
     expect(find.textContaining('1 chapter ·'), findsOneWidget);
 
     await tester.tap(find.text('Share Book'));
@@ -120,8 +120,56 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Encoding: GBK'), findsOneWidget);
+    expect(find.text('Encoding: GBK / GB18030'), findsOneWidget);
     expect(find.textContaining('第一章 雨夜'), findsOneWidget);
+  });
+
+  testWidgets('chapters found where there are none can be turned off, and '
+      'the book is then split by length', (tester) async {
+    // Read as chapters by rule; the reader knows better.
+    final file = utf8File('雨夜.txt', '第一章 雨夜\n　　下雨了。\n第二章 天亮\n　　天亮了。\n');
+    TxtBookRequest? confirmed;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TxtImportSheet(
+            draft: TxtImportDraft(
+              sources: [file],
+              analyses: [analyzeTxt(file)],
+              title: '雨夜',
+            ),
+            onConfirm: (request) => confirmed = request,
+            onCancel: () {},
+          ),
+        ),
+      ),
+    );
+    expect(find.text('2 chapters'), findsOneWidget);
+
+    await tester.tap(find.text('Split into chapters'));
+    await tester.pump();
+    expect(find.text('2 chapters'), findsNothing);
+    expect(find.text('Split by length'), findsOneWidget);
+    expect(find.textContaining('Split by length ·'), findsOneWidget);
+
+    await tester.ensureVisible(find.text('Share Book'));
+    await tester.tap(find.text('Share Book'));
+    expect(confirmed!.findChapters, isFalse);
+
+    // And back on.
+    await tester.tap(find.text('Split into chapters'));
+    await tester.pump();
+    expect(find.text('2 chapters'), findsOneWidget);
+    await tester.tap(find.text('Share Book'));
+    expect(confirmed!.findChapters, isTrue);
+  });
+
+  testWidgets('a file with no chapters found has no switch to turn them off', (
+    tester,
+  ) async {
+    await pump(tester, [utf8File('长夜.txt', '　　他沉默地走着。\n　　雨没有停。\n')]);
+    expect(find.text('No chapters found'), findsOneWidget);
+    expect(find.text('Split into chapters'), findsNothing);
   });
 
   testWidgets('volumes can be put in another order before sharing', (
@@ -190,10 +238,14 @@ void main() {
 
     await tester.enterText(find.byKey(const ValueKey('txt-title')), '  ');
     await tester.pump();
+    await tester.ensureVisible(find.text('Share Book'));
+    await tester.pump();
     await tester.tap(find.text('Share Book'));
     expect(confirmed, isNull);
 
     await tester.enterText(find.byKey(const ValueKey('txt-title')), 'Book');
+    await tester.pump();
+    await tester.ensureVisible(find.text('Share Book'));
     await tester.pump();
     await tester.tap(find.text('Share Book'));
     expect(confirmed!.parts.map((p) => p.source.fileName), ['a.txt']);

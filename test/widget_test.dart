@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:cotime_book/models/page_sync_state.dart';
 import 'package:cotime_book/models/room.dart';
 import 'package:cotime_book/models/book_metadata.dart';
+import 'package:cotime_book/services/room_service.dart';
 
 void main() {
   group('PageTurnRequest', () {
@@ -97,6 +98,7 @@ void main() {
         hostUserId: 'user-1',
         currentBookTitle: 'Test Book',
         currentBookHash: 'hash123',
+        currentBookLibraryPath: 'classics/test.epub',
         currentCfi: 'epubcfi(/6/4)',
         isActive: true,
         createdAt: now,
@@ -110,7 +112,58 @@ void main() {
       expect(restored.code, room.code);
       expect(restored.hostUserId, room.hostUserId);
       expect(restored.currentBookTitle, room.currentBookTitle);
+      expect(restored.currentBookLibraryPath, 'classics/test.epub');
       expect(restored.isActive, room.isActive);
+    });
+
+    test('only a library book writes the library path column', () {
+      // A book from this device leaves the column out: the database clears a
+      // stale path itself, and sharing keeps working against a database that
+      // does not have the column yet (GH-28).
+      expect(
+        roomBookUpdate(bookTitle: 'Notes', bookHash: 'abc'),
+        {'current_book_title': 'Notes', 'current_book_hash': 'abc'},
+      );
+      expect(
+        roomBookUpdate(
+          bookTitle: 'Moby Dick',
+          bookHash: 'def',
+          libraryPath: 'classics/moby-dick.epub',
+        )['current_book_library_path'],
+        'classics/moby-dick.epub',
+      );
+    });
+
+    test('a room row from before the library path column has no path', () {
+      final json = Room(
+        id: '123',
+        code: 'ABC123',
+        hostUserId: 'user-1',
+        createdAt: DateTime.utc(2026),
+        updatedAt: DateTime.utc(2026),
+      ).toJson()..remove('current_book_library_path');
+
+      expect(Room.fromJson(json).currentBookLibraryPath, isNull);
+    });
+
+    test('copyWith keeps the library path unless it is passed', () {
+      final room = Room(
+        id: '123',
+        code: 'ABC123',
+        hostUserId: 'user-1',
+        currentBookLibraryPath: 'classics/test.epub',
+        createdAt: DateTime.utc(2026),
+        updatedAt: DateTime.utc(2026),
+      );
+
+      expect(
+        room.copyWith(currentCfi: 'epubcfi(/6/4)').currentBookLibraryPath,
+        'classics/test.epub',
+      );
+      expect(
+        room.copyWith(currentBookLibraryPath: null).currentBookLibraryPath,
+        isNull,
+      );
     });
 
     test('copyWith updates fields', () {

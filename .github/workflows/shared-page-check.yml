@@ -1,0 +1,109 @@
+name: Shared Page Check
+
+# tool/shared_page_check/check.js 在 Chromium 裡跑真的 epub.js，讓兩台螢幕、
+# 像素密度、系統字型都不同的「裝置」翻完整本書，比對每一頁的頁首 CFI 是否逐頁一致，
+# 再模擬 follower 依 commit display() 是否落在同一頁、空白頁不會被翻到（issue #20、#21、#22）。
+# 受檢的書有兩本：混合中英文的 EPUB，與 TXT 匯入轉出來的 EPUB。
+# `flutter test` 擋不住這類錯：它不跑 WebView，也不排版。
+#
+# 獨立成一個 workflow 而不是塞進 build-check：它要裝 Chromium 與幾套系統字型，
+# 只有在動到排版相關的來源時才值得付這個成本。
+on:
+  push:
+    branches: [ main, master ]
+    # 這份清單要涵蓋 check.js 讀到的每一個來源；push 與 pull_request 兩份要一樣
+    # （test/ci_workflow_test.dart 會檢查）。PR 只改了沒列進去的檔案時這裡完全不觸發，
+    # 看起來是「沒有 check」而不是紅的。
+    # - assets/reader/**：shared_page.js 本身
+    # - assets/fonts/**：SharedPageStyle 把內建字型以 data URL 塞進 rules
+    # - lib/services/shared_page*.dart：SharedPageStyle（dump_rules_test 匯出 rules）
+    # - lib/services/txt_book.dart：第二本受檢的書由 TXT 匯入產生（make_txt_book_test）
+    # - lib/services/gb18030.dart：txt_book 解 GBK fixture 時委派給它（GH-42）
+    # - pubspec.yaml / pubspec.lock：flutter_epub_viewer 的版本決定 epub.js 與 swipe.html
+    paths:
+      - 'assets/reader/**'
+      - 'assets/fonts/**'
+      - 'lib/services/shared_page*.dart'
+      - 'lib/services/txt_book.dart'
+      - 'lib/services/gb18030.dart'
+      - 'tool/shared_page_check/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - '.github/workflows/shared-page-check.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'assets/reader/**'
+      - 'assets/fonts/**'
+      - 'lib/services/shared_page*.dart'
+      - 'lib/services/txt_book.dart'
+      - 'lib/services/gb18030.dart'
+      - 'tool/shared_page_check/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - '.github/workflows/shared-page-check.yml'
+
+  # 和 build-check 一樣：PR 之後才改指向 master 只發 `edited`，上面的觸發一次都不會跑；
+  # 手動觸發是唯一的補救。也用來在升級 WebView／字型相關環境後重驗一次。
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一 PR／分支連續 push 時只保留最新一次。這個 job 不出版任何東西，取消不會留下半套狀態。
+concurrency:
+  group: shared-page-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shared-page:
+    name: Two devices lay out identical pages
+    # 不吃 CI_RUNNER／CI_LIGHT_RUNNER：要用 apt 裝 Chromium 的系統依賴與 check.js
+    # 指名的字型，self-hosted runner 不一定有 sudo，字型也不一定一樣。
+    runs-on: ubuntu-latest
+    # check.js 本身在 4 核的機器上約 5 分鐘；再加上 Flutter、Chromium 與 apt 的安裝。
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # check.js 用 `flutter test` 跑 dump_rules_test.dart 匯出 SharedPageStyle 的 rules、
+      # 跑 make_txt_book_test.dart 產生 TXT 匯入的書，並從 .dart_tool/package_config.json
+      # 找 flutter_epub_viewer 的 swipe.html。
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.4'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 裝在 repo 外面：repo 沒有 package.json，也不要在工作目錄留下 node_modules。
+      # 版本釘住——不同版本的 Playwright 綁不同的 Chromium，排版可能跟著變。
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/playwright" playwright@1.56.1
+          echo "NODE_PATH=$RUNNER_TEMP/playwright/node_modules" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/playwright/node_modules/.bin/playwright" install --with-deps chromium
+
+      # check.js 開頭列的四套字型：兩台裝置各自的系統字型與 CJK 後備字型。
+      # 缺了的話 Chromium 會默默換成別的字型，兩台裝置就不再「不同」，檢查會失真。
+      - name: Install system fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fonts-dejavu-core fonts-liberation fonts-wqy-zenhei fonts-ipafont-gothic
+          for family in 'DejaVu Sans' 'Liberation Sans' 'WenQuanYi Zen Hei' 'IPAGothic'; do
+            fc-list : family | grep -q "$family" || { echo "::error::font $family is missing"; exit 1; }
+          done
+
+      - name: Compare page starts on two devices
+        run: node tool/shared_page_check/check.js

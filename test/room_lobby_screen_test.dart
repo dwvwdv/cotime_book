@@ -1,17 +1,26 @@
+import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/models/library_book.dart';
+import 'package:cotime_book/models/room.dart';
 import 'package:cotime_book/models/room_member.dart';
 import 'package:cotime_book/providers/auth_provider.dart';
 import 'package:cotime_book/providers/book_provider.dart';
 import 'package:cotime_book/providers/presence_provider.dart';
 import 'package:cotime_book/providers/room_provider.dart';
 import 'package:cotime_book/screens/room_lobby_screen.dart';
+import 'package:cotime_book/services/library_service.dart';
 import 'package:cotime_book/services/realtime_service.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
     show RealtimeSubscribeStatus;
 
+import 'book_provider_test.dart' show MemoryEpubStorage;
 import 'library_test.dart' show FakeLibrary;
 import 'room_provider_test.dart' show FakeRoomService, testRoom;
 
@@ -111,6 +120,73 @@ void main() {
       expect(lobby.isHostStart, isFalse);
     });
 
+    test('members on another app version are named, in words (GH-33)', () {
+      // Their page turns and transfers and this app's ignore each other.
+      final behind = readiness(
+        members: [member('host'), member('bob')],
+        onlineUsers: [
+          {
+            ...online('host'),
+            'protocols': [
+              [1, 0],
+            ],
+          },
+          {
+            ...online('bob'),
+            // Below what this app supports; set by hand, since no released
+            // app is that old yet.
+            'protocols': [
+              [-1, -1],
+            ],
+          },
+        ],
+      );
+      expect(
+        behind.versionNotice,
+        'Bob needs to update CoTime Book to read together.',
+      );
+      // Not a reason to keep the room from reading.
+      expect(behind.canOpenReader, isTrue);
+
+      final ahead = readiness(
+        members: [member('host'), member('bob')],
+        onlineUsers: [
+          {
+            ...online('host'),
+            'protocols': [
+              [1, 0],
+            ],
+          },
+          {
+            ...online('bob'),
+            'protocols': [
+              [99, 99],
+            ],
+          },
+        ],
+      );
+      expect(ahead.versionNotice, startsWith('Your app is out of date'));
+
+      final same = readiness(
+        members: [member('host'), member('bob')],
+        onlineUsers: [
+          {
+            ...online('host'),
+            'protocols': [
+              [1, 0],
+            ],
+          },
+          {
+            ...online('bob'),
+            'protocols': [
+              [1, 0],
+            ],
+          },
+        ],
+      );
+      expect(same.versionNotice, isNull);
+    });
+
     test('nobody can open the reader without the book on this device', () {
       expect(
         readiness(
@@ -196,6 +272,78 @@ void main() {
     });
   });
 
+  group('RoomLobbyScreen app versions', () {
+    testWidgets('a member whose app moved past this one is marked', (
+      tester,
+    ) async {
+      // GH-33: an app from before the protocol field (Bob) still reads along;
+      // one that dropped this version (Carol) does not.
+      // Tall enough for all three rows (see GH-45).
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      final rooms = FakeRoomService()
+        ..members = [
+          testMember('alice'),
+          testMember('bob'),
+          testMember('carol'),
+        ];
+      final container = await joinedContainer(tester, rooms);
+      await pumpLobby(tester, container);
+      expect(find.text('Newer app — update yours'), findsNothing);
+
+      _SilentChannel.last!.connect([
+        {
+          'user_id': 'alice',
+          'nickname': 'Alice',
+          'protocol': AppConstants.roomProtocolVersion,
+          'protocol_min': AppConstants.minCompatibleRoomProtocol,
+        },
+        {'user_id': 'bob', 'nickname': 'Bob'},
+        {
+          'user_id': 'carol',
+          'nickname': 'Carol',
+          'protocol': 99,
+          'protocol_min': 99,
+        },
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Needs app update'), findsNothing);
+      expect(find.text('Newer app — update yours'), findsOneWidget);
+      expect(
+        find.textContaining('Your app is out of date: Carol'),
+        findsOneWidget,
+      );
+      await disposeLobby(tester, container);
+    });
+  });
+
+  group('RoomLobbyScreen removed from the room', () {
+    testWidgets('goes home and says why when the membership is gone', (
+      tester,
+    ) async {
+      // GH-36: Realtime refused the channel, and the database agrees.
+      final rooms = FakeRoomService()..members = [testMember('alice')];
+      final container = await joinedContainer(tester, rooms);
+      await pumpRoutedLobby(tester, container);
+      expect(find.text('Room Lobby'), findsOneWidget);
+
+      rooms.roomRead = Completer<Room?>()..complete(null);
+      _SilentChannel.last!.refuse();
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+
+      expect(find.text('HOME'), findsOneWidget);
+      expect(find.text(RoomNotifier.removedFromRoomMessage), findsOneWidget);
+      // Said once; not left behind as a banner on Home.
+      expect(container.read(roomProvider).error, isNull);
+      await disposeLobby(tester, container);
+    });
+  });
+
   group('RoomLobbyScreen library', () {
     testWidgets('the library has its own button, apart from Share Book', (
       tester,
@@ -226,6 +374,51 @@ void main() {
       await tester.pump();
       await disposeLobby(tester, container);
     });
+
+    testWidgets(
+      'a member who arrives after a library share downloads it from the library',
+      (tester) async {
+        // GH-28: the library path was only in the share broadcast, so someone
+        // who opened the lobby afterwards waited on the slower peer-to-peer
+        // transfer, which also needs a member holding the book to be online.
+        // A phone-sized screen: the default 800x600 test view is too short
+        // for the lobby with both the transfer and the book card showing.
+        tester.view.physicalSize = const Size(1080, 2400);
+        tester.view.devicePixelRatio = 3;
+        addTearDown(tester.view.reset);
+        final storage = MemoryEpubStorage();
+        addTearDown(() => storage.dir.deleteSync(recursive: true));
+        final library = _PendingLibrary();
+        final book = Uint8List.fromList(List.generate(4000, (i) => i % 13));
+        final rooms = FakeRoomService()
+          ..members = [testMember('alice'), testMember('bob')]
+          ..nextRoom = testRoom().copyWith(
+            currentBookTitle: 'Moby-Dick',
+            currentBookHash: sha256.convert(book).toString(),
+            currentBookLibraryPath: 'classics/moby-dick.epub',
+          );
+        final container = await joinedContainer(
+          tester,
+          rooms,
+          library: library,
+          storage: storage,
+        );
+        await pumpLobby(tester, container);
+
+        expect(library.downloads.keys, ['classics/moby-dick.epub']);
+        expect(
+          find.text('Downloading the book from the library...'),
+          findsOneWidget,
+        );
+
+        library.downloads['classics/moby-dick.epub']!.complete(book);
+        for (var i = 0; i < 5; i++) {
+          await tester.pump(const Duration(milliseconds: 10));
+        }
+        expect(find.text('Book received'), findsOneWidget);
+        await disposeLobby(tester, container);
+      },
+    );
   });
 }
 
@@ -246,7 +439,8 @@ class _SignedInAuth extends AuthNotifier {
 Future<ProviderContainer> joinedContainer(
   WidgetTester tester,
   FakeRoomService rooms, {
-  FakeLibrary? library,
+  LibraryService? library,
+  MemoryEpubStorage? storage,
 }) async {
   final realtime = RealtimeService(
     channelFactory: (name, key) => _SilentChannel(),
@@ -257,6 +451,7 @@ Future<ProviderContainer> joinedContainer(
       realtimeServiceProvider.overrideWithValue(realtime),
       authProvider.overrideWith((ref) => _SignedInAuth()),
       if (library != null) libraryServiceProvider.overrideWithValue(library),
+      if (storage != null) epubStorageProvider.overrideWithValue(storage),
     ],
   );
   await container
@@ -270,6 +465,38 @@ Future<void> pumpLobby(WidgetTester tester, ProviderContainer container) async {
     UncontrolledProviderScope(
       container: container,
       child: MaterialApp(home: RoomLobbyScreen(roomCode: testRoom().code)),
+    ),
+  );
+  for (var i = 0; i < 5; i++) {
+    await tester.pump(const Duration(milliseconds: 10));
+  }
+}
+
+/// The lobby inside a router, for tests that leave it.
+Future<void> pumpRoutedLobby(
+  WidgetTester tester,
+  ProviderContainer container,
+) async {
+  final router = GoRouter(
+    initialLocation: '/lobby/${testRoom().code}',
+    routes: [
+      GoRoute(
+        path: '/',
+        name: 'home',
+        builder: (context, state) => const Scaffold(body: Text('HOME')),
+      ),
+      GoRoute(
+        path: '/lobby/:roomCode',
+        name: 'lobby',
+        builder: (context, state) =>
+            RoomLobbyScreen(roomCode: state.pathParameters['roomCode']!),
+      ),
+    ],
+  );
+  await tester.pumpWidget(
+    UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
     ),
   );
   for (var i = 0; i < 5; i++) {
@@ -297,11 +524,29 @@ Future<void> disposeLobby(
   container.dispose();
 }
 
+/// A library whose downloads finish when the test says so.
+class _PendingLibrary implements LibraryService {
+  final downloads = <String, Completer<Uint8List>>{};
+
+  @override
+  Future<List<LibraryBook>> listBooks() async => const [];
+
+  @override
+  Future<Uint8List> download(String path) =>
+      (downloads[path] = Completer<Uint8List>()).future;
+
+  @override
+  String coverUrl(String path) => 'https://library.test/$path';
+}
+
 /// A channel that never connects: the lobby must work from the database
 /// alone.
 class _SilentChannel implements RoomRealtimeChannel {
   static _SilentChannel? last;
   final _callbacks = <String, ValueChanged<Map<String, dynamic>>>{};
+  void Function(RealtimeSubscribeStatus, Object?)? _status;
+  VoidCallback? _sync;
+  List<Map<String, dynamic>> presences = const [];
 
   _SilentChannel() {
     last = this;
@@ -310,8 +555,24 @@ class _SilentChannel implements RoomRealtimeChannel {
   void emit(String event, Map<String, dynamic> payload) =>
       _callbacks[event]?.call(payload);
 
+  /// Connects after all, with [presences] online.
+  void connect(List<Map<String, dynamic>> presences) {
+    this.presences = presences;
+    _status?.call(RealtimeSubscribeStatus.subscribed, null);
+    _sync?.call();
+  }
+
+  /// The server refuses this user the room's topic.
+  void refuse() => _status?.call(
+    RealtimeSubscribeStatus.channelError,
+    Exception(
+      '"Unauthorized: You do not have permissions to read from this Channel '
+      'topic: cotime_book:room:${testRoom().code}"',
+    ),
+  );
+
   @override
-  void onPresenceSync(VoidCallback callback) {}
+  void onPresenceSync(VoidCallback callback) => _sync = callback;
 
   @override
   void onPresenceJoin(ValueChanged<dynamic> callback) {}
@@ -327,7 +588,7 @@ class _SilentChannel implements RoomRealtimeChannel {
   @override
   void subscribe(
     void Function(RealtimeSubscribeStatus status, Object? error) callback,
-  ) {}
+  ) => _status = callback;
 
   @override
   Future<void> track(Map<String, dynamic> payload) async {}
@@ -342,7 +603,7 @@ class _SilentChannel implements RoomRealtimeChannel {
   ) async {}
 
   @override
-  List<Map<String, dynamic>> presencePayloads() => const [];
+  List<Map<String, dynamic>> presencePayloads() => presences;
 
   @override
   Future<void> remove({bool releaseSocket = true}) async {}

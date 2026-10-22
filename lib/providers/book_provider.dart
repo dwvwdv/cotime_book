@@ -67,17 +67,20 @@ class BookState {
 
   bool get hasBook => bookFile != null;
 
+  /// Keeps [error] unless a new one is given or [clearError] is set (GH-30):
+  /// a message must not disappear because some unrelated update ran.
   BookState copyWith({
     BookMetadata? currentBook,
     File? bookFile,
     bool? isLoading,
     String? error,
+    bool clearError = false,
   }) {
     return BookState(
       currentBook: currentBook ?? this.currentBook,
       bookFile: bookFile ?? this.bookFile,
       isLoading: isLoading ?? this.isLoading,
-      error: error,
+      error: clearError ? null : (error ?? this.error),
     );
   }
 }
@@ -199,7 +202,7 @@ class BookNotifier extends StateNotifier<BookState> {
     // Receiving (or serving) a book never blocks sharing a different one: the
     // new hash simply replaces what the transfer is working on. Refusing here
     // is what used to strand a room behind a stalled transfer.
-    state = state.copyWith(isLoading: true, error: null);
+    state = state.copyWith(isLoading: true, clearError: true);
     int? shareGeneration;
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -271,7 +274,7 @@ class BookNotifier extends StateNotifier<BookState> {
     required TxtImportConfirm confirm,
   }) async {
     final generation = _sessionGeneration;
-    state = state.copyWith(isLoading: true, error: null);
+    state = state.copyWith(isLoading: true, clearError: true);
     int? shareGeneration;
     try {
       final total = sources.fold<int>(0, (n, s) => n + s.bytes.length);
@@ -333,7 +336,7 @@ class BookNotifier extends StateNotifier<BookState> {
   Future<void> shareLibraryBook(LibraryBook book) async {
     final generation = _sessionGeneration;
     final shareGeneration = ++_shareGeneration;
-    state = state.copyWith(isLoading: true, error: null);
+    state = state.copyWith(isLoading: true, clearError: true);
     final Uint8List bytes;
     try {
       bytes = await _library.download(book.path);
@@ -368,7 +371,7 @@ class BookNotifier extends StateNotifier<BookState> {
     final superseded =
         shareGeneration != null && shareGeneration != _shareGeneration;
     state = superseded
-        ? state.copyWith(isLoading: false, error: state.error)
+        ? state.copyWith(isLoading: false)
         : state.copyWith(isLoading: false, error: error);
   }
 
@@ -406,14 +409,24 @@ class BookNotifier extends StateNotifier<BookState> {
 
     final isRoomBook = await ref
         .read(roomProvider.notifier)
-        .updateBookShared(bookTitle: metadata.title, bookHash: hash);
+        .updateBookShared(
+          bookTitle: metadata.title,
+          bookHash: hash,
+          libraryPath: libraryPath,
+        );
     if (!_isCurrent(generation)) return;
     if (!isRoomBook) {
       // Someone else's book reached the room first. Follow it: its share
       // broadcast may have arrived already, or may never arrive.
       state = state.copyWith(isLoading: false);
-      final roomBookHash = ref.read(roomProvider).currentRoom?.currentBookHash;
-      if (roomBookHash != null) await prepareForSharedBook(roomBookHash);
+      final room = ref.read(roomProvider).currentRoom;
+      final roomBookHash = room?.currentBookHash;
+      if (roomBookHash != null) {
+        await prepareForSharedBook(
+          roomBookHash,
+          libraryPath: room?.currentBookLibraryPath,
+        );
+      }
       return;
     }
     if (!_isCurrentShare(generation, shareGeneration)) return;
@@ -422,6 +435,7 @@ class BookNotifier extends StateNotifier<BookState> {
       currentBook: metadata,
       bookFile: savedFile,
       isLoading: false,
+      clearError: true,
     );
     _loadedBookHash = hash;
     _expectedBookHash = hash;
@@ -488,7 +502,12 @@ class BookNotifier extends StateNotifier<BookState> {
         bookHash == _expectedBookHash &&
         _isCurrent(generation) &&
         transferGeneration == _transferGeneration) {
-      state = state.copyWith(bookFile: bookFile, isLoading: false);
+      // The room's book is here: whatever went wrong getting it is over.
+      state = state.copyWith(
+        bookFile: bookFile,
+        isLoading: false,
+        clearError: true,
+      );
       _loadedBookHash = bookHash;
       _expectedBookHash = bookHash;
 
@@ -504,12 +523,20 @@ class BookNotifier extends StateNotifier<BookState> {
     }
   }
 
-  Future<void> loadExistingBook(String bookHash) async {
+  /// Opens the room's book [bookHash] when entering the lobby: from this
+  /// device if it is here, otherwise by receiving it. [libraryPath] is the
+  /// room's record of where the book is in the public library, so a member
+  /// who missed the share broadcast still downloads it directly (GH-28).
+  Future<void> loadExistingBook(String bookHash, {String? libraryPath}) async {
     final generation = _sessionGeneration;
     final file = await _storageService.getBookFile(bookHash);
     if (!_isCurrent(generation)) return;
     if (file != null) {
-      state = state.copyWith(bookFile: file, isLoading: false);
+      state = state.copyWith(
+        bookFile: file,
+        isLoading: false,
+        clearError: true,
+      );
       _loadedBookHash = bookHash;
       _expectedBookHash = bookHash;
       _transferService?.holdBook(bookHash);
@@ -519,7 +546,7 @@ class BookNotifier extends StateNotifier<BookState> {
           .read(presenceProvider.notifier)
           .updateHasBook(true, bookHash: bookHash);
     } else {
-      await prepareForSharedBook(bookHash);
+      await prepareForSharedBook(bookHash, libraryPath: libraryPath);
     }
   }
 
@@ -539,8 +566,9 @@ class BookNotifier extends StateNotifier<BookState> {
       ++_shareGeneration;
     }
     _expectedBookHash = bookHash;
-    // The path arrives in a room broadcast; anything but a plain object name
-    // in the library bucket is ignored. The download is hash-checked anyway.
+    // The path comes from a room broadcast or the room row, both written by
+    // other members; anything but a plain object name in the library bucket
+    // is ignored. The download is hash-checked anyway.
     if (libraryPath != null && isPlainLibraryPath(libraryPath)) {
       _expectedLibraryPath = libraryPath;
     }

@@ -42,6 +42,22 @@ class RoomRevisionConflictException implements Exception {
   String toString() => 'Room state was updated by another client';
 }
 
+/// The `rooms` columns written when [bookHash] becomes the room's book.
+///
+/// The library path is left out when there is none rather than written as
+/// null: the database clears a path the hash no longer matches on its own
+/// (`clear_stale_room_library_path`), and leaving the column out keeps
+/// sharing working against a database that does not have it yet (GH-28).
+Map<String, dynamic> roomBookUpdate({
+  required String bookTitle,
+  required String bookHash,
+  String? libraryPath,
+}) => {
+  'current_book_title': bookTitle,
+  'current_book_hash': bookHash,
+  if (libraryPath != null) 'current_book_library_path': libraryPath,
+};
+
 class RoomService {
   SupabaseQuerySchema get _database => SupabaseService.database;
 
@@ -136,14 +152,18 @@ class RoomService {
     required String bookTitle,
     required String bookHash,
     required int expectedRevision,
+    String? libraryPath,
   }) async {
     try {
       final roomData = await _database
           .from('rooms')
-          .update({
-            'current_book_title': bookTitle,
-            'current_book_hash': bookHash,
-          })
+          .update(
+            roomBookUpdate(
+              bookTitle: bookTitle,
+              bookHash: bookHash,
+              libraryPath: libraryPath,
+            ),
+          )
           .eq('id', roomId)
           .eq('revision', expectedRevision)
           .select()

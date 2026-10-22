@@ -18,6 +18,7 @@ import '../widgets/paper.dart';
 import '../widgets/room_code_display.dart';
 import '../widgets/txt_import_sheet.dart';
 import '../widgets/transfer_progress_widget.dart';
+import 'room_removed.dart';
 
 class RoomLobbyScreen extends ConsumerStatefulWidget {
   /// How often the lobby re-reads the member list on its own.
@@ -89,7 +90,10 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
           !ref.read(bookProvider.notifier).hasBook(room.currentBookHash!)) {
         await ref
             .read(bookProvider.notifier)
-            .loadExistingBook(room.currentBookHash!);
+            .loadExistingBook(
+              room.currentBookHash!,
+              libraryPath: room.currentBookLibraryPath,
+            );
       }
 
       final ownMember = roomState.members
@@ -132,6 +136,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
           roomNotifier.onBookSharedReceived(
             bookTitle: bookTitle ?? 'Unknown',
             bookHash: bookHash,
+            libraryPath: libraryPath is String ? libraryPath : null,
           );
           // The broadcast carries display metadata, while the authoritative
           // revision comes from the database update that preceded it.
@@ -307,6 +312,16 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       }
     });
 
+    // The membership went away under this screen (GH-36): nothing here works
+    // any more, so go home and say why instead of leaving a dead lobby up.
+    ref.listen<RoomState>(roomProvider, (previous, next) {
+      if (_isLeaving || !roomWasRemoved(widget.roomCode, previous, next)) {
+        return;
+      }
+      _isLeaving = true;
+      returnHomeFromRemovedRoom(context, ref, next.error!);
+    });
+
     if (_isInitializing) {
       // A static line rather than a spinner: on e-ink a spinner is a panel
       // refresh every frame for as long as the room takes to join.
@@ -390,6 +405,9 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                       child: MemberList(
                         members: roomState.members,
                         currentUserId: authState.userId,
+                        appVersions: memberAppVersions(
+                          presenceState.onlineUsers,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -456,6 +474,15 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                       ),
                     ],
 
+                    // Not a reason to disable the button: an app from before
+                    // the protocol field may still read along (GH-33).
+                    if (lobby.versionNotice != null) ...[
+                      const SizedBox(height: 12),
+                      PaperNotice(
+                        message: lobby.versionNotice!,
+                        icon: Icons.system_update_outlined,
+                      ),
+                    ],
                     if (bookState.error != null) ...[
                       const SizedBox(height: 12),
                       PaperNotice(message: bookState.error!),
@@ -690,13 +717,88 @@ class LobbyReadiness {
   final bool isHostStart;
   final String? hint;
 
+  /// Members whose app speaks another wire protocol, in words: they and this
+  /// device would silently ignore each other's page turns and transfers
+  /// (GH-33).
+  final String? versionNotice;
+
   const LobbyReadiness({
     required this.canOpenReader,
     required this.isHostStart,
     required this.hint,
+    this.versionNotice,
   });
 
   factory LobbyReadiness.from({
+    required List<RoomMember> members,
+    required List<Map<String, dynamic>> onlineUsers,
+    required String? currentUserId,
+    required String? currentBookHash,
+    required bool hasLocalBook,
+    required bool isHost,
+    required bool isConnected,
+  }) {
+    final readiness = _readiness(
+      members: members,
+      onlineUsers: onlineUsers,
+      currentUserId: currentUserId,
+      currentBookHash: currentBookHash,
+      hasLocalBook: hasLocalBook,
+      isHost: isHost,
+      isConnected: isConnected,
+    );
+    return LobbyReadiness(
+      canOpenReader: readiness.canOpenReader,
+      isHostStart: readiness.isHostStart,
+      hint: readiness.hint,
+      versionNotice: _versionNotice(
+        members: members,
+        onlineUsers: onlineUsers,
+        currentUserId: currentUserId,
+      ),
+    );
+  }
+
+  static String? _versionNotice({
+    required List<RoomMember> members,
+    required List<Map<String, dynamic>> onlineUsers,
+    required String? currentUserId,
+  }) {
+    final versions = memberAppVersions(onlineUsers);
+    final nicknames = {
+      for (final member in members) member.userId: member.nickname,
+    };
+    final behind = <String>[];
+    final ahead = <String>[];
+    for (final entry in versions.entries) {
+      final nickname = nicknames[entry.key];
+      // Not on the roster yet: nothing on screen to point at.
+      if (entry.key == currentUserId || nickname == null) continue;
+      switch (entry.value) {
+        case ProtocolCompatibility.older:
+          behind.add(nickname);
+        case ProtocolCompatibility.newer:
+          ahead.add(nickname);
+        case ProtocolCompatibility.compatible:
+          break;
+      }
+    }
+    behind.sort();
+    ahead.sort();
+    final lines = [
+      // The one this reader can act on comes first.
+      if (ahead.isNotEmpty)
+        'Your app is out of date: ${ahead.join(', ')} '
+            '${ahead.length == 1 ? 'is' : 'are'} on a newer version. Update '
+            'CoTime Book to read together.',
+      if (behind.isNotEmpty)
+        '${behind.join(', ')} ${behind.length == 1 ? 'needs' : 'need'} to '
+            'update CoTime Book to read together.',
+    ];
+    return lines.isEmpty ? null : lines.join('\n');
+  }
+
+  static LobbyReadiness _readiness({
     required List<RoomMember> members,
     required List<Map<String, dynamic>> onlineUsers,
     required String? currentUserId,
@@ -769,4 +871,15 @@ class LobbyReadiness {
                 'the book and can join when it arrives.',
     );
   }
+}
+
+/// Each online member's app version relative to this one, by user ID.
+Map<String, ProtocolCompatibility> memberAppVersions(
+  List<Map<String, dynamic>> onlineUsers,
+) {
+  return {
+    for (final user in onlineUsers)
+      if (user['user_id'] is String)
+        user['user_id'] as String: presenceProtocolCompatibility(user),
+  };
 }

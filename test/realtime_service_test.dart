@@ -1,4 +1,6 @@
+import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/services/realtime_service.dart';
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -23,125 +25,297 @@ void main() {
     await service.close();
   });
 
+  // The two groups below are about timers — recovery backoff, the silent
+  // subscribe timeout, the Presence window — so they run on fake time (GH-40).
+  // On real timers they failed on a busy machine. flutter_tester drains
+  // microtasks only after every timer that is already overdue has fired, so
+  // when a stall made both the service's timer and the test's own
+  // Future.delayed overdue, the test woke up before the rebuild the service's
+  // timer had started was finished ("keeps the socket": releasedSocket was
+  // still empty). And the Presence window was measured on the wall clock, so
+  // a slow loop let the window roll over and a fifth update through. On fake
+  // time every timer fires at its due time with the microtasks of the ones
+  // before it finished, and the service reads that same clock.
   group('a broken room channel', () {
     late List<_FakeRoomChannel> built;
-    late RealtimeService realtime;
     late List<RealtimeConnectionStatus> statuses;
+    late RealtimeService realtime;
 
-    setUp(() {
-      built = [];
-      statuses = [];
-      realtime = RealtimeService(
-        channelFactory: (name, key) {
-          final channel = _FakeRoomChannel(name, key);
-          built.add(channel);
-          return channel;
-        },
-        recoveryDelay: const Duration(milliseconds: 20),
-        silentSubscribeTimeout: const Duration(milliseconds: 60),
-        presenceCoalesceDelay: Duration.zero,
-      );
-      realtime.connectionStream.listen((e) => statuses.add(e.status));
-    });
+    void brokenChannelTest(String description, void Function(FakeAsync) body) {
+      test(description, () {
+        fakeAsync((async) {
+          built = [];
+          statuses = [];
+          // Built inside the fake zone, so its timers and futures are fake.
+          realtime = RealtimeService(
+            channelFactory: (name, key) {
+              final channel = _FakeRoomChannel(name, key);
+              built.add(channel);
+              return channel;
+            },
+            recoveryDelay: const Duration(milliseconds: 20),
+            silentSubscribeTimeout: const Duration(milliseconds: 60),
+            presenceCoalesceDelay: Duration.zero,
+          );
+          realtime.connectionStream.listen((e) => statuses.add(e.status));
+          body(async);
+          _settle(async, realtime.close());
+        });
+      });
+    }
 
-    tearDown(() => realtime.close());
-
-    Future<void> joinAndSubscribe() async {
-      await realtime.joinRoom(
-        roomCode: 'ABC234',
-        userId: 'alice',
-        nickname: 'Alice',
-        avatarColorIndex: 1,
-        hasBook: true,
-        bookHash: 'book',
-        isReading: true,
+    void joinAndSubscribe(FakeAsync async) {
+      _settle(
+        async,
+        realtime.joinRoom(
+          roomCode: 'ABC234',
+          userId: 'alice',
+          nickname: 'Alice',
+          avatarColorIndex: 1,
+          hasBook: true,
+          bookHash: 'book',
+          isReading: true,
+        ),
       );
       built.last.emitStatus(RealtimeSubscribeStatus.subscribed);
-      await Future<void>.delayed(Duration.zero);
+      async.elapse(Duration.zero);
       expect(realtime.isConnected, isTrue);
     }
 
-    test('is rebuilt when the server or library closes it', () async {
+    brokenChannelTest('is rebuilt on the room code topic', (async) {
+      // GH-31: the server authorizes only `cotime_book:room:<code>`; a
+      // rebuild on any other topic would be refused and leave the room
+      // disconnected.
+      joinAndSubscribe(async);
+      built.first.emitStatus(RealtimeSubscribeStatus.closed);
+      async.elapse(const Duration(milliseconds: 60));
+
+      expect(built, hasLength(2));
+      expect(
+        built.map((channel) => channel.name),
+        everyElement('cotime_book:room:ABC234'),
+      );
+    });
+
+    brokenChannelTest('is rebuilt when the server or library closes it', (
+      async,
+    ) {
       // Regression: a closed channel is never rejoined by the library, so the
       // room stayed at "0 readers ready" until the app was restarted.
-      await joinAndSubscribe();
+      joinAndSubscribe(async);
       built.first.emitStatus(RealtimeSubscribeStatus.closed);
-      await Future<void>.delayed(Duration.zero);
+      async.flushMicrotasks();
       expect(realtime.isConnected, isFalse);
       expect(statuses.last, RealtimeConnectionStatus.reconnecting);
 
-      await Future<void>.delayed(const Duration(milliseconds: 60));
+      async.elapse(const Duration(milliseconds: 60));
       expect(built, hasLength(2));
       built.last.emitStatus(RealtimeSubscribeStatus.subscribed);
-      await Future<void>.delayed(Duration.zero);
+      async.elapse(Duration.zero);
 
       expect(realtime.isConnected, isTrue);
       // The new channel announces this reader again, page and all.
       expect(built.last.tracked.last['is_reading'], isTrue);
     });
 
-    test('keeps the socket when replacing a channel', () async {
+    brokenChannelTest('keeps the socket when replacing a channel', (async) {
       // Regression: removing the last channel started an unawaited socket
       // disconnect that cancelled the reconnect the replacement needed, so
       // it reported "unable to subscribe" forever.
-      await joinAndSubscribe();
+      joinAndSubscribe(async);
       built.first.emitStatus(RealtimeSubscribeStatus.channelError);
-      await Future<void>.delayed(const Duration(milliseconds: 60));
+      async.elapse(const Duration(milliseconds: 60));
 
       expect(built.first.releasedSocket, [false]);
-      await realtime.leaveRoom();
+      _settle(async, realtime.leaveRoom());
       expect(built.last.releasedSocket, [true]);
     });
 
-    test('is left alone when the library recovers it in time', () async {
-      await joinAndSubscribe();
+    brokenChannelTest('is left alone when the library recovers it in time', (
+      async,
+    ) {
+      joinAndSubscribe(async);
       built.first.emitStatus(RealtimeSubscribeStatus.channelError);
       built.first.emitStatus(RealtimeSubscribeStatus.subscribed);
-      await Future<void>.delayed(const Duration(milliseconds: 60));
+      async.elapse(const Duration(milliseconds: 60));
 
       expect(built, hasLength(1));
       expect(realtime.isConnected, isTrue);
     });
 
-    test('keeps retrying until a rebuild sticks', () async {
-      await joinAndSubscribe();
+    brokenChannelTest('keeps retrying until a rebuild sticks', (async) {
+      joinAndSubscribe(async);
       built.first.emitStatus(RealtimeSubscribeStatus.closed);
-      await Future<void>.delayed(const Duration(milliseconds: 40));
+      async.elapse(const Duration(milliseconds: 40));
       expect(built, hasLength(2));
       built.last.emitStatus(RealtimeSubscribeStatus.timedOut);
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      async.elapse(const Duration(milliseconds: 120));
 
       expect(built.length, greaterThanOrEqualTo(3));
       built.last.emitStatus(RealtimeSubscribeStatus.subscribed);
-      await Future<void>.delayed(Duration.zero);
+      async.elapse(Duration.zero);
       expect(realtime.isConnected, isTrue);
     });
 
-    test('a subscription that never answers is rebuilt', () async {
-      await realtime.joinRoom(
-        roomCode: 'ABC234',
-        userId: 'alice',
-        nickname: 'Alice',
-        avatarColorIndex: 1,
-        hasBook: false,
+    brokenChannelTest('a subscription that never answers is rebuilt', (async) {
+      _settle(
+        async,
+        realtime.joinRoom(
+          roomCode: 'ABC234',
+          userId: 'alice',
+          nickname: 'Alice',
+          avatarColorIndex: 1,
+          hasBook: false,
+        ),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      expect(built.length, greaterThanOrEqualTo(2));
+      async.elapse(const Duration(milliseconds: 59));
+      expect(built, hasLength(1));
+      async.elapse(const Duration(milliseconds: 1));
+      expect(built, hasLength(2));
     });
 
-    test('is not rebuilt after the room is left', () async {
-      await joinAndSubscribe();
+    brokenChannelTest('is not rebuilt after the room is left', (async) {
+      joinAndSubscribe(async);
       built.first.emitStatus(RealtimeSubscribeStatus.closed);
-      await realtime.leaveRoom();
-      await Future<void>.delayed(const Duration(milliseconds: 80));
+      _settle(async, realtime.leaveRoom());
+      async.elapse(const Duration(milliseconds: 80));
       expect(built, hasLength(1));
     });
 
-    test('an app resume checks a channel that is down', () async {
-      await joinAndSubscribe();
+    group('refused by the server (GH-36)', () {
+      late List<RealtimeAccessDenied> refusals;
+
+      void listenForRefusals() {
+        refusals = [];
+        realtime.accessDeniedStream.listen(refusals.add);
+      }
+
+      brokenChannelTest('is not rebuilt, and is reported once', (async) {
+        // Regression: the watchdog rebuilt a channel the server had refused
+        // because the user was no longer a member, logging "Unauthorized"
+        // every few seconds for as long as the app stayed open.
+        listenForRefusals();
+        joinAndSubscribe(async);
+        built.first.emitStatus(
+          RealtimeSubscribeStatus.channelError,
+          _unauthorized,
+        );
+        // Longer than both the recovery delay and the silent timeout.
+        async.elapse(const Duration(milliseconds: 150));
+
+        expect(built, hasLength(1));
+        expect(refusals, hasLength(1));
+        expect(refusals.single.roomCode, 'ABC234');
+        expect(realtime.isConnected, isFalse);
+        expect(statuses.last, RealtimeConnectionStatus.error);
+        // Dropped, so the library does not rejoin it on a socket reconnect;
+        // the socket stays for whatever comes next.
+        expect(built.first.releasedSocket, [false]);
+      });
+
+      brokenChannelTest('an app resume does not knock again', (async) {
+        listenForRefusals();
+        joinAndSubscribe(async);
+        built.first.emitStatus(
+          RealtimeSubscribeStatus.channelError,
+          _unauthorized,
+        );
+        realtime.checkConnection(delay: Duration.zero);
+        async.elapse(const Duration(milliseconds: 50));
+        expect(built, hasLength(1));
+      });
+
+      brokenChannelTest(
+        'is tried again when the room says this is still a member',
+        (async) {
+          listenForRefusals();
+          joinAndSubscribe(async);
+          built.first.emitStatus(
+            RealtimeSubscribeStatus.channelError,
+            _unauthorized,
+          );
+          async.flushMicrotasks();
+          expect(refusals, hasLength(1));
+
+          realtime.retryAfterAccessDenied(refusals.single.generation);
+          // Past the recovery delay, short of the new channel's silent
+          // timeout.
+          async.elapse(const Duration(milliseconds: 30));
+          expect(built, hasLength(2));
+          built.last.emitStatus(RealtimeSubscribeStatus.subscribed);
+          async.elapse(Duration.zero);
+          expect(realtime.isConnected, isTrue);
+          // The new channel announces this reader again.
+          expect(built.last.tracked.last['is_reading'], isTrue);
+        },
+      );
+
+      brokenChannelTest('a retry for a room already left does nothing', (
+        async,
+      ) {
+        listenForRefusals();
+        joinAndSubscribe(async);
+        built.first.emitStatus(
+          RealtimeSubscribeStatus.channelError,
+          _unauthorized,
+        );
+        async.flushMicrotasks();
+        expect(refusals, hasLength(1));
+        _settle(async, realtime.leaveRoom());
+
+        realtime.retryAfterAccessDenied(refusals.single.generation);
+        async.elapse(const Duration(milliseconds: 100));
+        expect(built, hasLength(1));
+        expect(realtime.roomCode, isNull);
+      });
+
+      brokenChannelTest('a dropped connection is still rebuilt', (async) {
+        listenForRefusals();
+        joinAndSubscribe(async);
+        built.first.emitStatus(
+          RealtimeSubscribeStatus.channelError,
+          Exception('socket closed'),
+        );
+        async.elapse(const Duration(milliseconds: 60));
+        expect(built, hasLength(2));
+        expect(refusals, isEmpty);
+      });
+    });
+
+    brokenChannelTest('is not rebuilt once leaving has started', (async) {
+      // Regression (GH-36): between the leave RPC and dropping the channel,
+      // a rebuilt channel was refused because the membership was gone.
+      joinAndSubscribe(async);
+      final refusals = <RealtimeAccessDenied>[];
+      realtime.accessDeniedStream.listen(refusals.add);
+
+      realtime.suspendRecovery();
+      built.first.emitStatus(RealtimeSubscribeStatus.closed);
+      async.elapse(const Duration(milliseconds: 150));
+      expect(built, hasLength(1));
+
+      // Nothing to tell anyone: this device is the one leaving.
+      built.first.emitStatus(
+        RealtimeSubscribeStatus.channelError,
+        _unauthorized,
+      );
+      async.flushMicrotasks();
+      expect(refusals, isEmpty);
+
+      _settle(async, realtime.leaveRoom());
+      // The next room is watched again.
+      joinAndSubscribe(async);
+      built.last.emitStatus(RealtimeSubscribeStatus.closed);
+      async.elapse(const Duration(milliseconds: 60));
+      expect(built, hasLength(3));
+    });
+
+    brokenChannelTest('an app resume checks a channel that is down', (async) {
+      joinAndSubscribe(async);
       built.first.emitStatus(RealtimeSubscribeStatus.timedOut);
       realtime.checkConnection(delay: Duration.zero);
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+      // Sooner than the 20ms backoff the timeout itself scheduled.
+      async.elapse(const Duration(milliseconds: 10));
       expect(built, hasLength(2));
     });
   });
@@ -152,61 +326,77 @@ void main() {
     late _FakeRoomChannel channel;
     late RealtimeService realtime;
 
-    setUp(() async {
-      realtime = RealtimeService(
-        channelFactory: (name, key) => channel = _FakeRoomChannel(name, key),
-        presenceCoalesceDelay: const Duration(milliseconds: 10),
-        presenceWindow: const Duration(milliseconds: 200),
-      );
-      await realtime.joinRoom(
-        roomCode: 'ABC234',
-        userId: 'alice',
-        nickname: 'Alice',
-        avatarColorIndex: 1,
-        hasBook: false,
-      );
-      channel.emitStatus(RealtimeSubscribeStatus.subscribed);
-      await Future<void>.delayed(const Duration(milliseconds: 30));
-      expect(channel.tracked, hasLength(1));
-    });
+    void presenceTest(String description, void Function(FakeAsync) body) {
+      test(description, () {
+        fakeAsync((async) {
+          // The window is measured on the same fake clock the timers run on.
+          final clock = async.getClock(DateTime.utc(2026, 10, 22));
+          realtime = RealtimeService(
+            channelFactory: (name, key) =>
+                channel = _FakeRoomChannel(name, key),
+            presenceCoalesceDelay: const Duration(milliseconds: 10),
+            presenceWindow: const Duration(milliseconds: 200),
+            clock: clock.now,
+          );
+          _settle(
+            async,
+            realtime.joinRoom(
+              roomCode: 'ABC234',
+              userId: 'alice',
+              nickname: 'Alice',
+              avatarColorIndex: 1,
+              hasBook: false,
+            ),
+          );
+          channel.emitStatus(RealtimeSubscribeStatus.subscribed);
+          async.elapse(const Duration(milliseconds: 30));
+          expect(channel.tracked, hasLength(1));
 
-    tearDown(() => realtime.close());
+          body(async);
+          _settle(async, realtime.close());
+        });
+      });
+    }
 
-    Future<void> update({bool reading = true, bool ready = true}) {
-      return realtime.updatePresence(
-        userId: 'alice',
-        nickname: 'Alice',
-        avatarColorIndex: 1,
-        hasBook: true,
-        isReading: reading,
-        readerReady: ready,
+    void update(FakeAsync async, {bool reading = true, bool ready = true}) {
+      _settle(
+        async,
+        realtime.updatePresence(
+          userId: 'alice',
+          nickname: 'Alice',
+          avatarColorIndex: 1,
+          hasBook: true,
+          isReading: reading,
+          readerReady: ready,
+        ),
       );
     }
 
-    test(
+    presenceTest(
       'a burst of changes goes out as one update with the last value',
-      () async {
-        await update(ready: false);
-        await update(reading: true, ready: false);
-        await update(reading: true, ready: true);
-        await Future<void>.delayed(const Duration(milliseconds: 40));
+      (async) {
+        update(async, ready: false);
+        update(async, reading: true, ready: false);
+        update(async, reading: true, ready: true);
+        async.elapse(const Duration(milliseconds: 40));
 
         expect(channel.tracked, hasLength(2));
         expect(channel.tracked.last['reader_ready'], isTrue);
       },
     );
 
-    test('never more than four updates per window', () async {
+    presenceTest('never more than four updates per window', (async) {
       // Regression: a Presence update per page turn hit Supabase's limit
       // within a few pages, and the server closed the room channel.
       for (var i = 0; i < 8; i++) {
-        await update(ready: i.isEven);
-        await Future<void>.delayed(const Duration(milliseconds: 20));
+        update(async, ready: i.isEven);
+        async.elapse(const Duration(milliseconds: 20));
       }
-      expect(channel.tracked.length, lessThanOrEqualTo(4));
+      expect(channel.tracked, hasLength(4));
 
       // The latest state still arrives once the window allows it.
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      async.elapse(const Duration(milliseconds: 250));
+      expect(channel.tracked, hasLength(5));
       expect(channel.tracked.last['reader_ready'], isFalse);
     });
   });
@@ -257,6 +447,27 @@ void main() {
     expect(channels, hasLength(1));
     expect(channels.single.tracked.last['has_book'], isTrue);
     expect(channels.single.tracked.last['reader_ready'], isTrue);
+  });
+
+  test('Presence carries the protocol version in its first update', () async {
+    // GH-33: a member on another protocol must be recognisable. Static, so it
+    // goes out with the join's track and costs no update of its own.
+    await _join(service, 'ABC234');
+    channels.single.emitStatus(RealtimeSubscribeStatus.subscribed);
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+
+    expect(channels.single.tracked, hasLength(1));
+    expect(
+      channels.single.tracked.single['protocol'],
+      AppConstants.roomProtocolVersion,
+    );
+  });
+
+  test('only a refused topic counts as access denied', () {
+    // The shape realtime_client 2.10.0 reports a refused join in.
+    expect(isRealtimeAccessDenied(_unauthorized), isTrue);
+    expect(isRealtimeAccessDenied(Exception('"timeout"')), isFalse);
+    expect(isRealtimeAccessDenied(null), isFalse);
   });
 
   test('online users collapse a user with several connections', () async {
@@ -386,6 +597,36 @@ void main() {
     await subscription.cancel();
   });
 }
+
+/// Runs [future] to completion on fake time: its microtasks, not its timers.
+/// Throws what it throws, and fails if it is still waiting on a timer.
+T _settle<T>(FakeAsync async, Future<T> future) {
+  late T value;
+  Object? error;
+  StackTrace? stackTrace;
+  var done = false;
+  future.then(
+    (v) {
+      value = v;
+      done = true;
+    },
+    onError: (Object e, StackTrace s) {
+      error = e;
+      stackTrace = s;
+      done = true;
+    },
+  );
+  async.flushMicrotasks();
+  if (!done) fail('the future is waiting on a timer');
+  if (error != null) Error.throwWithStackTrace(error!, stackTrace!);
+  return value;
+}
+
+/// A join refused because the user may not read the room's topic.
+final _unauthorized = Exception(
+  '"Unauthorized: You do not have permissions to read from this Channel '
+  'topic: cotime_book:room:ABC234"',
+);
 
 Future<void> _join(RealtimeService service, String code) {
   return service.joinRoom(

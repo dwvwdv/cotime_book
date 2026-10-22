@@ -5,6 +5,7 @@ import '../providers/room_provider.dart';
 import '../screens/home_screen.dart';
 import '../screens/room_lobby_screen.dart';
 import '../screens/reader_screen.dart';
+import '../screens/room_removed.dart';
 
 class AppRouter {
   static final router = GoRouter(
@@ -72,6 +73,13 @@ class _ActiveRoomGuard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Removed while reading (GH-36): go home and say why, rather than swap
+    // the book for a page about joining from Home.
+    ref.listen<RoomState>(roomProvider, (previous, next) {
+      if (roomWasRemoved(roomCode, previous, next)) {
+        returnHomeFromRemovedRoom(context, ref, next.error!);
+      }
+    });
     final activeRoom = ref.watch(roomProvider).currentRoom;
     if (activeRoom != null &&
         activeRoom.code.toUpperCase() == roomCode.toUpperCase()) {

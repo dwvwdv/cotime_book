@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cotime_book/models/shared_page.dart';
 import 'package:cotime_book/providers/presence_provider.dart';
+import 'package:cotime_book/services/presence_merge.dart';
 import 'package:cotime_book/services/realtime_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -42,6 +43,111 @@ void main() {
     expect(alice['ready_book_hashes'], ['book-a']);
     expect(alice['is_reading'], isTrue);
     expect(alice['reader_ready'], isTrue);
+  });
+
+  group('app versions in Presence (GH-33)', () {
+    Map<String, dynamic> meta(
+      String userId,
+      int? protocol,
+      String at, {
+      int? oldest,
+    }) => {
+      'user_id': userId,
+      if (protocol != null) 'protocol': protocol,
+      if (oldest != null) 'protocol_min': oldest,
+      'online_at': at,
+    };
+
+    ProtocolCompatibility versionOf(
+      List<Map<String, dynamic>> metas, {
+      int localProtocol = 1,
+      int localOldest = 0,
+    }) => presenceProtocolCompatibility(
+      mergePresenceUsers(metas).single,
+      localProtocol: localProtocol,
+      localOldestCompatible: localOldest,
+    );
+
+    test('the app from before the field reads along with this one', () {
+      // Regression: v1.0.5 sends no version but speaks the same wire, and was
+      // labelled "Needs app update" in every room.
+      expect(
+        versionOf([meta('bob', null, '2026-10-22T01:00:00Z')]),
+        ProtocolCompatibility.compatible,
+      );
+      expect(
+        presenceProtocolCompatibility({'user_id': 'bob'}),
+        ProtocolCompatibility.compatible,
+      );
+    });
+
+    test('a version this app no longer supports is older', () {
+      expect(
+        versionOf(
+          [meta('bob', null, '2026-10-22T01:00:00Z')],
+          localProtocol: 2,
+          localOldest: 2,
+        ),
+        ProtocolCompatibility.older,
+      );
+    });
+
+    test('an app that no longer supports this one is newer', () {
+      expect(
+        versionOf([meta('bob', 3, '2026-10-22T01:00:00Z', oldest: 2)]),
+        ProtocolCompatibility.newer,
+      );
+      // A newer app that still supports this version reads along.
+      expect(
+        versionOf([meta('bob', 3, '2026-10-22T01:00:00Z', oldest: 1)]),
+        ProtocolCompatibility.compatible,
+      );
+    });
+
+    test('a meta left over from before an app update does not count', () {
+      // The old app's connection has not expired yet; the updated one is the
+      // device Bob reads on.
+      final merged = mergePresenceUsers([
+        meta('bob', null, '2026-10-22T01:00:00Z'),
+        meta('bob', 2, '2026-10-22T02:00:00Z', oldest: 2),
+        meta('bob', 2, '2026-10-22T03:00:00Z', oldest: 2),
+      ]).single;
+      expect(merged['protocols'], [
+        [0, 0],
+        [2, 2],
+      ]);
+      expect(
+        presenceProtocolCompatibility(
+          merged,
+          localProtocol: 2,
+          localOldestCompatible: 2,
+        ),
+        ProtocolCompatibility.compatible,
+      );
+    });
+
+    test('any device on this protocol keeps a member compatible', () {
+      // Not just the device that tracked last: an older tablet tracking after
+      // the phone must not hide that the phone can read along.
+      expect(
+        versionOf(
+          [
+            meta('bob', 2, '2026-10-22T01:00:00Z', oldest: 2),
+            meta('bob', 0, '2026-10-22T02:00:00Z'),
+          ],
+          localProtocol: 2,
+          localOldest: 2,
+        ),
+        ProtocolCompatibility.compatible,
+      );
+      expect(
+        versionOf([
+          meta('bob', 0, '2026-10-22T01:00:00Z'),
+          meta('bob', 3, '2026-10-22T02:00:00Z', oldest: 3),
+        ], localOldest: 1),
+        ProtocolCompatibility.newer,
+      );
+    });
   });
 
   test(
@@ -115,6 +221,9 @@ void main() {
     );
     await notifier.announceLeaving();
 
+    // Leaving starts here, so the channel watchdog stops here too: once the
+    // leave RPC lands, a rebuilt channel would be refused (GH-36).
+    expect(realtime.suspendCalls, 1);
     expect(realtime.lastBroadcastEvent, 'membership_changed');
     expect(realtime.lastBroadcastPayload, {
       'action': 'leaving',
@@ -190,7 +299,8 @@ void main() {
   });
 
   test('a failed join announcement retries while still connected', () async {
-    final realtime = _DeferredConnectionRealtimeService()..failNextBroadcast = true;
+    final realtime = _DeferredConnectionRealtimeService()
+      ..failNextBroadcast = true;
     final notifier = PresenceNotifier(
       realtime,
       joinAnnouncementRetryDelay: const Duration(milliseconds: 10),
@@ -274,7 +384,6 @@ class _DeferredConnectionRealtimeService extends RealtimeService {
     required String nickname,
     required int avatarColorIndex,
     required bool hasBook,
-    String? roomTopicId,
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
@@ -315,6 +424,7 @@ class _RecordingRealtimeService extends RealtimeService {
   Map<String, dynamic> lastPresence = {};
   String? lastBroadcastEvent;
   Map<String, dynamic>? lastBroadcastPayload;
+  int suspendCalls = 0;
 
   _RecordingRealtimeService()
     : super(channelFactory: (_, __) => throw StateError('not used'));
@@ -323,13 +433,18 @@ class _RecordingRealtimeService extends RealtimeService {
   bool get isConnected => true;
 
   @override
+  void suspendRecovery() {
+    suspendCalls++;
+    super.suspendRecovery();
+  }
+
+  @override
   Future<void> joinRoom({
     required String roomCode,
     required String userId,
     required String nickname,
     required int avatarColorIndex,
     required bool hasBook,
-    String? roomTopicId,
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,

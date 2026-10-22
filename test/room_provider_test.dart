@@ -125,6 +125,42 @@ void main() {
       expect(teardownCalls, 1);
     });
 
+    test('a heartbeat refused after leaving does not report a revocation', () async {
+      // Regression: a heartbeat still in flight when the user tapped Leave
+      // came back refused (the leave RPC had run first), and home showed
+      // "membership expired" after an ordinary leave.
+      final service = FakeRoomService()
+        ..heartbeatReply = Completer<Room>()
+        ..leaveReply = Completer<void>();
+      var teardownCalls = 0;
+      final notifier = RoomNotifier(
+        service,
+        onSessionRevoked: () async {
+          teardownCalls++;
+        },
+      );
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      final heartbeat = notifier.heartbeat();
+      final leaving = notifier.leaveRoom();
+      // The server ran leave_room first, so the heartbeat is refused while
+      // the leave's own reply is still on its way.
+      service.heartbeatReply!.completeError(
+        const RoomSessionRevokedException('membership expired'),
+      );
+      await expectLater(
+        heartbeat,
+        throwsA(isA<RoomSessionRevokedException>()),
+      );
+      service.leaveReply!.complete();
+      await leaving;
+
+      expect(notifier.state.currentRoom, isNull);
+      expect(notifier.state.error, isNull);
+      expect(teardownCalls, 0);
+    });
+
     test('transient heartbeat failure preserves the active session', () async {
       final service = FakeRoomService()
         ..heartbeatError = StateError('temporary network failure');
@@ -573,6 +609,138 @@ void main() {
       expect(service.bookExpectedRevisions, [0]);
       expect(notifier.state.currentRoom?.currentBookHash, otherBook);
     });
+
+    test('a library book is recorded in the room with its library path', () async {
+      // GH-28: members who open the lobby after the share only see the room
+      // row, so the path has to be stored there, not just broadcast.
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      await notifier.updateBookShared(
+        bookTitle: 'Moby-Dick',
+        bookHash: List.filled(64, 'b').join(),
+        libraryPath: 'classics/moby-dick.epub',
+      );
+      expect(
+        notifier.state.currentRoom?.currentBookLibraryPath,
+        'classics/moby-dick.epub',
+      );
+
+      // A book from this device replaces the path instead of inheriting it.
+      await notifier.updateBookShared(
+        bookTitle: 'Notes',
+        bookHash: List.filled(64, 'c').join(),
+      );
+      expect(service.bookLibraryPaths, ['classics/moby-dick.epub', null]);
+      expect(notifier.state.currentRoom?.currentBookLibraryPath, isNull);
+    });
+
+    test('a shared book announcement replaces the previous library path', () async {
+      final service = FakeRoomService()
+        ..nextRoom = testRoom().copyWith(
+          currentBookHash: List.filled(64, 'a').join(),
+          currentBookLibraryPath: 'classics/old.epub',
+        );
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      notifier.onBookSharedReceived(
+        bookTitle: 'Local book',
+        bookHash: List.filled(64, 'b').join(),
+      );
+
+      expect(notifier.state.currentRoom?.currentBookLibraryPath, isNull);
+    });
+  });
+
+  // GH-30: copyWith used to drop the error on every update, so a message
+  // vanished whenever some unrelated update ran, and code that needed one to
+  // survive had to copy it across by hand.
+  group('room errors', () {
+    test('stay up through Presence and book updates that fix nothing', () async {
+      final service = FakeRoomService()..members = [testMember(roomId: 'room-a')];
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      service.heartbeatError = StateError('temporary network failure');
+      await expectLater(notifier.heartbeat(), throwsStateError);
+
+      notifier.updateMembersFromPresence([
+        {'user_id': 'user-a', 'has_book': true},
+      ]);
+      notifier.onBookSharedReceived(bookTitle: 'Moby-Dick', bookHash: 'hash');
+
+      expect(notifier.state.members.single.isOnline, isTrue);
+      expect(notifier.state.currentRoom?.currentBookTitle, 'Moby-Dick');
+      expect(notifier.state.error, contains('temporary network failure'));
+    });
+
+    test('a successful heartbeat clears the error', () async {
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      service.heartbeatError = StateError('temporary network failure');
+      await expectLater(notifier.heartbeat(), throwsStateError);
+      service
+        ..heartbeatError = null
+        ..nextRoom = testRoom(revision: 1);
+      await notifier.heartbeat();
+
+      expect(notifier.state.error, isNull);
+    });
+
+    test('a roster read that gets through clears a failed one', () async {
+      final service = FakeRoomService()..members = [testMember(roomId: 'room-a')];
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      service.memberRead = Completer()..completeError(StateError('offline'));
+      await notifier.refreshMembers();
+      expect(notifier.state.error, contains('offline'));
+
+      service.memberRead = null;
+      await notifier.refreshMembers();
+      expect(notifier.state.error, isNull);
+    });
+
+    test('a failed join is cleared by the next room entered', () async {
+      final service = FakeRoomService()
+        ..joinError = const RoomNotFoundException('ZZZZZZ');
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.joinRoom('ZZZZZZ', 'Alice');
+      expect(notifier.state.error, isNotNull);
+
+      expect(await notifier.createRoom('Alice'), isNotNull);
+      expect(notifier.state.error, isNull);
+    });
+
+    test('a revoked session stays explained until dismissed', () async {
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      service.heartbeatError = const RoomSessionRevokedException(
+        'membership expired',
+      );
+      await expectLater(
+        notifier.heartbeat(),
+        throwsA(isA<RoomSessionRevokedException>()),
+      );
+      expect(notifier.state.error, 'membership expired');
+
+      notifier.clearError();
+      expect(notifier.state.error, isNull);
+    });
   });
 }
 
@@ -610,6 +778,7 @@ RoomMember testMember({
 class FakeRoomService extends RoomService {
   Room nextRoom = testRoom();
   Object? heartbeatError;
+  Completer<Room>? heartbeatReply;
   Object? cfiError;
   Object? bookError;
   Completer<Room>? cfiWrite;
@@ -622,6 +791,7 @@ class FakeRoomService extends RoomService {
   Room conflictRoom = testRoom();
   final List<int> cfiExpectedRevisions = [];
   final List<int> bookExpectedRevisions = [];
+  final List<String?> bookLibraryPaths = [];
   final List<String> cfiWrites = [];
 
   Object? joinError;
@@ -671,6 +841,8 @@ class FakeRoomService extends RoomService {
 
   @override
   Future<Room> heartbeatRoom(String roomId) async {
+    final reply = heartbeatReply;
+    if (reply != null) return reply.future;
     final error = heartbeatError;
     if (error != null) throw error;
     return nextRoom;
@@ -705,8 +877,10 @@ class FakeRoomService extends RoomService {
     required String bookTitle,
     required String bookHash,
     required int expectedRevision,
+    String? libraryPath,
   }) async {
     bookExpectedRevisions.add(expectedRevision);
+    bookLibraryPaths.add(libraryPath);
     final error = bookError;
     if (error != null) throw error;
     if (bookConflicts > 0) {
@@ -716,16 +890,20 @@ class FakeRoomService extends RoomService {
     return nextRoom.copyWith(
       currentBookTitle: bookTitle,
       currentBookHash: bookHash,
+      currentBookLibraryPath: libraryPath,
       revision: expectedRevision + 1,
     );
   }
 
   int leaveFailures = 0;
   int leaveCalls = 0;
+  Completer<void>? leaveReply;
 
   @override
   Future<Map<String, dynamic>> leaveRoom({required String roomId}) async {
     leaveCalls++;
+    final reply = leaveReply;
+    if (reply != null) await reply.future;
     if (leaveFailures > 0) {
       leaveFailures--;
       throw StateError('connection reset');

@@ -81,10 +81,20 @@ supabase/
      頁首 CFI 以「第一個可見字元」計算（`shared_page.js` 換掉了 epub.js 用空白切詞的方法，
      issue #21）——中文沒有空白，用詞切會讓頁首指到上一頁。沒有字的頁同理：空白頁在翻頁時
      直接跳過，只有圖的頁以圖的 element CFI 命名（issue #22）。
-     改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，跑
-     `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致。
+     改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，先在本機跑
+     `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致（本機約 5 分鐘）。
+     CI 的 `shared-page-check.yml` 也會在這些來源變動時跑它；但 `check.js` 把 `displaySettings`
+     產生的 `loadBook` 參數寫死在檔案裡，改 `displaySettings` 時要同步改 `check.js`，
+     否則 CI 驗的仍是舊設定。
    改這個檔案前先讀 `test/page_sync_service_test.dart`——它用多 client 的 `FakeRoom`
    把遺失訊息、同時翻頁、斷線等情況都釘住了。
+   - **協定版本**（GH-33）：Presence 帶 `protocol`（`AppConstants.roomProtocolVersion`）與
+     `protocol_min`（`minCompatibleRoomProtocol`，還能一起讀的最舊版本）。雙方的版本都不低於
+     對方的 `protocol_min` 才算相容；不相容的成員在 lobby 與 reader 標示「需要更新 App」。
+     改了 broadcast 事件名稱或 payload、或改了別人依賴的 Presence 欄位時，同一個 PR 要把
+     `roomProtocolVersion` +1；舊版跟不上時，`minCompatibleRoomProtocol` 也要拉到新版本。
+     只新增可被忽略的欄位不用改。版號只能往上加。舊版（v1.0.5 以前）不送這兩個欄位，算成 0，
+     與目前的版本相容。只提示、不把對方排除在共識之外。
 
 3. **房間成員的權威來源是資料庫，不是 Presence。**
    Presence 只負責 online / has_book 這層 overlay。
@@ -103,6 +113,9 @@ supabase/
 5. **Realtime 連線會斷，而且 library 不一定會自己接回來。** 裝置在讀一頁時休眠是常態。
    `RealtimeService` 有 watchdog 會重建壞掉的 channel（見 issue #17）。
    換 channel 時不要用 `removeChannel()`（它會在背景斷掉 socket），走 `remove(releaseSocket: false)`；
+   伺服器以 `Unauthorized` 拒絕 join 時不重建（GH-36）：`accessDeniedStream` 通知
+   `RoomNotifier` 向資料庫確認成員資格，已不在房內就回首頁，否則照常退避重試。
+   離開流程一開始就 `suspendRecovery()`，避免在 `leave_room` 之後重建出會被拒的 channel。
    任何依賴 Presence 的決策都要先確認 `isConnected`——斷線時的 Presence 是舊的或空的。
    **Presence 更新有每 client 每 30 秒 5 次的上限**（track + untrack），超過時伺服器直接關掉
    channel（`ClientPresenceRateLimitReached`）。`RealtimeService` 會合併並限流 Presence 更新；
@@ -159,9 +172,12 @@ supabase test db       # pgTAP
 
 CI（`.github/workflows/build-check.yml`）跑的是 Flutter 3.32.4：
 pgTAP 與 `flutter analyze` + `flutter test` + arm64 APK 是兩個平行的 job。
+動到排版相關來源（`assets/reader/**`、內建字型、`lib/services/shared_page*.dart`、
+`txt_book.dart` / `gb18030.dart`、`tool/shared_page_check/**`、pubspec）時，另有 `shared-page-check.yml` 在 Chromium 裡跑
+`tool/shared_page_check`（GH-39）。
 **送 PR 前 `flutter analyze` 與 `flutter test` 必須是乾淨的。**
 Claude Code 雲端 session 由 `.claude/hooks/session-start.sh` 裝好同版本的 Flutter——
-升級 Flutter 時三份 workflow 與這支 hook 要一起改。改 workflow 前先讀
+升級 Flutter 時四份 workflow 與這支 hook 要一起改。改 workflow 前先讀
 [`build-and-deploy.md`](.claude/skills/build-and-deploy.md) 的「CI 設計筆記」：
 paths 過濾、concurrency、Telegram 通知的逾時與備援，每一條都對應踩過的坑。
 

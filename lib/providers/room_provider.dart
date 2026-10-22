@@ -11,7 +11,8 @@ import '../services/supabase_service.dart';
 final roomServiceProvider = Provider<RoomService>((ref) => RoomService());
 
 final roomProvider = StateNotifierProvider<RoomNotifier, RoomState>((ref) {
-  return RoomNotifier(
+  final realtime = ref.read(realtimeServiceProvider);
+  final notifier = RoomNotifier(
     ref.read(roomServiceProvider),
     onSessionRevoked: () async {
       await Future.wait<void>([
@@ -20,6 +21,14 @@ final roomProvider = StateNotifierProvider<RoomNotifier, RoomState>((ref) {
       ]);
     },
   );
+  // Realtime refusing the room channel is a hint that the membership is gone,
+  // not proof of it: the database decides (GH-36).
+  final accessDenied = realtime.accessDeniedStream.listen((denied) async {
+    final stillMember = await notifier.confirmMembershipAfterAccessDenied();
+    if (stillMember) realtime.retryAfterAccessDenied(denied.generation);
+  });
+  ref.onDispose(accessDenied.cancel);
+  return notifier;
 });
 
 class RoomState {
@@ -42,17 +51,23 @@ class RoomState {
   bool get allMembersHaveBook =>
       members.isNotEmpty && members.every((m) => m.hasBook);
 
+  /// Keeps [error] unless a new one is given or [clearError] is set. Every
+  /// state update used to drop the error as a side effect, so whether a
+  /// message survived depended on which unrelated update happened to run next
+  /// (GH-30). Clearing is now a decision made where an operation starts over
+  /// or succeeds.
   RoomState copyWith({
     Room? currentRoom,
     List<RoomMember>? members,
     bool? isLoading,
     String? error,
+    bool clearError = false,
   }) {
     return RoomState(
       currentRoom: currentRoom ?? this.currentRoom,
       members: members ?? this.members,
       isLoading: isLoading ?? this.isLoading,
-      error: error,
+      error: clearError ? null : (error ?? this.error),
     );
   }
 }
@@ -116,7 +131,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
   Future<Room?> _enterRoom(Future<Room> Function() enter) async {
     final operationGeneration = ++_roomSessionGeneration;
     _resetMemberTracking();
-    state = state.copyWith(isLoading: true, error: null);
+    state = state.copyWith(isLoading: true, clearError: true);
     try {
       final room = await enter();
       final members = await _roomService.getRoomMembers(room.id);
@@ -125,6 +140,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
         currentRoom: room,
         members: members,
         isLoading: false,
+        clearError: true,
       );
       _startHeartbeat(room.id);
       return room;
@@ -161,8 +177,12 @@ class RoomNotifier extends StateNotifier<RoomState> {
         return;
       }
       _appliedMembersGeneration = fetchGeneration;
+      // A roster read that reached the database is as good a sign the
+      // connection is back as a heartbeat is; the lobby re-reads the roster
+      // every few seconds, so this is what retires a failed read's message.
       state = state.copyWith(
         members: _applyPresenceOverlay(members, _lastPresenceUsers),
+        clearError: true,
       );
     } catch (error) {
       if (_isCurrentRoomSession(room.id, roomSessionGeneration) &&
@@ -222,6 +242,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
   void onBookSharedReceived({
     required String bookTitle,
     required String bookHash,
+    String? libraryPath,
   }) {
     final room = state.currentRoom;
     if (room == null) return;
@@ -229,6 +250,9 @@ class RoomNotifier extends StateNotifier<RoomState> {
       currentRoom: room.copyWith(
         currentBookTitle: bookTitle,
         currentBookHash: bookHash,
+        // Replaced even when null: the previous book's path does not locate
+        // this one.
+        currentBookLibraryPath: libraryPath,
       ),
     );
   }
@@ -248,7 +272,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
       if (!_isCurrentRoomSession(room.id, roomSessionGeneration)) return;
       await refreshMembers();
     } on RoomSessionRevokedException catch (error) {
-      await _revokeSession(room.id, error.message);
+      await _revokeSession(room.id, error.message, roomSessionGeneration);
     } catch (error) {
       if (_isCurrentRoomSession(room.id, roomSessionGeneration)) {
         state = state.copyWith(error: error.toString());
@@ -260,9 +284,14 @@ class RoomNotifier extends StateNotifier<RoomState> {
   /// book reached the room first: two shares racing each other resolve to the
   /// one that committed first, and the other device follows it instead of
   /// overwriting it on the conflict retry.
+  ///
+  /// [libraryPath] is where the book is in the public library, null when it
+  /// is not from there. The room keeps it so members who arrive later can
+  /// download the book too (GH-28).
   Future<bool> updateBookShared({
     required String bookTitle,
     required String bookHash,
+    String? libraryPath,
   }) async {
     final room = state.currentRoom;
     if (room == null) return false;
@@ -277,6 +306,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
           bookTitle: bookTitle,
           bookHash: bookHash,
           expectedRevision: writeOrigin.revision,
+          libraryPath: libraryPath,
         );
         break;
       } on RoomRevisionConflictException catch (error) {
@@ -298,7 +328,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
         writeOrigin = state.currentRoom!;
         if (attempt == 1) rethrow;
       } on RoomSessionRevokedException catch (error) {
-        await _revokeSession(room.id, error.message);
+        await _revokeSession(room.id, error.message, roomSessionGeneration);
         rethrow;
       }
     }
@@ -318,7 +348,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
           hasBook: true,
         );
       } on RoomSessionRevokedException catch (error) {
-        await _revokeSession(room.id, error.message);
+        await _revokeSession(room.id, error.message, roomSessionGeneration);
         rethrow;
       }
     }
@@ -354,6 +384,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
           await _revokeSession(
             room.id,
             'This room membership is inactive or has expired.',
+            roomSessionGeneration,
           );
         }
         return null;
@@ -416,7 +447,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
         writeOrigin = state.currentRoom!;
         if (attempt == 1) rethrow;
       } on RoomSessionRevokedException catch (error) {
-        await _revokeSession(roomId, error.message);
+        await _revokeSession(roomId, error.message, roomSessionGeneration);
         rethrow;
       }
     }
@@ -522,7 +553,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
         clearError: true,
       );
     } on RoomSessionRevokedException catch (error) {
-      await _revokeSession(roomId, error.message);
+      await _revokeSession(roomId, error.message, roomSessionGeneration);
       if (rethrowError) rethrow;
     } catch (error) {
       if (_isCurrentRoomSession(roomId, roomSessionGeneration)) {
@@ -534,8 +565,60 @@ class RoomNotifier extends StateNotifier<RoomState> {
     }
   }
 
-  Future<void> _revokeSession(String roomId, String reason) async {
-    if (_revocationInProgress || state.currentRoom?.id != roomId) return;
+  /// Shown when this device finds it is no longer in the room it was in.
+  static const removedFromRoomMessage =
+      'You are no longer in this room. It may have closed, or you left it on '
+      'another device.';
+
+  /// Realtime refused this room's channel. That happens when the membership
+  /// is gone — left on another device, evicted after a long sleep, the room
+  /// closed — but the database is the authority on membership, so ask it.
+  ///
+  /// Returns whether this device is still in the room, i.e. whether the
+  /// channel is worth trying again. A failed read counts as still in: a
+  /// network error is no reason to throw the reader out of the room.
+  Future<bool> confirmMembershipAfterAccessDenied() async {
+    final room = state.currentRoom;
+    if (room == null) return false;
+    final roomSessionGeneration = _roomSessionGeneration;
+    final Room? current;
+    try {
+      current = await _roomService.getRoom(room.id);
+    } catch (_) {
+      return mounted && _isCurrentRoomSession(room.id, roomSessionGeneration);
+    }
+    // Left or replaced meanwhile: whoever did that owns the channel now.
+    if (!mounted || !_isCurrentRoomSession(room.id, roomSessionGeneration)) {
+      return false;
+    }
+    if (current == null) {
+      await _revokeSession(
+        room.id,
+        removedFromRoomMessage,
+        roomSessionGeneration,
+      );
+      return false;
+    }
+    _applyRoomUpdate(
+      current,
+      originRoom: room,
+      roomSessionGeneration: roomSessionGeneration,
+    );
+    return true;
+  }
+
+  /// [roomSessionGeneration] is the session the refusal was for. A request
+  /// sent before a leave can come back refused after the leave RPC ran; that
+  /// is the leave itself, not a revocation to report.
+  Future<void> _revokeSession(
+    String roomId,
+    String reason,
+    int roomSessionGeneration,
+  ) async {
+    if (_revocationInProgress ||
+        !_isCurrentRoomSession(roomId, roomSessionGeneration)) {
+      return;
+    }
     _revocationInProgress = true;
     _roomSessionGeneration++;
     _resetMemberTracking();
@@ -565,7 +648,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
 
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
-    state = state.copyWith(isLoading: true, error: null);
+    state = state.copyWith(isLoading: true, clearError: true);
     try {
       try {
         await _roomService.leaveRoom(roomId: room.id);
@@ -612,15 +695,12 @@ class RoomNotifier extends StateNotifier<RoomState> {
         identical(currentRoom, originRoom);
     if (!isNewer && !isUnchangedSnapshot) return false;
 
-    state = state.copyWith(
-      currentRoom: updatedRoom,
-      error: clearError ? null : state.error,
-    );
+    state = state.copyWith(currentRoom: updatedRoom, clearError: clearError);
     return true;
   }
 
   void clearError() {
-    state = state.copyWith(error: null);
+    state = state.copyWith(clearError: true);
   }
 
   @override

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/models/page_sync_state.dart';
 import 'package:cotime_book/services/page_sync_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -447,6 +448,56 @@ void main() {
       },
     );
 
+    test('a reader whose app dropped this version is named (GH-33)', () async {
+      // Their app listens for other events, so it never answers; "timed
+      // out" alone reads as a bad connection.
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        requestTimeout: const Duration(milliseconds: 40),
+      );
+      room.join('bob', 'Bob');
+      room.setProtocol('bob', 99, oldest: 99);
+      addTearDown(room.dispose);
+      await flush();
+
+      await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(
+        alice.service.currentState.errorMessage,
+        'Page turn timed out waiting for Bob. '
+        'Update the app to read with Bob',
+      );
+    });
+
+    test(
+      'a reader on the app from before versions is not blamed (GH-33)',
+      () async {
+        // v1.0.5 sends no version but speaks the same wire: a timeout there
+        // is a connection problem, not an update to ask for.
+        final room = FakeRoom();
+        final alice = room.join(
+          'alice',
+          'Alice',
+          requestTimeout: const Duration(milliseconds: 40),
+        );
+        room.join('bob', 'Bob');
+        room.setProtocol('bob', null);
+        addTearDown(room.dispose);
+        await flush();
+
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next);
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+
+        expect(
+          alice.service.currentState.errorMessage,
+          'Page turn timed out waiting for Bob',
+        );
+      },
+    );
+
     test(
       'a transient failure clears itself instead of pinning the bar',
       () async {
@@ -794,6 +845,7 @@ class FakeRoom {
   }) {
     if (trackPresence) {
       _presence[userId] = {
+        'protocol': AppConstants.roomProtocolVersion,
         'user_id': userId,
         'nickname': nickname,
         'is_reading': isReading,
@@ -839,6 +891,20 @@ class FakeRoom {
     return reader;
   }
 
+  /// The app version [userId] announces; null is an app from before the
+  /// field existed.
+  void setProtocol(String userId, int? protocol, {int? oldest}) {
+    final meta = _presence[userId]!;
+    meta.remove('protocol_min');
+    if (protocol == null) {
+      meta.remove('protocol');
+    } else {
+      meta['protocol'] = protocol;
+      if (oldest != null) meta['protocol_min'] = oldest;
+    }
+    _emitPresence();
+  }
+
   void setPresence(String userId, {bool? isReading, bool? readerReady}) {
     final meta = _presence[userId]!;
     if (isReading != null) meta['is_reading'] = isReading;
@@ -852,6 +918,7 @@ class FakeRoom {
     if (online) {
       offline.remove(userId);
       _presence[userId] = {
+        'protocol': AppConstants.roomProtocolVersion,
         'user_id': userId,
         'nickname': readers[userId]!.nickname,
         'is_reading': isReading,

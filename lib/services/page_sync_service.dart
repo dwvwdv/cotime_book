@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:uuid/uuid.dart';
 
 import '../models/page_sync_state.dart';
+import 'presence_merge.dart';
 import 'realtime_service.dart';
 
 /// The small Realtime surface used by page synchronization.
@@ -1082,22 +1083,40 @@ class PageSyncService {
 
   String _timeoutMessage(PageTurnRequest request) {
     final users = _transport.getOnlineUsers();
-    final names =
-        request.pendingUserIds
-            .map((id) {
-              for (final user in users) {
-                if (user['user_id'] == id && user['nickname'] is String) {
-                  final nickname = (user['nickname'] as String).trim();
-                  if (nickname.isNotEmpty) return nickname;
-                }
-              }
-              return null;
-            })
-            .whereType<String>()
-            .toList()
-          ..sort();
+    final names = <String>[];
+    // A reader whose app speaks another protocol version never answers, and
+    // "timed out" alone reads as a bad connection (GH-33).
+    final behind = <String>[];
+    final ahead = <String>[];
+    for (final id in request.pendingUserIds) {
+      for (final user in users) {
+        if (user['user_id'] != id || user['nickname'] is! String) continue;
+        final nickname = (user['nickname'] as String).trim();
+        if (nickname.isEmpty) continue;
+        names.add(nickname);
+        switch (presenceProtocolCompatibility(user)) {
+          case ProtocolCompatibility.older:
+            behind.add(nickname);
+          case ProtocolCompatibility.newer:
+            ahead.add(nickname);
+          case ProtocolCompatibility.compatible:
+            break;
+        }
+        break;
+      }
+    }
     if (names.isEmpty) return describeCancelReason('timeout');
-    return 'Page turn timed out waiting for ${names.join(', ')}';
+    names.sort();
+    behind.sort();
+    ahead.sort();
+    return [
+      'Page turn timed out waiting for ${names.join(', ')}',
+      if (behind.isNotEmpty)
+        '${behind.join(', ')} ${behind.length == 1 ? 'needs' : 'need'} to '
+            'update the app to read together',
+      if (ahead.isNotEmpty)
+        'Update the app to read with ${ahead.join(', ')}',
+    ].join('. ');
   }
 
   void _setError(String message) {

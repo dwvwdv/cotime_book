@@ -1,7 +1,7 @@
 name: cotime_book
 description: CoTime Book - 遠程同步看書工具
 publish_to: 'none'
-version: 1.0.5+9
+version: 1.0.6+10
 
 environment:
   sdk: ^3.8.0
@@ -50,6 +50,7 @@ dev_dependencies:
   json_serializable: ^6.9.4
   flutter_launcher_icons: ^0.14.3
   xml: ^6.5.0
+  fake_async: ^1.3.3
 
 flutter_launcher_icons:
   android: true

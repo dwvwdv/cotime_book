@@ -2,27 +2,50 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-/// The `paths:` filter of the pull_request trigger in build-check.yml.
-List<String> _buildCheckPaths() {
-  final lines =
-      File('.github/workflows/build-check.yml').readAsLinesSync();
-  final start = lines.indexWhere((l) => l.trim() == 'paths:');
-  expect(start, isNot(-1), reason: 'build-check.yml must filter by paths');
-  final paths = <String>[];
-  for (final line in lines.skip(start + 1)) {
-    final trimmed = line.trim();
-    if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
-    final match = RegExp(r"^- '([^']+)'$").firstMatch(trimmed);
-    if (match == null) break;
-    paths.add(match.group(1)!);
+/// Every `paths:` filter in [workflow], in the order they appear.
+List<List<String>> _workflowPaths(String workflow) {
+  final lines = File(workflow).readAsLinesSync();
+  final lists = <List<String>>[];
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].trim() != 'paths:') continue;
+    final paths = <String>[];
+    for (final line in lines.skip(i + 1)) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
+      final match = RegExp(r"^- '([^']+)'$").firstMatch(trimmed);
+      if (match == null) break;
+      paths.add(match.group(1)!);
+    }
+    lists.add(paths);
   }
-  return paths;
+  return lists;
 }
 
-bool _covered(List<String> filters, String path) => filters.any((filter) =>
-    filter == path ||
-    (filter.endsWith('/**') &&
-        path.startsWith(filter.substring(0, filter.length - 2))));
+/// The `paths:` filter of the pull_request trigger in build-check.yml.
+List<String> _buildCheckPaths() {
+  final lists = _workflowPaths('.github/workflows/build-check.yml');
+  expect(lists, isNotEmpty, reason: 'build-check.yml must filter by paths');
+  return lists.first;
+}
+
+bool _covered(List<String> filters, String path) =>
+    filters.any((filter) => _matches(filter, path));
+
+/// GitHub's glob, reduced to the forms these workflows use: an exact path,
+/// `dir/**`, and a `*` within the last segment.
+bool _matches(String filter, String path) {
+  if (filter == path) return true;
+  if (filter.endsWith('/**')) {
+    return path.startsWith(filter.substring(0, filter.length - 2));
+  }
+  if (filter.contains('*')) {
+    final pattern = RegExp(
+      '^${filter.split('*').map(RegExp.escape).join('[^/]*')}\$',
+    );
+    return pattern.hasMatch(path);
+  }
+  return false;
+}
 
 void main() {
   // A PR that only touches an unlisted path never triggers Build Check, and
@@ -79,5 +102,41 @@ void main() {
 
     expect(versions.length, greaterThan(1));
     expect(versions.values.toSet(), hasLength(1), reason: '$versions');
+  });
+
+  // check.js lays the book out in Chromium on two devices (issue #20); unit
+  // tests never run a WebView, so this workflow is the only CI that notices
+  // the devices' pages drifting apart. It has to run for every source the
+  // check reads, on pushes and pull requests alike.
+  test('Shared Page Check runs for every source check.js reads', () {
+    const workflow = '.github/workflows/shared-page-check.yml';
+    final lists = _workflowPaths(workflow);
+    expect(lists, hasLength(2), reason: 'push and pull_request filters');
+    expect(lists.last, lists.first,
+        reason: 'push and pull_request must watch the same paths');
+    for (final path in [
+      'assets/reader/shared_page.js',
+      'assets/fonts/literata/literata-latin-400-normal.woff2',
+      'lib/services/shared_page_style.dart',
+      'lib/services/txt_book.dart',
+      'lib/services/gb18030.dart',
+      'tool/shared_page_check/check.js',
+      'tool/shared_page_check/make_txt_book_test.dart',
+      'tool/shared_page_check/make_epub.py',
+      'tool/shared_page_check/dump_rules_test.dart',
+      'pubspec.yaml',
+      'pubspec.lock',
+      workflow,
+    ]) {
+      expect(_covered(lists.first, path), isTrue,
+          reason: '$path is not in $workflow paths');
+    }
+    // A change elsewhere in lib/ must not pay for Chromium and the fonts.
+    expect(_covered(lists.first, 'lib/services/realtime_service.dart'),
+        isFalse);
+
+    final text = File(workflow).readAsStringSync();
+    expect(text, contains('workflow_dispatch:'));
+    expect(text, contains('node tool/shared_page_check/check.js'));
   });
 }
