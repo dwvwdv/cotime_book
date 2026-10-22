@@ -12,7 +12,7 @@
 ### Flutter 版本
 
 **以 CI 為準**：`.github/workflows/*.yml` 的 `flutter-version`（目前 `3.32.4`）。
-`.claude/hooks/session-start.sh` 釘的是同一個版本——**升級 Flutter 時三份 workflow 與 hook 要一起改**，
+`.claude/hooks/session-start.sh` 釘的是同一個版本——**升級 Flutter 時四份 workflow 與 hook 要一起改**，
 否則本機 `flutter analyze` 乾淨、CI 卻報新版 lint（或反過來）。
 
 Claude Code 雲端 session 由 SessionStart hook 自動安裝（只在 `CLAUDE_CODE_REMOTE=true` 時執行），
@@ -41,8 +41,20 @@ supabase test db                   # 動到 supabase/ 時
 node tool/shared_page_check/check.js   # 動到 displaySettings / SharedPageStyle / shared_page.js 時
 ```
 
-`shared_page_check` 需要 Playwright 的 Chromium 與幾套系統字型（見 `check.js` 開頭），
-**CI 沒有跑它**——改到共享頁面排版時只能靠本機這一步擋下兩台裝置分頁不一致。
+`shared_page_check` 需要 Playwright 的 Chromium、python3 與幾套系統字型（見 `check.js` 開頭），
+本機（4 核）約 5 分鐘：兩本書（混合中英文的 EPUB、TXT 匯入轉出的 EPUB）各在兩台裝置上翻完，
+另有兩次 `flutter test`（`dump_rules_test.dart`、`make_txt_book_test.dart`）各約 15 秒的編譯。
+全域安裝的 Playwright 要用 `NODE_PATH` 指過去；Chromium 已在別處時設 `PLAYWRIGHT_BROWSERS_PATH`，
+不必再 `playwright install`：
+
+```bash
+NODE_PATH=$(npm root -g) node tool/shared_page_check/check.js
+```
+
+CI 的 `shared-page-check.yml` 會在排版相關來源變動時跑同一支（見下表），但本機仍建議先跑：
+CI 要先裝 Flutter、Chromium 與字型才開始驗，回饋慢得多；而 `check.js` 把 `displaySettings`
+產生的 `loadBook` 參數寫死在檔案裡，只改 `displaySettings` 不會觸發 CI，也驗不到新設定——
+改它時要同步改 `check.js`。
 
 ## 3. 執行與構建
 
@@ -79,6 +91,7 @@ build/app/outputs/bundle/release/app-release.aab
 | Workflow | 觸發 | 做什麼 |
 | --- | --- | --- |
 | `build-check.yml` | PR（paths 過濾）、手動 | pgTAP ‖ analyze + test + arm64 APK（平行兩個 job） |
+| `shared-page-check.yml` | push master / PR（只限排版相關 paths）、手動 | Chromium 裡跑 `tool/shared_page_check`：兩台裝置逐頁一致、follower 落在同一頁、空白頁不被翻到（GH-39） |
 | `release-apk.yml` | push master、手動 | analyze + test → APK / AAB → GitHub Release（tag = `v<pubspec version>`） |
 | `publish-play-store.yml` | 手動 | 編 AAB 上傳 Google Play，或 `skip_build` 直接 promote 既有版本碼 |
 | `test-signing.yml` | 手動 | 比對 CI keystore 與另一份 keystore 的 SHA256 指紋 |
@@ -120,6 +133,16 @@ build/app/outputs/bundle/release/app-release.aab
   測試和 APK build 放在同一個 runner 上，APK build 在下載 AGP 依賴時撞到
   "No space left on device"。清理 step 治標不治本；拆成平行 job 順便縮短總時間。
   （本專案的 pgTAP 已經是獨立 job。）
+- **`shared-page-check` 是獨立 workflow，只在排版相關來源變動時跑**（GH-39）。它要裝
+  Playwright 的 Chromium（`--with-deps`）與 `check.js` 指名的四套字型
+  （`fonts-dejavu-core`、`fonts-liberation`、`fonts-wqy-zenhei`、`fonts-ipafont-gothic`），
+  放進 build-check 會讓每個 PR 都付這個成本。paths 要涵蓋 `check.js` 讀到的每一個來源：
+  `assets/reader/**`、`assets/fonts/**`（字型以 data URL 進 rules）、`lib/services/shared_page*.dart`、
+  `lib/services/txt_book.dart`（第二本受檢的書由 TXT 匯入產生）、`tool/shared_page_check/**`、`pubspec.yaml` / `pubspec.lock`（flutter_epub_viewer 的版本就是
+  epub.js 的版本）與 workflow 本身；push 與 pull_request 兩份清單要一樣，
+  `test/ci_workflow_test.dart` 會檢查。它固定跑在 `ubuntu-latest`，不吃 `CI_RUNNER`：
+  要 sudo apt 裝依賴與字型，self-hosted runner 不一定有。Playwright 版本釘死
+  （換版本就換 Chromium，排版可能跟著變）。沒有產物可送，所以不接 Telegram。
 - **不要用 `--tests` 指名要跑的測試類別。** 新增測試時很容易忘了回頭改 workflow，
   症狀是「CI 全綠但那個檔案從來沒被執行過」。
 
@@ -127,8 +150,6 @@ build/app/outputs/bundle/release/app-release.aab
 
 - **Flutter 升級到 3.38.x**（無感記帳已在用）：要同時改三份 workflow、session-start hook，
   並確認 `flutter analyze` 沒有新的 lint 與 `flutter test` 全綠。
-- **CI 跑 `tool/shared_page_check`**（issue #X）：需要 Playwright Chromium 與 CJK 字型，安裝成本不低；
-  可做成只在 `assets/reader/**`、`lib/services/shared_page*.dart` 變動時觸發的獨立 job。
 - **`publish-play-store.yml` 的發版說明改從檔案讀**：無感記帳從 `assets/announcement.json`
   第一筆的 `release_notes` 帶入，App 內公告與 Play 說明同一份來源。本專案目前沒有 App 內公告，
   維持手動輸入。

@@ -81,8 +81,11 @@ supabase/
      頁首 CFI 以「第一個可見字元」計算（`shared_page.js` 換掉了 epub.js 用空白切詞的方法，
      issue #21）——中文沒有空白，用詞切會讓頁首指到上一頁。沒有字的頁同理：空白頁在翻頁時
      直接跳過，只有圖的頁以圖的 element CFI 命名（issue #22）。
-     改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，跑
-     `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致。
+     改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，先在本機跑
+     `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致（本機約 5 分鐘）。
+     CI 的 `shared-page-check.yml` 也會在這些來源變動時跑它；但 `check.js` 把 `displaySettings`
+     產生的 `loadBook` 參數寫死在檔案裡，改 `displaySettings` 時要同步改 `check.js`，
+     否則 CI 驗的仍是舊設定。
    改這個檔案前先讀 `test/page_sync_service_test.dart`——它用多 client 的 `FakeRoom`
    把遺失訊息、同時翻頁、斷線等情況都釘住了。
 
@@ -159,9 +162,12 @@ supabase test db       # pgTAP
 
 CI（`.github/workflows/build-check.yml`）跑的是 Flutter 3.32.4：
 pgTAP 與 `flutter analyze` + `flutter test` + arm64 APK 是兩個平行的 job。
+動到排版相關來源（`assets/reader/**`、內建字型、`lib/services/shared_page*.dart`、
+`txt_book.dart`、`tool/shared_page_check/**`、pubspec）時，另有 `shared-page-check.yml` 在 Chromium 裡跑
+`tool/shared_page_check`（GH-39）。
 **送 PR 前 `flutter analyze` 與 `flutter test` 必須是乾淨的。**
 Claude Code 雲端 session 由 `.claude/hooks/session-start.sh` 裝好同版本的 Flutter——
-升級 Flutter 時三份 workflow 與這支 hook 要一起改。改 workflow 前先讀
+升級 Flutter 時四份 workflow 與這支 hook 要一起改。改 workflow 前先讀
 [`build-and-deploy.md`](.claude/skills/build-and-deploy.md) 的「CI 設計筆記」：
 paths 過濾、concurrency、Telegram 通知的逾時與備援，每一條都對應踩過的坑。
 
