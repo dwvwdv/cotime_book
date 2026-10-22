@@ -5,7 +5,8 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:enough_convert/big5.dart';
-import 'package:enough_convert/gbk.dart';
+
+import 'gb18030.dart';
 
 /// Turns plain-text novels into an EPUB on the sharer's device.
 ///
@@ -34,7 +35,9 @@ enum TxtEncoding {
   utf8('UTF-8'),
   utf16le('UTF-16 LE'),
   utf16be('UTF-16 BE'),
-  gbk('GBK'),
+  // GB18030 is GBK with four-byte characters added, and reads every GBK file
+  // the same; the name stays `gbk` because book identifiers are made from it.
+  gbk('GBK / GB18030'),
   big5('Big5');
 
   final String label;
@@ -72,7 +75,8 @@ final _commonHan = Set<int>.of(
 
 /// Guesses the encoding of [bytes]. A byte-order mark decides outright;
 /// otherwise zero bytes on one side mean UTF-16, valid UTF-8 is UTF-8, and
-/// GBK and Big5 are told apart by which one reads as Chinese prose.
+/// GBK, Big5 and UTF-16 that is mostly Chinese are told apart by which one
+/// reads as Chinese prose.
 TxtEncoding detectTxtEncoding(Uint8List bytes) {
   if (_startsWith(bytes, const [0xEF, 0xBB, 0xBF])) return TxtEncoding.utf8;
   if (_startsWith(bytes, const [0xFF, 0xFE])) return TxtEncoding.utf16le;
@@ -102,7 +106,72 @@ TxtEncoding detectTxtEncoding(Uint8List bytes) {
   final gbk = _proseScore(decodeTxt(sample, TxtEncoding.gbk));
   final big5 = _proseScore(decodeTxt(sample, TxtEncoding.big5));
   // GBK on a tie: it is what most Chinese TXT novels come in.
-  return big5 > gbk ? TxtEncoding.big5 : TxtEncoding.gbk;
+  var best = big5 > gbk ? TxtEncoding.big5 : TxtEncoding.gbk;
+  var bestScore = big5 > gbk ? big5 : gbk;
+
+  // UTF-16 with no byte-order mark that is mostly Chinese: only its ASCII has
+  // zero bytes, too few for the check above. It has to beat GBK and Big5 at
+  // reading as prose, and before that decode with nothing a text cannot hold.
+  // An odd length cannot be UTF-16 at all.
+  if (bytes.length.isEven) {
+    final truncated = sample.length < bytes.length;
+    for (final encoding in const [TxtEncoding.utf16le, TxtEncoding.utf16be]) {
+      final score = _utf16ProseScore(
+        sample,
+        little: encoding == TxtEncoding.utf16le,
+        truncated: truncated,
+      );
+      if (score != null && score > bestScore) {
+        best = encoding;
+        bestScore = score;
+      }
+    }
+  }
+  return best;
+}
+
+/// [_proseScore] of [bytes] read as UTF-16, or null when they cannot be text
+/// in it: a surrogate without its pair, a control character other than tab
+/// and line breaks, a noncharacter, or common Chinese characters making up
+/// less than a twentieth of it.
+///
+/// GBK and Big5 read as UTF-16 land all over the code space: a novel's worth
+/// of them always hits a lone surrogate or a control character, and where
+/// they land on Chinese characters those are random, not the common ones
+/// prose is made of.
+int? _utf16ProseScore(
+  Uint8List bytes, {
+  required bool little,
+  required bool truncated,
+}) {
+  final units = Uint16List(bytes.length ~/ 2);
+  for (var i = 0; i < units.length; i++) {
+    final a = bytes[i * 2], b = bytes[i * 2 + 1];
+    units[i] = little ? a | (b << 8) : (a << 8) | b;
+  }
+  if (units.isEmpty) return null;
+  for (var i = 0; i < units.length; i++) {
+    final unit = units[i];
+    if (unit >= 0xD800 && unit <= 0xDBFF) {
+      if (i + 1 == units.length) {
+        // A sample may stop between the two halves of a character.
+        if (!truncated) return null;
+      } else if (units[i + 1] < 0xDC00 || units[i + 1] > 0xDFFF) {
+        return null;
+      } else {
+        i++;
+      }
+    } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
+      return null;
+    } else if ((unit < 0x20 && unit != 0x09 && unit != 0x0A && unit != 0x0D) ||
+        (unit >= 0x7F && unit <= 0x9F) ||
+        unit == 0xFFFE ||
+        unit == 0xFFFF) {
+      return null;
+    }
+  }
+  final score = _proseScore(String.fromCharCodes(units));
+  return score * 20 >= units.length ? score : null;
 }
 
 bool _startsWith(Uint8List bytes, List<int> prefix) {
@@ -176,7 +245,7 @@ String decodeTxt(Uint8List bytes, TxtEncoding encoding) {
       }
       return String.fromCharCodes(units);
     case TxtEncoding.gbk:
-      return const GbkCodec(allowInvalid: true).decode(bytes);
+      return decodeGb18030(bytes);
     case TxtEncoding.big5:
       return const Big5Codec(allowInvalid: true).decode(bytes);
   }
@@ -191,9 +260,12 @@ const _numerals = '0-9０-９零〇一二两兩三四五六七八九十百千万
 ///
 /// A heading is a line of its own and short; prose lines are whole
 /// paragraphs. The lookahead keeps sentences that merely begin like one
-/// ("第二回合…", "第一部分…") in the text.
+/// ("第二回合…", "第一部分…", "第二节课…") in the text.
 final _headingPatterns = [
-  RegExp('^第[\\s$_numerals]+[章回节節卷集部篇话話幕](?![合分团團门門队隊])'),
+  RegExp(
+    '^[【\\[〔［(（]?\\s*第[\\s$_numerals]+[章回节節卷集部篇话話幕]'
+    '(?![合分团團门門队隊课課])',
+  ),
   RegExp(
     r'^(序章|序言|序幕|序|楔子|引子|引言|前言|尾声|尾聲|后记|後記|终章|終章|'
     r'番外|外传|外傳|完本感言)($|[\s:：·、—-])',
@@ -202,17 +274,148 @@ final _headingPatterns = [
   RegExp(r'^(prologue|epilogue)$', caseSensitive: false),
 ];
 
+/// The [_headingPatterns] that number chapters. A file with a few of these
+/// already has its chapters, so [_numberedHeadingPatterns] are not looked
+/// for: in such a file `一、` is a list or a section within a chapter.
+final _countedHeadingPatterns = [_headingPatterns[0], _headingPatterns[2]];
+
 const _maxHeadingLength = 40;
+
+/// A heading names a chapter; it does not end the way a clause or a sentence
+/// does. "第二节课开始了。" is prose that begins like a heading.
+final _proseEnding = RegExp(r'[。，,；;]$');
+
+/// Numbered lines that are chapter headings in some novels and list items
+/// in others: `一、雨夜`, `1. The Storm`, `【01】`, `（一）`. Each captures
+/// the number.
+///
+/// Unlike [_headingPatterns], a line matching one is a heading only when the
+/// whole file numbers its chapters that way (see [_numberedLooksLikeChapters]).
+final _numberedHeadingPatterns = [
+  RegExp('^([零〇一二两兩三四五六七八九十百千]+)\\s*[、．.]'),
+  RegExp('^([0-9０-９]{1,4})\\s*[、．.](?![0-9０-９])'),
+  RegExp('^[【\\[〔［]\\s*([$_numerals]+)\\s*[】\\]〕］]'),
+  RegExp('^[（(]\\s*([$_numerals]+)\\s*[）)]'),
+];
+
+/// Shorter than [_maxHeadingLength]: these have no `第…章` to vouch for them.
+const _maxNumberedHeadingLength = 30;
+
+/// How few numbered headings make a pattern, and how much text the chapters
+/// between them hold at the median. A list has its items on adjacent lines,
+/// or a line or two apart; chapters are pages apart.
+const _minNumberedHeadings = 3;
+const _minNumberedChapterCharacters = 200;
 
 /// Whitespace a TXT line may be padded with, full-width included.
 final _padding = RegExp(r'^[\s　]+|[\s　]+$');
 
 String _trimPadding(String line) => line.replaceAll(_padding, '');
 
+/// Whether [line] is a chapter heading wherever it appears, such as
+/// `第一章` or `Chapter 12`.
 bool isTxtHeading(String line) {
   final text = _trimPadding(line);
   if (text.isEmpty || text.length > _maxHeadingLength) return false;
+  if (_proseEnding.hasMatch(text)) return false;
   return _headingPatterns.any((pattern) => pattern.hasMatch(text));
+}
+
+bool _isCountedHeading(String line) {
+  final text = _trimPadding(line);
+  return _countedHeadingPatterns.any((pattern) => pattern.hasMatch(text));
+}
+
+/// Which of [_numberedHeadingPatterns] [line] matches and the number it
+/// carries, or null.
+({int pattern, int number})? _numberedHeading(String line) {
+  final text = _trimPadding(line);
+  if (text.isEmpty || text.length > _maxNumberedHeadingLength) return null;
+  if (_proseEnding.hasMatch(text)) return null;
+  for (var p = 0; p < _numberedHeadingPatterns.length; p++) {
+    final match = _numberedHeadingPatterns[p].firstMatch(text);
+    if (match == null) continue;
+    final number = _numberValue(match.group(1)!);
+    if (number != null) return (pattern: p, number: number);
+  }
+  return null;
+}
+
+/// `12`, `１２` and `十二` → 12. Null for a mix of digits and Chinese
+/// numerals, which no one numbers chapters with.
+int? _numberValue(String text) {
+  final chars = text.runes.map(String.fromCharCode).toList();
+  if (chars.every((ch) => _asciiDigit(ch) != null)) {
+    return chars.fold<int>(0, (n, ch) => n * 10 + _asciiDigit(ch)!);
+  }
+  if (chars.every(_isHanNumeral)) return _hanValue(chars);
+  return null;
+}
+
+/// Whether numbered lines at [entries] (line index and number, in order)
+/// are how [lines] numbers its chapters: at least [_minNumberedHeadings] of
+/// them, counting up one at a time (starting over at one for a new volume
+/// now and then), with a chapter's worth of text between them.
+bool _numberedLooksLikeChapters(
+  List<({int line, int number})> entries,
+  List<String> lines,
+) {
+  if (entries.length < _minNumberedHeadings) return false;
+  var steps = 0, restarts = 0;
+  for (var k = 1; k < entries.length; k++) {
+    final previous = entries[k - 1].number, number = entries[k].number;
+    if (number == previous + 1) {
+      steps++;
+    } else if (number <= 1 && previous > number) {
+      steps++;
+      restarts++;
+    }
+  }
+  final gaps = entries.length - 1;
+  if (steps * 4 < gaps * 3 || restarts * 5 > entries.length) return false;
+
+  final lengths = <int>[
+    for (var k = 1; k < entries.length; k++)
+      [
+        for (var i = entries[k - 1].line + 1; i < entries[k].line; i++)
+          _trimPadding(lines[i]).length,
+      ].fold<int>(0, (n, length) => n + length),
+  ]..sort();
+  return lengths[lengths.length ~/ 2] >= _minNumberedChapterCharacters;
+}
+
+/// The indexes of [lines] that are chapter headings: every [isTxtHeading]
+/// line, and, in a file that does not number its chapters `第…章`, the lines
+/// of the numbered pattern its chapters follow, if any.
+Set<int> _headingLines(List<String> lines) {
+  final headings = <int>{};
+  final numbered = [
+    for (final _ in _numberedHeadingPatterns) <({int line, int number})>[],
+  ];
+  var counted = 0;
+  for (var i = 0; i < lines.length; i++) {
+    if (isTxtHeading(lines[i])) {
+      headings.add(i);
+      if (_isCountedHeading(lines[i])) counted++;
+      continue;
+    }
+    final candidate = _numberedHeading(lines[i]);
+    if (candidate != null) {
+      numbered[candidate.pattern].add((line: i, number: candidate.number));
+    }
+  }
+  if (counted >= _minNumberedHeadings) return headings;
+
+  // One pattern at most: a file whose chapters are `一、` may well have
+  // `1.` lists in them.
+  List<({int line, int number})>? chosen;
+  for (final entries in numbered) {
+    if ((chosen == null || entries.length > chosen.length) &&
+        _numberedLooksLikeChapters(entries, lines)) {
+      chosen = entries;
+    }
+  }
+  return {...headings, ...?chosen?.map((entry) => entry.line)};
 }
 
 /// A chapter of a TXT file: its heading (null for the text before the first
@@ -227,7 +430,20 @@ class TxtChapter {
 /// Splits [text] into chapters at heading lines. Text before the first
 /// heading becomes a chapter without one; blank lines are dropped (they only
 /// separate paragraphs, which the EPUB does with margins).
-List<TxtChapter> splitTxtChapters(String text) {
+///
+/// With [findChapters] off the whole text is one chapter without a heading,
+/// which the EPUB cuts by length: the way out when headings were found
+/// where there are none.
+List<TxtChapter> splitTxtChapters(String text, {bool findChapters = true}) {
+  // Leading full-width spaces are the novel's own paragraph indent; keep
+  // them. Trailing ones are noise.
+  final lines = [
+    for (final rawLine in const LineSplitter().convert(text))
+      if (_trimPadding(rawLine).isNotEmpty)
+        rawLine.replaceFirst(RegExp(r'[\s　]+$'), ''),
+  ];
+  final headings = findChapters ? _headingLines(lines) : const <int>{};
+
   final chapters = <TxtChapter>[];
   String? heading;
   var paragraphs = <String>[];
@@ -239,12 +455,9 @@ List<TxtChapter> splitTxtChapters(String text) {
     }
   }
 
-  for (final rawLine in const LineSplitter().convert(text)) {
-    // Leading full-width spaces are the novel's own paragraph indent; keep
-    // them. Trailing ones are noise.
-    final line = rawLine.replaceFirst(RegExp(r'[\s　]+$'), '');
-    if (_trimPadding(line).isEmpty) continue;
-    if (isTxtHeading(line)) {
+  for (var i = 0; i < lines.length; i++) {
+    final line = lines[i];
+    if (headings.contains(i)) {
       if (hasChapter || paragraphs.isNotEmpty) close();
       heading = _trimPadding(line);
       paragraphs = <String>[];
@@ -488,7 +701,16 @@ class TxtBookRequest {
   final String? author;
   final List<TxtPart> parts;
 
-  const TxtBookRequest({required this.title, required this.parts, this.author});
+  /// Off when the reader saw chapters found where there are none: the text
+  /// is then cut by length alone (see [splitTxtChapters]).
+  final bool findChapters;
+
+  const TxtBookRequest({
+    required this.title,
+    required this.parts,
+    this.author,
+    this.findChapters = true,
+  });
 }
 
 /// Characters per XHTML file at most. epub.js loads one file at a time, and a
@@ -540,7 +762,7 @@ Uint8List buildTxtEpub(TxtBookRequest request) {
     if (languageSample.length < 4000) {
       languageSample.write(text.substring(0, text.length.clamp(0, 4000)));
     }
-    final chapters = splitTxtChapters(text);
+    final chapters = splitTxtChapters(text, findChapters: request.findChapters);
     final untitled = volumes ? part.source.stem.trim() : title;
     final entries = <_NavEntry>[];
     final untitledEntries = <int>[];
@@ -666,6 +888,9 @@ String _identifier(TxtBookRequest request, String title) {
       0,
       ...sha256.convert(part.source.bytes).bytes,
     ],
+    // Only when off, so a book made with chapters keeps the identifier it
+    // had before this choice existed.
+    if (!request.findChapters) ...[0, ...utf8.encode('no-chapters')],
   ]);
   return 'urn:cotime-txt:$digest';
 }

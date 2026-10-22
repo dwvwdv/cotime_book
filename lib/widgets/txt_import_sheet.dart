@@ -44,6 +44,10 @@ Future<TxtBookRequest?> showTxtImportSheet({
 /// The encoding is the one thing detection can get wrong, and only a person
 /// can tell: each file shows its first lines, and a wrong guess reads as
 /// nonsense there. Changing it decodes the file again.
+///
+/// Chapter headings are found by rule, and a rule can take a line of prose
+/// for one. The rules are not something to edit on an e-reader, so there is
+/// one switch instead: off, the book is cut by length alone.
 class TxtImportSheet extends StatefulWidget {
   final TxtImportDraft draft;
   final ValueChanged<TxtBookRequest> onConfirm;
@@ -78,6 +82,7 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
   late final TextEditingController _title;
   late final TextEditingController _author;
   late final List<_FileRow> _rows;
+  bool _findChapters = true;
 
   @override
   void initState() {
@@ -129,6 +134,7 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
       TxtBookRequest(
         title: _title.text.trim(),
         author: _author.text.trim().isEmpty ? null : _author.text.trim(),
+        findChapters: _findChapters,
         parts: [
           for (final row in _rows)
             if (!row.analysis.isEmpty)
@@ -179,7 +185,11 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
           SectionHeader(
             label: several ? 'Files' : 'File',
             trailing: Text(
-              chapters == 0 ? 'No chapters found' : _count(chapters, 'chapter'),
+              !_findChapters
+                  ? 'Split by length'
+                  : chapters == 0
+                  ? 'No chapters found'
+                  : _count(chapters, 'chapter'),
               style: AppTheme.caption,
             ),
           ),
@@ -189,9 +199,28 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
               index: index,
               row: _rows[index],
               showOrder: several,
+              findChapters: _findChapters,
               onEncoding: (encoding) => _setEncoding(_rows[index], encoding),
               onUp: index > 0 ? () => _move(index, -1) : null,
               onDown: index < _rows.length - 1 ? () => _move(index, 1) : null,
+            ),
+          // Nothing to turn off in a book with no chapters found; still
+          // there once off, so it can be turned back on.
+          if (chapters > 0 || !_findChapters)
+            SwitchListTile(
+              key: const ValueKey('txt-find-chapters'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'Split into chapters',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: const Text(
+                'Turn off if lines that are not chapter titles were taken '
+                'for them. The book is then split by length.',
+                style: AppTheme.caption,
+              ),
+              value: _findChapters,
+              onChanged: (value) => setState(() => _findChapters = value),
             ),
           const SizedBox(height: 16),
           Row(
@@ -227,6 +256,7 @@ class _FileTile extends StatelessWidget {
   final int index;
   final _FileRow row;
   final bool showOrder;
+  final bool findChapters;
   final ValueChanged<TxtEncoding> onEncoding;
   final VoidCallback? onUp;
   final VoidCallback? onDown;
@@ -236,6 +266,7 @@ class _FileTile extends StatelessWidget {
     required this.index,
     required this.row,
     required this.showOrder,
+    required this.findChapters,
     required this.onEncoding,
     required this.onUp,
     required this.onDown,
@@ -246,6 +277,7 @@ class _FileTile extends StatelessWidget {
     if (row.isReading) return 'Reading...';
     if (analysis.isEmpty) return 'No text in this encoding; it will be skipped';
     final characters = '${_grouped(analysis.characterCount)} characters';
+    if (!findChapters) return 'Split by length · $characters';
     return analysis.chapterCount == 0
         ? 'No chapter headings, split by length · $characters'
         : '${_count(analysis.chapterCount, 'chapter')} · $characters';
