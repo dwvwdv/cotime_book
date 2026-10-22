@@ -573,6 +573,51 @@ void main() {
       expect(service.bookExpectedRevisions, [0]);
       expect(notifier.state.currentRoom?.currentBookHash, otherBook);
     });
+
+    test('a library book is recorded in the room with its library path', () async {
+      // GH-28: members who open the lobby after the share only see the room
+      // row, so the path has to be stored there, not just broadcast.
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      await notifier.updateBookShared(
+        bookTitle: 'Moby-Dick',
+        bookHash: List.filled(64, 'b').join(),
+        libraryPath: 'classics/moby-dick.epub',
+      );
+      expect(
+        notifier.state.currentRoom?.currentBookLibraryPath,
+        'classics/moby-dick.epub',
+      );
+
+      // A book from this device replaces the path instead of inheriting it.
+      await notifier.updateBookShared(
+        bookTitle: 'Notes',
+        bookHash: List.filled(64, 'c').join(),
+      );
+      expect(service.bookLibraryPaths, ['classics/moby-dick.epub', null]);
+      expect(notifier.state.currentRoom?.currentBookLibraryPath, isNull);
+    });
+
+    test('a shared book announcement replaces the previous library path', () async {
+      final service = FakeRoomService()
+        ..nextRoom = testRoom().copyWith(
+          currentBookHash: List.filled(64, 'a').join(),
+          currentBookLibraryPath: 'classics/old.epub',
+        );
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+
+      await notifier.createRoom('Alice');
+      notifier.onBookSharedReceived(
+        bookTitle: 'Local book',
+        bookHash: List.filled(64, 'b').join(),
+      );
+
+      expect(notifier.state.currentRoom?.currentBookLibraryPath, isNull);
+    });
   });
 
   // GH-30: copyWith used to drop the error on every update, so a message
@@ -709,6 +754,7 @@ class FakeRoomService extends RoomService {
   Room conflictRoom = testRoom();
   final List<int> cfiExpectedRevisions = [];
   final List<int> bookExpectedRevisions = [];
+  final List<String?> bookLibraryPaths = [];
   final List<String> cfiWrites = [];
 
   Object? joinError;
@@ -792,8 +838,10 @@ class FakeRoomService extends RoomService {
     required String bookTitle,
     required String bookHash,
     required int expectedRevision,
+    String? libraryPath,
   }) async {
     bookExpectedRevisions.add(expectedRevision);
+    bookLibraryPaths.add(libraryPath);
     final error = bookError;
     if (error != null) throw error;
     if (bookConflicts > 0) {
@@ -803,6 +851,7 @@ class FakeRoomService extends RoomService {
     return nextRoom.copyWith(
       currentBookTitle: bookTitle,
       currentBookHash: bookHash,
+      currentBookLibraryPath: libraryPath,
       revision: expectedRevision + 1,
     );
   }

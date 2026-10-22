@@ -69,7 +69,6 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
   StreamSubscription<RealtimeConnectionEvent>? _connectionSubscription;
 
   String? _currentRoomCode;
-  String? _currentRoomTopicId;
   String? _currentUserId;
   String? _currentNickname;
   int _currentAvatarColorIndex = 0;
@@ -119,22 +118,18 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
     required String nickname,
     required int avatarColorIndex,
     bool hasBook = false,
-    String? roomTopicId,
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
   }) async {
     final normalizedCode = roomCode.trim().toUpperCase();
-    final normalizedTopicId = _normalizeTopicId(roomTopicId);
     final sameSession =
         _currentRoomCode == normalizedCode &&
-        _currentRoomTopicId == normalizedTopicId &&
         _currentUserId == userId &&
         (state.connectionStatus == RealtimeConnectionStatus.connecting ||
             state.connectionStatus == RealtimeConnectionStatus.connected ||
             state.connectionStatus == RealtimeConnectionStatus.reconnecting);
     _currentRoomCode = normalizedCode;
-    _currentRoomTopicId = normalizedTopicId;
     _currentUserId = userId;
     _currentNickname = nickname;
     _currentAvatarColorIndex = avatarColorIndex;
@@ -156,7 +151,6 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
         nickname: nickname,
         avatarColorIndex: avatarColorIndex,
         hasBook: hasBook,
-        roomTopicId: normalizedTopicId,
         bookHash: bookHash,
         isReading: _isAppActive && isReading,
         readerReady: _isAppActive && readerReady,
@@ -300,7 +294,6 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
     _joinAnnouncementRetryTimer?.cancel();
     _joinAnnouncementRetryTimer = null;
     _currentRoomCode = null;
-    _currentRoomTopicId = null;
     _currentUserId = null;
     _currentNickname = null;
     _currentAvatarColorIndex = 0;
@@ -310,11 +303,6 @@ class PresenceNotifier extends StateNotifier<PresenceState> {
     _currentReaderReady = false;
     _currentPageFit = null;
     _isAppActive = true;
-  }
-
-  String? _normalizeTopicId(String? roomTopicId) {
-    final normalized = roomTopicId?.trim().toLowerCase();
-    return normalized == null || normalized.isEmpty ? null : normalized;
   }
 
   @override

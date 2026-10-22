@@ -163,7 +163,6 @@ class RealtimeService {
   final RoomRealtimeChannelFactory _channelFactory;
   RoomRealtimeChannel? _channel;
   String? _roomCode;
-  String? _roomTopicId;
   String? _userId;
   Map<String, dynamic>? _presencePayload;
   RealtimeConnectionStatus _connectionStatus =
@@ -275,14 +274,12 @@ class RealtimeService {
     required String nickname,
     required int avatarColorIndex,
     required bool hasBook,
-    String? roomTopicId,
     String? bookHash,
     bool isReading = false,
     bool readerReady = false,
     Map<String, dynamic>? pageFit,
   }) {
     final normalizedCode = roomCode.trim().toUpperCase();
-    final normalizedTopicId = _normalizeTopicId(roomTopicId);
     final payload = _buildPresencePayload(
       userId: userId,
       nickname: nickname,
@@ -302,7 +299,6 @@ class RealtimeService {
           _connectionStatus == RealtimeConnectionStatus.connected ||
           _connectionStatus == RealtimeConnectionStatus.reconnecting;
       if (_roomCode == normalizedCode &&
-          _roomTopicId == normalizedTopicId &&
           _userId == userId &&
           _channel != null &&
           canReuseCurrentChannel) {
@@ -315,7 +311,6 @@ class RealtimeService {
       _recoveryAttempts = 0;
       _openChannel(
         roomCode: normalizedCode,
-        topicId: normalizedTopicId,
         userId: userId,
         payload: payload,
         initialStatus: RealtimeConnectionStatus.connecting,
@@ -327,17 +322,18 @@ class RealtimeService {
   /// every rebuild after the connection broke.
   void _openChannel({
     required String roomCode,
-    required String? topicId,
     required String userId,
     required Map<String, dynamic> payload,
     required RealtimeConnectionStatus initialStatus,
   }) {
-    final channelName = AppConstants.roomChannelName(topicId ?? roomCode);
+    // Always the room code: it is the only topic the server authorizes
+    // (GH-31). Codes are reserved forever, so a code topic never reaches
+    // another room.
+    final channelName = AppConstants.roomChannelName(roomCode);
     final generation = ++_generation;
     final channel = _channelFactory(channelName, userId);
     _channel = channel;
     _roomCode = roomCode;
-    _roomTopicId = topicId;
     _userId = userId;
     _presencePayload = payload;
     _emitConnection(initialStatus);
@@ -437,7 +433,6 @@ class RealtimeService {
           payload == null) {
         return;
       }
-      final topicId = _roomTopicId;
       _recoveryAttempts++;
       debugPrint('Rebuilding room channel (attempt $_recoveryAttempts)');
       try {
@@ -459,7 +454,6 @@ class RealtimeService {
       if (_isClosed) return;
       _openChannel(
         roomCode: roomCode,
-        topicId: topicId,
         userId: userId,
         payload: payload,
         initialStatus: RealtimeConnectionStatus.reconnecting,
@@ -619,7 +613,6 @@ class RealtimeService {
     final channel = _channel;
     if (channel == null) {
       _roomCode = null;
-      _roomTopicId = null;
       _userId = null;
       _presencePayload = null;
       if (emitDisconnected) {
@@ -631,7 +624,6 @@ class RealtimeService {
     ++_generation; // Invalidate callbacks before awaiting any network work.
     _channel = null;
     _roomCode = null;
-    _roomTopicId = null;
     _userId = null;
     _presencePayload = null;
 
@@ -699,11 +691,6 @@ class RealtimeService {
       // can live in Presence (see _schedulePresenceTrack).
       'page_fit': pageFit,
     };
-  }
-
-  String? _normalizeTopicId(String? roomTopicId) {
-    final normalized = roomTopicId?.trim().toLowerCase();
-    return normalized == null || normalized.isEmpty ? null : normalized;
   }
 
   Future<T> _serialize<T>(Future<T> Function() operation) {

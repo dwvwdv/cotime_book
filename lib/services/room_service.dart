@@ -136,6 +136,7 @@ class RoomService {
     required String bookTitle,
     required String bookHash,
     required int expectedRevision,
+    String? libraryPath,
   }) async {
     try {
       final roomData = await _database
@@ -143,6 +144,9 @@ class RoomService {
           .update({
             'current_book_title': bookTitle,
             'current_book_hash': bookHash,
+            // Always written, null included: a path left over from the
+            // previous book would send late joiners to the wrong file (GH-28).
+            'current_book_library_path': libraryPath,
           })
           .eq('id', roomId)
           .eq('revision', expectedRevision)

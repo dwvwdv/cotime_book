@@ -409,14 +409,24 @@ class BookNotifier extends StateNotifier<BookState> {
 
     final isRoomBook = await ref
         .read(roomProvider.notifier)
-        .updateBookShared(bookTitle: metadata.title, bookHash: hash);
+        .updateBookShared(
+          bookTitle: metadata.title,
+          bookHash: hash,
+          libraryPath: libraryPath,
+        );
     if (!_isCurrent(generation)) return;
     if (!isRoomBook) {
       // Someone else's book reached the room first. Follow it: its share
       // broadcast may have arrived already, or may never arrive.
       state = state.copyWith(isLoading: false);
-      final roomBookHash = ref.read(roomProvider).currentRoom?.currentBookHash;
-      if (roomBookHash != null) await prepareForSharedBook(roomBookHash);
+      final room = ref.read(roomProvider).currentRoom;
+      final roomBookHash = room?.currentBookHash;
+      if (roomBookHash != null) {
+        await prepareForSharedBook(
+          roomBookHash,
+          libraryPath: room?.currentBookLibraryPath,
+        );
+      }
       return;
     }
     if (!_isCurrentShare(generation, shareGeneration)) return;
@@ -513,7 +523,11 @@ class BookNotifier extends StateNotifier<BookState> {
     }
   }
 
-  Future<void> loadExistingBook(String bookHash) async {
+  /// Opens the room's book [bookHash] when entering the lobby: from this
+  /// device if it is here, otherwise by receiving it. [libraryPath] is the
+  /// room's record of where the book is in the public library, so a member
+  /// who missed the share broadcast still downloads it directly (GH-28).
+  Future<void> loadExistingBook(String bookHash, {String? libraryPath}) async {
     final generation = _sessionGeneration;
     final file = await _storageService.getBookFile(bookHash);
     if (!_isCurrent(generation)) return;
@@ -532,7 +546,7 @@ class BookNotifier extends StateNotifier<BookState> {
           .read(presenceProvider.notifier)
           .updateHasBook(true, bookHash: bookHash);
     } else {
-      await prepareForSharedBook(bookHash);
+      await prepareForSharedBook(bookHash, libraryPath: libraryPath);
     }
   }
 
@@ -552,8 +566,9 @@ class BookNotifier extends StateNotifier<BookState> {
       ++_shareGeneration;
     }
     _expectedBookHash = bookHash;
-    // The path arrives in a room broadcast; anything but a plain object name
-    // in the library bucket is ignored. The download is hash-checked anyway.
+    // The path comes from a room broadcast or the room row, both written by
+    // other members; anything but a plain object name in the library bucket
+    // is ignored. The download is hash-checked anyway.
     if (libraryPath != null && isPlainLibraryPath(libraryPath)) {
       _expectedLibraryPath = libraryPath;
     }

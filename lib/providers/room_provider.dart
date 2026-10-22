@@ -233,6 +233,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
   void onBookSharedReceived({
     required String bookTitle,
     required String bookHash,
+    String? libraryPath,
   }) {
     final room = state.currentRoom;
     if (room == null) return;
@@ -240,6 +241,9 @@ class RoomNotifier extends StateNotifier<RoomState> {
       currentRoom: room.copyWith(
         currentBookTitle: bookTitle,
         currentBookHash: bookHash,
+        // Replaced even when null: the previous book's path does not locate
+        // this one.
+        currentBookLibraryPath: libraryPath,
       ),
     );
   }
@@ -271,9 +275,14 @@ class RoomNotifier extends StateNotifier<RoomState> {
   /// book reached the room first: two shares racing each other resolve to the
   /// one that committed first, and the other device follows it instead of
   /// overwriting it on the conflict retry.
+  ///
+  /// [libraryPath] is where the book is in the public library, null when it
+  /// is not from there. The room keeps it so members who arrive later can
+  /// download the book too (GH-28).
   Future<bool> updateBookShared({
     required String bookTitle,
     required String bookHash,
+    String? libraryPath,
   }) async {
     final room = state.currentRoom;
     if (room == null) return false;
@@ -288,6 +297,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
           bookTitle: bookTitle,
           bookHash: bookHash,
           expectedRevision: writeOrigin.revision,
+          libraryPath: libraryPath,
         );
         break;
       } on RoomRevisionConflictException catch (error) {

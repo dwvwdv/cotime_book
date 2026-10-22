@@ -89,7 +89,10 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
           !ref.read(bookProvider.notifier).hasBook(room.currentBookHash!)) {
         await ref
             .read(bookProvider.notifier)
-            .loadExistingBook(room.currentBookHash!);
+            .loadExistingBook(
+              room.currentBookHash!,
+              libraryPath: room.currentBookLibraryPath,
+            );
       }
 
       final ownMember = roomState.members
@@ -132,6 +135,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
           roomNotifier.onBookSharedReceived(
             bookTitle: bookTitle ?? 'Unknown',
             bookHash: bookHash,
+            libraryPath: libraryPath is String ? libraryPath : null,
           );
           // The broadcast carries display metadata, while the authoritative
           // revision comes from the database update that preceded it.

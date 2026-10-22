@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:cotime_book/models/library_book.dart';
 import 'package:cotime_book/models/room_member.dart';
 import 'package:cotime_book/providers/auth_provider.dart';
@@ -5,13 +8,16 @@ import 'package:cotime_book/providers/book_provider.dart';
 import 'package:cotime_book/providers/presence_provider.dart';
 import 'package:cotime_book/providers/room_provider.dart';
 import 'package:cotime_book/screens/room_lobby_screen.dart';
+import 'package:cotime_book/services/library_service.dart';
 import 'package:cotime_book/services/realtime_service.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
     show RealtimeSubscribeStatus;
 
+import 'book_provider_test.dart' show MemoryEpubStorage;
 import 'library_test.dart' show FakeLibrary;
 import 'room_provider_test.dart' show FakeRoomService, testRoom;
 
@@ -226,6 +232,51 @@ void main() {
       await tester.pump();
       await disposeLobby(tester, container);
     });
+
+    testWidgets(
+      'a member who arrives after a library share downloads it from the library',
+      (tester) async {
+        // GH-28: the library path was only in the share broadcast, so someone
+        // who opened the lobby afterwards waited on the slower peer-to-peer
+        // transfer, which also needs a member holding the book to be online.
+        // A phone-sized screen: the default 800x600 test view is too short
+        // for the lobby with both the transfer and the book card showing.
+        tester.view.physicalSize = const Size(1080, 2400);
+        tester.view.devicePixelRatio = 3;
+        addTearDown(tester.view.reset);
+        final storage = MemoryEpubStorage();
+        addTearDown(() => storage.dir.deleteSync(recursive: true));
+        final library = _PendingLibrary();
+        final book = Uint8List.fromList(List.generate(4000, (i) => i % 13));
+        final rooms = FakeRoomService()
+          ..members = [testMember('alice'), testMember('bob')]
+          ..nextRoom = testRoom().copyWith(
+            currentBookTitle: 'Moby-Dick',
+            currentBookHash: sha256.convert(book).toString(),
+            currentBookLibraryPath: 'classics/moby-dick.epub',
+          );
+        final container = await joinedContainer(
+          tester,
+          rooms,
+          library: library,
+          storage: storage,
+        );
+        await pumpLobby(tester, container);
+
+        expect(library.downloads.keys, ['classics/moby-dick.epub']);
+        expect(
+          find.text('Downloading the book from the library...'),
+          findsOneWidget,
+        );
+
+        library.downloads['classics/moby-dick.epub']!.complete(book);
+        for (var i = 0; i < 5; i++) {
+          await tester.pump(const Duration(milliseconds: 10));
+        }
+        expect(find.text('Book received'), findsOneWidget);
+        await disposeLobby(tester, container);
+      },
+    );
   });
 }
 
@@ -246,7 +297,8 @@ class _SignedInAuth extends AuthNotifier {
 Future<ProviderContainer> joinedContainer(
   WidgetTester tester,
   FakeRoomService rooms, {
-  FakeLibrary? library,
+  LibraryService? library,
+  MemoryEpubStorage? storage,
 }) async {
   final realtime = RealtimeService(
     channelFactory: (name, key) => _SilentChannel(),
@@ -257,6 +309,7 @@ Future<ProviderContainer> joinedContainer(
       realtimeServiceProvider.overrideWithValue(realtime),
       authProvider.overrideWith((ref) => _SignedInAuth()),
       if (library != null) libraryServiceProvider.overrideWithValue(library),
+      if (storage != null) epubStorageProvider.overrideWithValue(storage),
     ],
   );
   await container
@@ -295,6 +348,21 @@ Future<void> disposeLobby(
   await tester.pump();
   await closing;
   container.dispose();
+}
+
+/// A library whose downloads finish when the test says so.
+class _PendingLibrary implements LibraryService {
+  final downloads = <String, Completer<Uint8List>>{};
+
+  @override
+  Future<List<LibraryBook>> listBooks() async => const [];
+
+  @override
+  Future<Uint8List> download(String path) =>
+      (downloads[path] = Completer<Uint8List>()).future;
+
+  @override
+  String coverUrl(String path) => 'https://library.test/$path';
 }
 
 /// A channel that never connects: the lobby must work from the database

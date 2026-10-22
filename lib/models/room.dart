@@ -1,3 +1,7 @@
+/// Marks a [Room.copyWith] argument that was not passed, so a nullable
+/// field can still be cleared by passing null.
+const Object _unset = Object();
+
 class Room {
   final String id;
   final String code;
@@ -5,6 +9,10 @@ class Room {
   final String? channelId;
   final String? currentBookTitle;
   final String? currentBookHash;
+
+  /// Where [currentBookHash] is in the public library, when it was shared from
+  /// there. Null for any other book.
+  final String? currentBookLibraryPath;
   final String? currentCfi;
   final bool isActive;
   final DateTime? closedAt;
@@ -21,6 +29,7 @@ class Room {
     this.channelId,
     this.currentBookTitle,
     this.currentBookHash,
+    this.currentBookLibraryPath,
     this.currentCfi,
     this.isActive = true,
     this.closedAt,
@@ -39,6 +48,7 @@ class Room {
       channelId: json['channel_id'] as String?,
       currentBookTitle: json['current_book_title'] as String?,
       currentBookHash: json['current_book_hash'] as String?,
+      currentBookLibraryPath: json['current_book_library_path'] as String?,
       currentCfi: json['current_cfi'] as String?,
       isActive: json['is_active'] as bool? ?? true,
       closedAt: json['closed_at'] != null
@@ -64,6 +74,7 @@ class Room {
       'channel_id': channelId,
       'current_book_title': currentBookTitle,
       'current_book_hash': currentBookHash,
+      'current_book_library_path': currentBookLibraryPath,
       'current_cfi': currentCfi,
       'is_active': isActive,
       'closed_at': closedAt?.toIso8601String(),
@@ -82,6 +93,7 @@ class Room {
     String? channelId,
     String? currentBookTitle,
     String? currentBookHash,
+    Object? currentBookLibraryPath = _unset,
     String? currentCfi,
     bool? isActive,
     DateTime? closedAt,
@@ -98,6 +110,9 @@ class Room {
       channelId: channelId ?? this.channelId,
       currentBookTitle: currentBookTitle ?? this.currentBookTitle,
       currentBookHash: currentBookHash ?? this.currentBookHash,
+      currentBookLibraryPath: identical(currentBookLibraryPath, _unset)
+          ? this.currentBookLibraryPath
+          : currentBookLibraryPath as String?,
       currentCfi: currentCfi ?? this.currentCfi,
       isActive: isActive ?? this.isActive,
       closedAt: closedAt ?? this.closedAt,

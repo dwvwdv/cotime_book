@@ -61,6 +61,21 @@ void main() {
       expect(realtime.isConnected, isTrue);
     }
 
+    test('is rebuilt on the room code topic', () async {
+      // GH-31: the server authorizes only `cotime_book:room:<code>`; a
+      // rebuild on any other topic would be refused and leave the room
+      // disconnected.
+      await joinAndSubscribe();
+      built.first.emitStatus(RealtimeSubscribeStatus.closed);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+
+      expect(built, hasLength(2));
+      expect(
+        built.map((channel) => channel.name),
+        everyElement('cotime_book:room:ABC234'),
+      );
+    });
+
     test('is rebuilt when the server or library closes it', () async {
       // Regression: a closed channel is never rejoined by the library, so the
       // room stayed at "0 readers ready" until the app was restarted.

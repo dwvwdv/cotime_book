@@ -97,6 +97,7 @@ void main() {
         hostUserId: 'user-1',
         currentBookTitle: 'Test Book',
         currentBookHash: 'hash123',
+        currentBookLibraryPath: 'classics/test.epub',
         currentCfi: 'epubcfi(/6/4)',
         isActive: true,
         createdAt: now,
@@ -110,7 +111,40 @@ void main() {
       expect(restored.code, room.code);
       expect(restored.hostUserId, room.hostUserId);
       expect(restored.currentBookTitle, room.currentBookTitle);
+      expect(restored.currentBookLibraryPath, 'classics/test.epub');
       expect(restored.isActive, room.isActive);
+    });
+
+    test('a room row from before the library path column has no path', () {
+      final json = Room(
+        id: '123',
+        code: 'ABC123',
+        hostUserId: 'user-1',
+        createdAt: DateTime.utc(2026),
+        updatedAt: DateTime.utc(2026),
+      ).toJson()..remove('current_book_library_path');
+
+      expect(Room.fromJson(json).currentBookLibraryPath, isNull);
+    });
+
+    test('copyWith keeps the library path unless it is passed', () {
+      final room = Room(
+        id: '123',
+        code: 'ABC123',
+        hostUserId: 'user-1',
+        currentBookLibraryPath: 'classics/test.epub',
+        createdAt: DateTime.utc(2026),
+        updatedAt: DateTime.utc(2026),
+      );
+
+      expect(
+        room.copyWith(currentCfi: 'epubcfi(/6/4)').currentBookLibraryPath,
+        'classics/test.epub',
+      );
+      expect(
+        room.copyWith(currentBookLibraryPath: null).currentBookLibraryPath,
+        isNull,
+      );
     });
 
     test('copyWith updates fields', () {
