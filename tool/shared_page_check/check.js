@@ -8,7 +8,9 @@
 // checks it lands on that page rather than the one before (issue #21).
 // Pages with nothing on them — where a chapter's empty tail spills onto a
 // page of its own — must never be turned to, and a page with only a picture
-// on it must be named by that picture (issue #22).
+// on it must be named by that picture (issue #22). The tablet shows the
+// phone's page enlarged to fill its screen, by the WebView's page scale
+// (GH-37); its pages must still be the phone's.
 //
 //   flutter pub get
 //   node tool/shared_page_check/check.js        (from the repo root)
@@ -80,6 +82,13 @@ const devices = {
 };
 const page = { width: 360, height: 640, fontSize: 22 };
 
+// SharedPageRenderer.scaleFor.
+function scaleFor(viewport) {
+  const fit = Math.min((viewport.width - 4) / page.width, (viewport.height - 4) / page.height);
+  const scale = Math.floor(Math.min(fit, 3) * 100) / 100;
+  return scale > 1 ? scale : 1;
+}
+
 function rulesFor(device) {
   const text = { ...rules['body, body *'] };
   text['font-family'] = text['font-family'].replace(' serif ', ` ${device.cjk} `);
@@ -90,6 +99,9 @@ async function openBook(browser, device, shared) {
   const context = await browser.newContext({
     viewport: device.viewport,
     deviceScaleFactor: device.deviceScaleFactor,
+    // Honours the viewport meta tag, as a phone's WebView does.
+    isMobile: true,
+    hasTouch: true,
   });
   const tab = await context.newPage();
   tab.on('pageerror', (e) => console.error('page error:', e.message));
@@ -122,11 +134,27 @@ async function openBook(browser, device, shared) {
         ...page,
         left: Math.floor((device.viewport.width - page.width) / 2),
         top: Math.floor((device.viewport.height - page.height) / 2),
+        scale: scaleFor(device.viewport),
+        screenWidth: device.viewport.width,
         rules: rulesFor(device),
       },
     );
   }
   return { context, tab };
+}
+
+/// How large the page is drawn, and whether all of it is in view.
+function pageScale(tab) {
+  return tab.evaluate(() => {
+    const box = document.getElementById('viewer').getBoundingClientRect();
+    const vv = window.visualViewport;
+    return {
+      scale: vv.scale,
+      fits: box.left >= vv.offsetLeft && box.top >= vv.offsetTop &&
+        box.right <= vv.offsetLeft + vv.width + 0.5 &&
+        box.bottom <= vv.offsetTop + vv.height + 0.5,
+    };
+  });
 }
 
 /// What is on the page in view: 'text', 'picture' (and no text) or ''.
@@ -183,6 +211,7 @@ function turn(tab, direction) {
 /// show nothing at all, and which only a picture.
 async function pageStarts(browser, device, shared, turns) {
   const { context, tab } = await openBook(browser, device, shared);
+  const scale = await pageScale(tab);
   const starts = [];
   const blank = [];
   const pictures = [];
@@ -207,7 +236,7 @@ async function pageStarts(browser, device, shared, turns) {
   }
   back.reverse();
   await context.close();
-  return { starts, blank, pictures, back };
+  return { starts, blank, pictures, back, scale };
 }
 
 /// How many of [starts] a follower on [device] does not land on.
@@ -273,6 +302,12 @@ async function missedCommits(browser, device, starts) {
           phone.back.every((cfi, i) => cfi === a[i]);
         console.log(`backwards   : ${backSame ? 'the same pages' : 'different pages'}`);
         if (!backSame) failed = true;
+        const expected = scaleFor(devices.tablet.viewport);
+        const enlarged = Math.abs(tablet.scale.scale - expected) < 0.02 &&
+          tablet.scale.fits && phone.scale.scale === 1 && phone.scale.fits;
+        console.log(`tablet page : drawn x${tablet.scale.scale.toFixed(2)} ` +
+          `(expected x${expected}), ${tablet.scale.fits ? 'all in view' : 'cut off'}`);
+        if (!enlarged) failed = true;
         const { missed, of } = await missedCommits(browser, devices.tablet, a);
         console.log(`follower    : landed on ${of - missed}/${of} reported pages`);
         if (missed > 0) failed = true;

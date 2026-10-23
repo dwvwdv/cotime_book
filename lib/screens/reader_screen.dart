@@ -69,6 +69,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// first layout lands.
   SharedPage? _appliedPage;
 
+  /// The viewer area [_appliedPage] was placed on. The page is centred and
+  /// enlarged for this screen (GH-37), so a new area (rotation) has to be
+  /// placed again even when the room's page stays the same.
+  Size? _appliedViewerSize;
+
   /// A layout is being applied. Its relocations are re-layouts, not moves.
   bool _layoutInFlight = false;
   int _layoutGeneration = 0;
@@ -374,6 +379,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _chaptersLoaded = false;
       // A new WebView starts on its own layout again.
       _appliedPage = null;
+      _appliedViewerSize = null;
       _layoutInFlight = false;
       _layoutGeneration++;
       _layoutOwed = false;
@@ -420,7 +426,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       presenceIsCurrent: presence.isConnected && presence.hasInitialSync,
       previous: _roomPage,
     );
-    if (_roomPage != _appliedPage || _layoutOwed) _scheduleLayoutSync();
+    if (_roomPage != _appliedPage ||
+        viewerSize != _appliedViewerSize ||
+        _layoutOwed) {
+      _scheduleLayoutSync();
+    }
   }
 
   /// A new layout moves every page break, so it waits for a moment when
@@ -451,7 +461,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final viewerSize = _viewerSize;
     if (page == null ||
         viewerSize == null ||
-        (page == _appliedPage && !_layoutOwed) ||
+        (page == _appliedPage &&
+            viewerSize == _appliedViewerSize &&
+            !_layoutOwed) ||
         !_canApplyLayout) {
       // A turn or a display in flight: the next build tries again.
       return;
@@ -479,6 +491,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     setState(() {
       _layoutInFlight = false;
       _appliedPage = page;
+      _appliedViewerSize = viewerSize;
       _layoutOwed = false;
     });
     if (applied) {

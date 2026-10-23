@@ -132,6 +132,37 @@ void main() {
     expect(origin, const Offset(26, 30));
   });
 
+  group('a bigger screen enlarges the shared page (GH-37)', () {
+    const phonePage = SharedPage(width: 360, height: 640, fontSize: 20);
+
+    test('a tablet reading with a phone fills its screen', () {
+      final scale = SharedPageRenderer.scaleFor(
+        phonePage,
+        const Size(800, 1200),
+      );
+      // Limited by the height: 1196 / 640.
+      expect(scale, 1.86);
+      expect(phonePage.width * scale, lessThanOrEqualTo(800));
+      expect(phonePage.height * scale, lessThanOrEqualTo(1200 - 4));
+    });
+
+    test('the screen the page was made for is not enlarged', () {
+      expect(SharedPageRenderer.scaleFor(phonePage, const Size(360, 640)), 1);
+      expect(SharedPageRenderer.scaleFor(phonePage, const Size(361.5, 641)), 1);
+    });
+
+    test('a page is never shrunk', () {
+      expect(SharedPageRenderer.scaleFor(phonePage, const Size(300, 500)), 1);
+    });
+
+    test('a very large screen stops at the cap', () {
+      expect(
+        SharedPageRenderer.scaleFor(phonePage, const Size(2560, 2560)),
+        SharedPageRenderer.maxScale,
+      );
+    });
+  });
+
   group('the book is set in the bundled font on every device', () {
     late Map<String, dynamic> rules;
 

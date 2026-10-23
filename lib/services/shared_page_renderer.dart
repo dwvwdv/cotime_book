@@ -25,8 +25,28 @@ class SharedPageRenderer {
 
   static Future<String>? _script;
 
-  /// Where [page] sits on a viewer of [viewport]: centred, never off the
-  /// top-left edge.
+  /// The most a page is enlarged: past this the text is larger than anyone
+  /// in the room asked for by more than any screen difference explains.
+  static const maxScale = 3.0;
+
+  /// How much larger a viewer of [viewport] can draw [page] (GH-37): the
+  /// page is the smallest screen's, so a tablet reading with a phone would
+  /// otherwise show a phone-sized page in a wide margin. 1 when it does not
+  /// grow. Rounded down, and kept a few pixels short of the edges, because
+  /// the WebView rounds the scaled viewport to whole pixels and a page that
+  /// overshoots it by one would lose its last line.
+  static double scaleFor(SharedPage page, Size viewport) {
+    final fit = math.min(
+      (viewport.width - 4) / page.width,
+      (viewport.height - 4) / page.height,
+    );
+    if (!fit.isFinite) return 1;
+    final scale = (math.min(fit, maxScale) * 100).floorToDouble() / 100;
+    return scale > 1 ? scale : 1;
+  }
+
+  /// Where [page] sits on a viewer of [viewport] unscaled: centred, never off
+  /// the top-left edge.
   static Offset originFor(SharedPage page, Size viewport) {
     return Offset(
       math.max(0, ((viewport.width - page.width) / 2).floorToDouble()),
@@ -58,6 +78,8 @@ class SharedPageRenderer {
         'fontSize': page.fontSize,
         'left': origin.dx,
         'top': origin.dy,
+        'scale': scaleFor(page, viewport),
+        'screenWidth': viewport.width,
         'rules': rules,
       },
     };

@@ -4,11 +4,14 @@
 // showing "the same page" used to show different amounts of text, and the
 // difference grew with every turn (issue #20). Every reader in a room calls
 // cotimeSharedPage.apply() with the same page box and the same stylesheet;
-// a bigger screen shows the same page with wider margins.
+// a bigger screen shows the same page enlarged to fill it (GH-37).
 //
 // The page is never scaled with CSS: epub.js finds the first visible
 // character from getBoundingClientRect(), which a transform distorts, and a
-// skewed page-start CFI would hand the other readers the wrong page.
+// skewed page-start CFI would hand the other readers the wrong page. It is
+// enlarged by the WebView's own page scale (the viewport meta tag) instead,
+// which works like pinch zoom: it changes how big a CSS pixel is drawn, and
+// nothing the layout or getBoundingClientRect() measures.
 //
 // Injected by ReaderScreen after the viewer has loaded the book. Safe to
 // inject twice.
@@ -278,12 +281,90 @@
     manager.cotimeSkipsBlankPages = true;
   }
 
+  var viewportMeta = null;
+  var unscaledViewport = null;
+
+  function viewportTag() {
+    if (viewportMeta) return viewportMeta;
+    viewportMeta = document.querySelector('meta[name="viewport"]');
+    if (!viewportMeta) {
+      viewportMeta = document.createElement('meta');
+      viewportMeta.name = 'viewport';
+      viewportMeta.content = 'width=device-width, initial-scale=1';
+      document.head.appendChild(viewportMeta);
+    }
+    unscaledViewport = viewportMeta.content;
+    return viewportMeta;
+  }
+
+  // The area in view, in CSS pixels. Page scale shrinks it.
+  function visibleArea() {
+    var vv = window.visualViewport;
+    if (vv) return { width: vv.width, height: vv.height };
+    return { width: window.innerWidth, height: window.innerHeight };
+  }
+
+  // A WebView takes a frame or several to apply a new viewport.
+  async function viewportChanged(before) {
+    for (var i = 0; i < 10; i++) {
+      await nextFrame();
+      var now = visibleArea();
+      if (now.width !== before.width || now.height !== before.height) return;
+    }
+  }
+
+  // Draws every CSS pixel [scale] times as large. No width: the layout
+  // viewport then becomes the screen divided by the scale, exactly what is
+  // in view, so nothing can be panned to.
+  async function setPageScale(scale) {
+    var tag = viewportTag();
+    var content = scale > 1
+      ? 'initial-scale=' + scale + ', minimum-scale=' + scale +
+        ', maximum-scale=' + scale + ', user-scalable=no'
+      : unscaledViewport;
+    if (tag.content === content) return;
+    var before = visibleArea();
+    tag.content = content;
+    await viewportChanged(before);
+  }
+
+  // Enlarges the page to [page.scale] and centres it in what is in view.
+  // Where the WebView does not take the scale (or takes it only in part, so
+  // the page would not fit), the page stays unscaled where the app centred
+  // it: a page that does not fit would cut off its last line or its edge.
+  async function placePage(viewer, page) {
+    var scale = page.scale > 1 ? page.scale : 1;
+    if (scale > 1) {
+      await setPageScale(scale);
+      var area = visibleArea();
+      var screenWidth = page.screenWidth || window.innerWidth;
+      var scaled = area.width < screenWidth - 1;
+      if (scaled && area.width >= page.width && area.height >= page.height) {
+        viewer.style.left = Math.floor((area.width - page.width) / 2) + 'px';
+        viewer.style.top = Math.floor((area.height - page.height) / 2) + 'px';
+        window.cotimeSharedPage.scale = window.visualViewport
+          ? window.visualViewport.scale
+          : screenWidth / area.width;
+        return;
+      }
+    }
+    await setPageScale(1);
+    viewer.style.left = page.left + 'px';
+    viewer.style.top = page.top + 'px';
+    window.cotimeSharedPage.scale = 1;
+  }
+
   var stylesInstalled = false;
 
   window.cotimeSharedPage = {
-    // page: {width, height, fontSize, left, top, rules}
+    // The page scale in effect after the last apply().
+    scale: 1,
+
+    // page: {width, height, fontSize, left, top, scale, screenWidth, rules}
     //   width, height, fontSize: the shared page, identical everywhere.
-    //   left, top: where this screen centres that box.
+    //   left, top: where this screen centres that box unscaled.
+    //   scale: how much larger this screen can draw it (1 for none).
+    //   screenWidth: this viewer's width unscaled, in CSS pixels.
     //   rules: epub.js theme rules (fonts and typography), identical
     //   everywhere. Only installed once per viewer.
     apply: async function (page) {
@@ -305,10 +386,11 @@
       viewer.style.margin = '0';
       // The Flutter side paints the theme colour behind the WebView.
       viewer.style.background = 'transparent';
-      viewer.style.left = page.left + 'px';
-      viewer.style.top = page.top + 'px';
+      // Sized before the scale changes: the window resize that follows
+      // would otherwise lay the book out once more on the box in between.
       viewer.style.width = page.width + 'px';
       viewer.style.height = page.height + 'px';
+      await placePage(viewer, page);
 
       if (!stylesInstalled && page.rules) {
         // The "default" theme is the one epub.js injects into every section
