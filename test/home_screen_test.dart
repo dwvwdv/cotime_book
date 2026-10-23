@@ -74,10 +74,13 @@ void main() {
   testWidgets('the home screen is titled with the app\'s Chinese name', (
     tester,
   ) async {
+    final semantics = tester.ensureSemantics();
     await pumpHome(tester);
 
-    expect(find.text('頁間'), findsOneWidget);
+    // The seal reads out as one word, not two characters.
+    expect(find.bySemanticsLabel('頁間'), findsOneWidget);
     expect(find.text('CoTime Book'), findsOneWidget);
+    semantics.dispose();
   });
 
   testWidgets('the nickname from last time is already filled in', (

@@ -15,6 +15,7 @@ import '../providers/presence_provider.dart';
 import '../providers/reading_preferences_provider.dart';
 import '../providers/room_provider.dart';
 import '../services/shared_page_renderer.dart';
+import '../widgets/layout_report_sheet.dart';
 import '../widgets/page_turn_input.dart';
 import '../widgets/paper.dart';
 import '../widgets/reader_members_sheet.dart';
@@ -83,6 +84,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   bool _layoutOwed = false;
   int _layoutAttempts = 0;
   Timer? _layoutRetryTimer;
+
+  /// Checks, once the page has settled, that the book is still laid out on
+  /// the page it is shown in (GH-49).
+  Timer? _layoutCheckTimer;
+  static const _layoutCheckDelay = Duration(milliseconds: 600);
+
+  /// Re-layouts asked for by those checks since one last found the layout
+  /// right. Capped, so a layout no re-apply can fix does not reload the
+  /// page after every turn.
+  int _layoutRepairs = 0;
+  static const _maxLayoutRepairs = 3;
+
+  /// What the last check found wrong, for the diagnostics.
+  List<String> _lastLayoutProblems = const [];
 
   /// Loaded *and* on the room's page. Until the book is laid out like
   /// everyone else's, a CFI from this viewer would mean a different page.
@@ -171,6 +186,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   void dispose() {
     _displayTimer?.cancel();
     _layoutRetryTimer?.cancel();
+    _layoutCheckTimer?.cancel();
     if (!_leaving) {
       // The route went away without _leaveReader (the room was revoked, say).
       _leaving = true;
@@ -306,6 +322,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     // room's page: nothing is waiting on it, and the page is shown once the
     // layout lands.
     if (!_viewerLoaded) return;
+    _checkLayoutSoon();
 
     final turn = _pendingTurn;
     if (turn != null) {
@@ -385,6 +402,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _layoutOwed = false;
       _layoutAttempts = 0;
       _layoutRetryTimer?.cancel();
+      _layoutCheckTimer?.cancel();
+      _layoutRepairs = 0;
+      _lastLayoutProblems = const [];
       _lastLocalCfi = null;
       _displaysInFlight = 0;
       _displayingCfi = null;
@@ -433,6 +453,41 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
   }
 
+  /// Once the viewer has stopped moving, makes sure the book is still laid
+  /// out on the page it is shown in, and lays it out again when not (GH-49).
+  /// Restarted by every relocation, so it runs after the last one.
+  void _checkLayoutSoon() {
+    _layoutCheckTimer?.cancel();
+    _layoutCheckTimer = Timer(_layoutCheckDelay, () {
+      unawaited(_checkLayout());
+    });
+  }
+
+  Future<void> _checkLayout() async {
+    final page = _appliedPage;
+    final generation = _layoutGeneration;
+    if (page == null || !_canApplyLayout) return;
+    final problems = await SharedPageRenderer.verify(_epubController);
+    // A newer layout, a turn or a display since: their own relocation
+    // checks again.
+    if (!mounted ||
+        _leaving ||
+        problems == null ||
+        generation != _layoutGeneration ||
+        page != _appliedPage) {
+      return;
+    }
+    _lastLayoutProblems = problems;
+    if (problems.isEmpty) {
+      _layoutRepairs = 0;
+      return;
+    }
+    if (_layoutRepairs >= _maxLayoutRepairs) return;
+    _layoutRepairs++;
+    _layoutOwed = true;
+    _scheduleLayoutSync();
+  }
+
   /// A new layout moves every page break, so it waits for a moment when
   /// nothing on this screen depends on the current ones.
   bool get _canApplyLayout =>
@@ -470,6 +525,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     final generation = ++_layoutGeneration;
     _layoutRetryTimer?.cancel();
+    _layoutCheckTimer?.cancel();
     setState(() => _layoutInFlight = true);
     _publishReadiness();
 
@@ -798,113 +854,153 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             final prefs = ref.watch(readingPreferencesProvider);
             final canChangeLayout =
                 ref.watch(pageSyncProvider).currentRequest == null;
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text('Reading Settings', style: AppTheme.title),
-                const SizedBox(height: 20),
-                const SectionHeader(label: 'Page'),
-                const SizedBox(height: 14),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    for (final theme in const [
-                      ReadingTheme.day,
-                      ReadingTheme.sepia,
-                      ReadingTheme.night,
-                    ])
-                      _ThemeOption(
-                        preview: ReadingPreferences(theme: theme),
-                        isSelected: prefs.theme == theme,
-                        onTap: canChangeLayout
-                            ? () => _applyLayoutPreference(
-                                (notifier) => notifier.setTheme(theme),
-                              )
+            // Scrolls on a short screen (a landscape phone, a small
+            // e-reader) rather than cutting off the last section.
+            return SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Reading Settings', style: AppTheme.title),
+                  const SizedBox(height: 20),
+                  const SectionHeader(label: 'Page'),
+                  const SizedBox(height: 14),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      for (final theme in const [
+                        ReadingTheme.day,
+                        ReadingTheme.sepia,
+                        ReadingTheme.night,
+                      ])
+                        _ThemeOption(
+                          preview: ReadingPreferences(theme: theme),
+                          isSelected: prefs.theme == theme,
+                          onTap: canChangeLayout
+                              ? () => _applyLayoutPreference(
+                                  (notifier) => notifier.setTheme(theme),
+                                )
+                              : null,
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  const SectionHeader(label: 'Text size'),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      OutlinedButton(
+                        // No reload: the new size goes out as this reader's
+                        // fit, and the room's page follows once no turn is
+                        // in flight.
+                        onPressed:
+                            prefs.fontSize > ReadingPreferences.minFontSize
+                            ? () => ref
+                                  .read(readingPreferencesProvider.notifier)
+                                  .setFontSize(
+                                    prefs.fontSize -
+                                        ReadingPreferences.fontSizeStep,
+                                  )
                             : null,
+                        child: const Text('A−', style: TextStyle(fontSize: 16)),
                       ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                const SectionHeader(label: 'Text size'),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    OutlinedButton(
-                      // No reload: the new size goes out as this reader's
-                      // fit, and the room's page follows once no turn is
-                      // in flight.
-                      onPressed: prefs.fontSize > ReadingPreferences.minFontSize
-                          ? () => ref
-                                .read(readingPreferencesProvider.notifier)
-                                .setFontSize(
-                                  prefs.fontSize -
-                                      ReadingPreferences.fontSizeStep,
-                                )
-                          : null,
-                      child: const Text('A−', style: TextStyle(fontSize: 16)),
-                    ),
-                    Expanded(
-                      child: Text(
-                        '${prefs.fontSize.round()}',
-                        textAlign: TextAlign.center,
-                        style: AppTheme.title,
+                      Expanded(
+                        child: Text(
+                          '${prefs.fontSize.round()}',
+                          textAlign: TextAlign.center,
+                          style: AppTheme.title,
+                        ),
+                      ),
+                      OutlinedButton(
+                        // No reload: the new size goes out as this reader's
+                        // fit, and the room's page follows once no turn is
+                        // in flight.
+                        onPressed:
+                            prefs.fontSize < ReadingPreferences.maxFontSize
+                            ? () => ref
+                                  .read(readingPreferencesProvider.notifier)
+                                  .setFontSize(
+                                    prefs.fontSize +
+                                        ReadingPreferences.fontSizeStep,
+                                  )
+                            : null,
+                        child: const Text('A+', style: TextStyle(fontSize: 22)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _textSizeNote(
+                      ownFontSize: prefs.fontSize.round(),
+                      othersFontSize: _largestFontSizeOfOthers(
+                        ref.watch(presenceProvider).onlineUsers,
                       ),
                     ),
-                    OutlinedButton(
-                      // No reload: the new size goes out as this reader's
-                      // fit, and the room's page follows once no turn is
-                      // in flight.
-                      onPressed: prefs.fontSize < ReadingPreferences.maxFontSize
-                          ? () => ref
-                                .read(readingPreferencesProvider.notifier)
-                                .setFontSize(
-                                  prefs.fontSize +
-                                      ReadingPreferences.fontSizeStep,
-                                )
-                          : null,
-                      child: const Text('A+', style: TextStyle(fontSize: 22)),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _textSizeNote(
-                    ownFontSize: prefs.fontSize.round(),
-                    othersFontSize: _largestFontSizeOfOthers(
-                      ref.watch(presenceProvider).onlineUsers,
-                    ),
-                  ),
-                  style: AppTheme.caption,
-                ),
-                const SizedBox(height: 24),
-                const SectionHeader(label: 'Turning pages'),
-                const SizedBox(height: 4),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text(
-                    'Volume keys turn pages',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  subtitle: const Text(
-                    'For e-readers whose page buttons act as volume keys.',
                     style: AppTheme.caption,
                   ),
-                  value: prefs.volumeKeysTurnPages,
-                  onChanged: (enabled) => ref
-                      .read(readingPreferencesProvider.notifier)
-                      .setVolumeKeysTurnPages(enabled),
-                ),
-                const Text(
-                  'Tap the left third of the page to go back, anywhere else '
-                  'to go forward. Page Up/Down and arrow keys work too.',
-                  style: AppTheme.caption,
-                ),
-              ],
+                  const SizedBox(height: 24),
+                  const SectionHeader(label: 'Turning pages'),
+                  const SizedBox(height: 4),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Volume keys turn pages',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: const Text(
+                      'For e-readers whose page buttons act as volume keys.',
+                      style: AppTheme.caption,
+                    ),
+                    value: prefs.volumeKeysTurnPages,
+                    onChanged: (enabled) => ref
+                        .read(readingPreferencesProvider.notifier)
+                        .setVolumeKeysTurnPages(enabled),
+                  ),
+                  const Text(
+                    'Tap the left third of the page to go back, anywhere else '
+                    'to go forward. Page Up/Down and arrow keys work too.',
+                    style: AppTheme.caption,
+                  ),
+                  const SizedBox(height: 24),
+                  const SectionHeader(label: 'Troubleshooting'),
+                  const SizedBox(height: 12),
+                  OutlinedButton(
+                    onPressed: () {
+                      Navigator.of(sheetContext).pop();
+                      unawaited(_showLayoutReport());
+                    },
+                    child: const Text('Page Layout Report'),
+                  ),
+                ],
+              ),
             );
           },
         ),
       ),
+    );
+  }
+
+  Future<void> _showLayoutReport() async {
+    final script = await SharedPageRenderer.diagnose(_epubController);
+    if (!mounted) return;
+    final position = _pageSync.position;
+    final report = buildLayoutReport(
+      viewer: _viewerSize,
+      ownFit: _ownFit,
+      roomPage: _roomPage,
+      appliedPage: _appliedPage,
+      appliedViewer: _appliedViewerSize,
+      layoutRepairs: _layoutRepairs,
+      lastLayoutProblems: _lastLayoutProblems,
+      epoch: position?.epoch,
+      seq: position?.seq,
+      roomCfi: position?.cfi,
+      localCfi: _lastLocalCfi,
+      script: script,
+    );
+    await showPaperSheet<void>(
+      context: context,
+      builder: (_) => LayoutReportSheet(report: report),
     );
   }
 

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../config/app_constants.dart';
 import '../config/supabase_config.dart';
 import '../config/theme.dart';
 import '../providers/auth_provider.dart';
@@ -12,6 +11,7 @@ import '../models/room.dart';
 import '../providers/presence_provider.dart';
 import '../providers/recent_rooms_provider.dart';
 import '../providers/room_provider.dart';
+import '../widgets/masthead.dart';
 import '../widgets/paper.dart';
 import '../widgets/recent_rooms_list.dart';
 import '../widgets/room_code_input.dart';
@@ -79,21 +79,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(28, 48, 28, 28),
                 children: [
-                  const Icon(Icons.menu_book_outlined, size: 44),
-                  const SizedBox(height: 20),
-                  const Text(AppConstants.appName, style: AppTheme.display),
-                  const SizedBox(height: 4),
-                  const Text(AppConstants.appNameEnglish, style: AppTheme.title),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Read together, anywhere',
-                    style: TextStyle(
-                      fontFamily: AppTheme.serif,
-                      fontStyle: FontStyle.italic,
-                      fontSize: 18,
-                      color: AppTheme.inkMuted,
-                    ),
-                  ),
+                  const Masthead(),
                   const SizedBox(height: 28),
                   const Divider(thickness: AppTheme.heavyRuleWidth),
                   const SizedBox(height: 28),

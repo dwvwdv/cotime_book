@@ -206,6 +206,21 @@
     });
   }
 
+  // "section:page/pages" for each view in sight, for the diagnostics.
+  function pageNumber(manager) {
+    var delta = manager.layout && manager.layout.delta;
+    if (!delta) return '';
+    return pagesInView(manager).map(function (page) {
+      return page.view.section.index + ':' + Math.round(page.start / delta) +
+        '/' + Math.round(page.view.width() / delta);
+    }).join(' ');
+  }
+
+  // The last turn this viewer made: where from, where to and how many pages
+  // it moved. A turn that moves more than one page is the blank-page skip
+  // above at work, or a sign that it took a page with text for a blank one.
+  var lastTurn = null;
+
   function whereInBook(manager) {
     return pagesInView(manager).map(function (page) {
       return page.view.section.index + ':' + Math.round(page.start);
@@ -252,17 +267,22 @@
   // Checked before the next frame is drawn, so the white page is never
   // painted unless a section has to load first.
   async function turnPastBlankPages(manager, forward, back) {
+    var turn = { from: pageNumber(manager), moved: 0, backedOff: false };
+    lastTurn = turn;
     if (!(await movePage(manager, forward))) return;
     var moved = 1;
     while (moved < 20 && pageIsBlank(manager)) {
       if (!(await movePage(manager, forward))) break;
       moved++;
     }
+    turn.moved = moved;
     if (pageIsBlank(manager)) {
       // Nothing but blank pages to the end of the book: stay where we were,
       // so the turn reads as the end of the book rather than a white page.
+      turn.backedOff = true;
       for (; moved > 0; moved--) await movePage(manager, back);
     }
+    turn.to = pageNumber(manager);
   }
 
   function installBlankPageSkipping() {
@@ -313,13 +333,17 @@
     }
   }
 
-  // Draws every CSS pixel [scale] times as large. No width: the layout
-  // viewport then becomes the screen divided by the scale, exactly what is
-  // in view, so nothing can be panned to.
-  async function setPageScale(scale) {
+  // Draws every CSS pixel [scale] times as large, on a layout viewport of
+  // the screen divided by the scale: exactly what is in view, so nothing can
+  // be panned to. The width has to be spelled out. Android's WebView runs
+  // with useWideViewport, and a viewport tag with a scale but no width then
+  // gets a 980px "desktop" layout viewport instead (GH-48), which is not what
+  // anything here was measured against.
+  async function setPageScale(scale, screenWidth) {
     var tag = viewportTag();
     var content = scale > 1
-      ? 'initial-scale=' + scale + ', minimum-scale=' + scale +
+      ? 'width=' + Math.floor(screenWidth / scale) +
+        ', initial-scale=' + scale + ', minimum-scale=' + scale +
         ', maximum-scale=' + scale + ', user-scalable=no'
       : unscaledViewport;
     if (tag.content === content) return;
@@ -335,9 +359,9 @@
   async function placePage(viewer, page) {
     var scale = page.scale > 1 ? page.scale : 1;
     if (scale > 1) {
-      await setPageScale(scale);
-      var area = visibleArea();
       var screenWidth = page.screenWidth || window.innerWidth;
+      await setPageScale(scale, screenWidth);
+      var area = visibleArea();
       var scaled = area.width < screenWidth - 1;
       if (scaled && area.width >= page.width && area.height >= page.height) {
         viewer.style.left = Math.floor((area.width - page.width) / 2) + 'px';
@@ -354,6 +378,111 @@
     window.cotimeSharedPage.scale = 1;
   }
 
+  function differs(a, b) {
+    return Math.abs(a - b) > 1;
+  }
+
+  // Where the book is not laid out on the page it is shown in. epub.js
+  // keeps its own record of the stage size and skips a resize to a size it
+  // believes it already has, so a view laid out on another box can stay that
+  // way: the frame then cuts off the last lines of every page, and a turn
+  // moves past text nobody saw (GH-49). Each entry names what disagrees.
+  function layoutProblems(page) {
+    var problems = [];
+    var manager = rendition && rendition.manager;
+    if (!page || !manager || !manager.container) return problems;
+    var container = manager.container;
+    if (differs(container.clientWidth, page.width) ||
+        differs(container.clientHeight, page.height)) {
+      problems.push('container ' + container.clientWidth + 'x' +
+        container.clientHeight);
+    }
+    var layout = manager.layout;
+    if (layout && (differs(layout.width, page.width) ||
+        differs(layout.height, page.height))) {
+      problems.push('layout ' + layout.width + 'x' + layout.height);
+    }
+    // Fixed-layout and vertical books size their frames by other rules.
+    if (!layout || layout.name !== 'reflowable' || !manager.mapping ||
+        !horizontalLtr(manager.mapping)) {
+      return problems;
+    }
+    manager.views.displayed().forEach(function (view) {
+      var name = 'section ' + view.section.index;
+      if (view.iframe && differs(view.iframe.offsetHeight, page.height)) {
+        problems.push(name + ' frame ' + view.iframe.offsetHeight + ' high');
+      }
+      var doc = view.document;
+      if (doc && doc.body) {
+        var height = doc.body.getBoundingClientRect().height;
+        if (differs(height, page.height)) {
+          problems.push(name + ' columns ' + Math.round(height) + ' high');
+        }
+      }
+    });
+    return problems;
+  }
+
+  // Whether the page runs off what the WebView shows. Not something a new
+  // layout can fix (the page is the room's), so only reported.
+  function fitProblems() {
+    var viewer = document.getElementById('viewer');
+    if (!viewer) return [];
+    var box = viewer.getBoundingClientRect();
+    var vv = window.visualViewport;
+    var left = vv ? vv.offsetLeft : 0;
+    var top = vv ? vv.offsetTop : 0;
+    var area = visibleArea();
+    var problems = [];
+    if (box.left < left - 1 || box.right > left + area.width + 1) {
+      problems.push('page ' + Math.round(box.left) + '..' +
+        Math.round(box.right) + ' wide, screen ' + Math.round(area.width));
+    }
+    if (box.top < top - 1 || box.bottom > top + area.height + 1) {
+      problems.push('page ' + Math.round(box.top) + '..' +
+        Math.round(box.bottom) + ' high, screen ' + Math.round(area.height));
+    }
+    return problems;
+  }
+
+  // Lays the book out on [page] even when epub.js thinks it already is.
+  async function layOut(page) {
+    var manager = rendition.manager;
+    if (manager) manager._stageSize = undefined;
+    // Numbers, not "100vw": a window resize (keyboard, rotation) must not
+    // put the book back on this screen's own box.
+    rendition.resize(page.width, page.height);
+    await fontsReady();
+    await nextFrame();
+  }
+
+  function round(value) {
+    return typeof value === 'number' ? Math.round(value * 10) / 10 : value;
+  }
+
+  function boxOf(element) {
+    if (!element) return null;
+    var r = element.getBoundingClientRect();
+    return [round(r.left), round(r.top), round(r.width), round(r.height)];
+  }
+
+  // The last few script errors in this WebView, for the diagnostics.
+  var errors = [];
+  function remember(message) {
+    errors.push(String(message).slice(0, 200));
+    if (errors.length > 5) errors.shift();
+  }
+  window.addEventListener('error', function (e) {
+    remember(e.message || e);
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    remember('unhandled: ' + (e.reason && e.reason.message || e.reason));
+  });
+
+  var appliedPage = null;
+  var applies = 0;
+  var repairs = 0;
+  var lastRepair = null;
   var stylesInstalled = false;
 
   window.cotimeSharedPage = {
@@ -401,13 +530,75 @@
 
       rendition.themes.fontSize(page.fontSize + 'px');
 
-      // Numbers, not "100vw": a window resize (keyboard, rotation) must not
-      // put the book back on this screen's own box.
-      rendition.resize(page.width, page.height);
-
-      await fontsReady();
-      await nextFrame();
+      await layOut(page);
+      applies++;
+      appliedPage = {
+        width: page.width, height: page.height, fontSize: page.fontSize,
+        left: page.left, top: page.top, scale: page.scale,
+        screenWidth: page.screenWidth,
+      };
+      var problems = layoutProblems(appliedPage);
+      if (problems.length > 0) {
+        repairs++;
+        lastRepair = problems;
+        await layOut(appliedPage);
+      }
       return true;
+    },
+
+    // What layoutProblems() finds now on the last applied page; empty when
+    // the book is laid out on it. The app re-applies the page when not.
+    verify: function () {
+      if (typeof rendition === 'undefined' || !rendition) return [];
+      return layoutProblems(appliedPage);
+    },
+
+    // Everything that decides what is on screen, for a reader to copy into
+    // a bug report from a real device: the regressions in GH-49 showed up
+    // only in an Android WebView, never in the Chromium check.
+    diagnose: function () {
+      var manager = typeof rendition !== 'undefined' && rendition &&
+        rendition.manager;
+      var vv = window.visualViewport;
+      var tag = document.querySelector('meta[name="viewport"]');
+      var layout = manager && manager.layout;
+      var container = manager && manager.container;
+      var location = rendition && rendition.location;
+      return {
+        userAgent: navigator.userAgent,
+        devicePixelRatio: window.devicePixelRatio,
+        window: [window.innerWidth, window.innerHeight],
+        layoutViewport: [document.documentElement.clientWidth,
+          document.documentElement.clientHeight],
+        visualViewport: vv ? [round(vv.width), round(vv.height),
+          round(vv.scale), round(vv.offsetLeft), round(vv.offsetTop)] : null,
+        viewportTag: tag ? tag.content : null,
+        page: appliedPage,
+        scale: round(window.cotimeSharedPage.scale),
+        viewer: boxOf(document.getElementById('viewer')),
+        container: container ? [container.clientWidth, container.clientHeight,
+          round(container.scrollLeft), container.scrollWidth] : null,
+        layout: layout ? [layout.width, layout.height, layout.delta,
+          layout.columnWidth, layout.gap] : null,
+        views: manager ? manager.views.displayed().map(function (view) {
+          var body = view.document && view.document.body;
+          return {
+            section: view.section.index,
+            href: view.section.href,
+            frame: boxOf(view.iframe),
+            columns: body ? round(body.getBoundingClientRect().height) : null,
+          };
+        }) : [],
+        at: manager ? pageNumber(manager) : '',
+        cfi: location && location.start ? location.start.cfi : null,
+        problems: layoutProblems(appliedPage),
+        fit: fitProblems(),
+        applies: applies,
+        repairs: repairs,
+        lastRepair: lastRepair,
+        lastTurn: lastTurn,
+        errors: errors,
+      };
     }
   };
 })();

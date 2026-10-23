@@ -10,7 +10,10 @@
 // page of its own — must never be turned to, and a page with only a picture
 // on it must be named by that picture (issue #22). The tablet shows the
 // phone's page enlarged to fill its screen, by the WebView's page scale
-// (GH-37); its pages must still be the phone's.
+// (GH-37); its pages must still be the phone's. Chromium runs with the
+// viewport settings of Android's WebView, where a page scale without a width
+// used to put the book on a 980px layout viewport (GH-48). A layout the
+// frame no longer matches must be found and laid out again (GH-49).
 //
 //   flutter pub get
 //   node tool/shared_page_check/check.js        (from the repo root)
@@ -127,6 +130,7 @@ async function openBook(browser, device, shared) {
     await tab.addScriptTag({ path: script });
     await tab.evaluate(
       async (p) => {
+        window.sharedPage = p;
         await cotimeSharedPage.apply(p);
         await rendition.display();
       },
@@ -150,6 +154,9 @@ function pageScale(tab) {
     const vv = window.visualViewport;
     return {
       scale: vv.scale,
+      // The layout viewport: what is in view, never Android's 980px default.
+      layoutWidth: document.documentElement.clientWidth,
+      viewWidth: vv.width,
       fits: box.left >= vv.offsetLeft && box.top >= vv.offsetTop &&
         box.right <= vv.offsetLeft + vv.width + 0.5 &&
         box.bottom <= vv.offsetTop + vv.height + 0.5,
@@ -239,6 +246,23 @@ async function pageStarts(browser, device, shared, turns) {
   return { starts, blank, pictures, back, scale };
 }
 
+/// Whether a frame that no longer matches the book's layout is noticed and
+/// laid out again: the frame shrinks under epub.js, the way a real WebView
+/// was seen to leave it, cutting the last lines off every page (GH-49).
+async function repairsLayout(browser, device) {
+  const { context, tab } = await openBook(browser, device, true);
+  const result = await tab.evaluate(async () => {
+    const before = cotimeSharedPage.verify();
+    const p = window.sharedPage;
+    rendition.manager.stage.size(p.width, p.height - 40);
+    const broken = cotimeSharedPage.verify();
+    await cotimeSharedPage.apply(p);
+    return { before, broken, after: cotimeSharedPage.verify() };
+  });
+  await context.close();
+  return result;
+}
+
 /// How many of [starts] a follower on [device] does not land on.
 async function missedCommits(browser, device, starts) {
   const { context, tab } = await openBook(browser, device, true);
@@ -265,7 +289,12 @@ async function missedCommits(browser, device, starts) {
 }
 
 (async () => {
-  const browser = await chromium.launch();
+  // Android's WebView: useWideViewport and loadWithOverviewMode are on, as
+  // flutter_inappwebview leaves them.
+  const browser = await chromium.launch({
+    args: ['--blink-settings=wideViewportQuirkEnabled=true,useWideViewport=true,' +
+      'loadWithOverviewMode=true'],
+  });
   const turns = 400;
   let failed = false;
   for (const [name, { bytes, pictures }] of Object.entries(books)) {
@@ -308,6 +337,16 @@ async function missedCommits(browser, device, starts) {
         console.log(`tablet page : drawn x${tablet.scale.scale.toFixed(2)} ` +
           `(expected x${expected}), ${tablet.scale.fits ? 'all in view' : 'cut off'}`);
         if (!enlarged) failed = true;
+        const narrow = tablet.scale.layoutWidth <= Math.ceil(tablet.scale.viewWidth) + 1;
+        console.log(`tablet view : ${tablet.scale.layoutWidth}px layout viewport, ` +
+          `${Math.round(tablet.scale.viewWidth)}px in view`);
+        if (!narrow) failed = true;
+        const repair = await repairsLayout(browser, devices.phone);
+        const repaired = repair.before.length === 0 && repair.broken.length > 0 &&
+          repair.after.length === 0;
+        console.log(`frame check : ${repair.broken.join(', ') || 'nothing found'} ` +
+          `-> ${repair.after.join(', ') || 'laid out again'}`);
+        if (!repaired) failed = true;
         const { missed, of } = await missedCommits(browser, devices.tablet, a);
         console.log(`follower    : landed on ${of - missed}/${of} reported pages`);
         if (missed > 0) failed = true;
