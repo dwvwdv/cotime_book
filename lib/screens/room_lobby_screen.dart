@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -377,132 +378,169 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 560),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Text(
-                      'ROOM CODE',
-                      style: AppTheme.overline,
-                      textAlign: TextAlign.center,
+              // Scrolls as a whole on a short screen (a phone on its side, a
+              // small e-reader) instead of overflowing (GH-45). When it all
+              // fits, the actions sit at the bottom as before.
+              child: LayoutBuilder(
+                builder: (context, constraints) => SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: math.max(0, constraints.maxHeight - 40),
                     ),
-                    const SizedBox(height: 10),
-                    Center(child: RoomCodeDisplay(code: activeRoom.code)),
-                    const SizedBox(height: 24),
-
-                    SectionHeader(
-                      label: 'Members',
-                      trailing: Text(
-                        '${presenceState.onlineCount} online',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.ink,
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: MemberList(
-                        members: roomState.members,
-                        currentUserId: authState.userId,
-                        appVersions: memberAppVersions(
-                          presenceState.onlineUsers,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    // Transfer progress
-                    TransferProgressWidget(transferState: _transferState),
-
-                    // Book info
-                    if (activeRoom.currentBookTitle != null) ...[
-                      _BookCard(
-                        title: activeRoom.currentBookTitle!,
-                        isReady: hasCurrentBook,
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-
-                    // Action buttons: where the book comes from, then reading.
-                    Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed:
-                                _isLeaving || bookState.isLoading
-                                ? null
-                                : _shareBook,
-                            icon: const Icon(Icons.upload_file),
-                            label: Text(
-                              bookState.isLoading ? 'Loading...' : 'Share Book',
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Text(
+                              'ROOM CODE',
+                              style: AppTheme.overline,
+                              textAlign: TextAlign.center,
                             ),
-                          ),
+                            const SizedBox(height: 10),
+                            Center(
+                              child: RoomCodeDisplay(code: activeRoom.code),
+                            ),
+                            const SizedBox(height: 24),
+
+                            SectionHeader(
+                              label: 'Members',
+                              trailing: Text(
+                                '${presenceState.onlineCount} online',
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.ink,
+                                ),
+                              ),
+                            ),
+                            MemberList(
+                              members: roomState.members,
+                              currentUserId: authState.userId,
+                              appVersions: memberAppVersions(
+                                presenceState.onlineUsers,
+                              ),
+                              shrinkWrap: true,
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed:
-                                _isLeaving || bookState.isLoading
-                                ? null
-                                : _browseLibrary,
-                            icon: const Icon(Icons.local_library_outlined),
-                            label: const Text('Library'),
-                          ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const SizedBox(height: 12),
+
+                            // Transfer progress
+                            TransferProgressWidget(
+                              transferState: _transferState,
+                            ),
+
+                            // Book info
+                            if (activeRoom.currentBookTitle != null) ...[
+                              _BookCard(
+                                title: activeRoom.currentBookTitle!,
+                                isReady: hasCurrentBook,
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+
+                            // Action buttons: where the book comes from, then
+                            // reading.
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed:
+                                        _isLeaving || bookState.isLoading
+                                        ? null
+                                        : _shareBook,
+                                    icon: const Icon(Icons.upload_file),
+                                    label: Text(
+                                      bookState.isLoading
+                                          ? 'Loading...'
+                                          : 'Share Book',
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed:
+                                        _isLeaving || bookState.isLoading
+                                        ? null
+                                        : _browseLibrary,
+                                    icon: const Icon(
+                                      Icons.local_library_outlined,
+                                    ),
+                                    label: const Text('Library'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            ElevatedButton.icon(
+                              onPressed: _isLeaving || !lobby.canOpenReader
+                                  ? null
+                                  : lobby.isHostStart
+                                  ? _startReading
+                                  : () => _enterReader(fromHost: false),
+                              icon: const Icon(Icons.auto_stories_outlined),
+                              label: Text(
+                                lobby.isHostStart
+                                    ? 'Start Reading'
+                                    : 'Join Reading',
+                              ),
+                            ),
+                            // A disabled button with no reason reads as broken.
+                            if (lobby.hint != null) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                lobby.hint!,
+                                style: AppTheme.caption,
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+
+                            // Not a reason to disable the button: an app from
+                            // before the protocol field may still read along
+                            // (GH-33).
+                            if (lobby.versionNotice != null) ...[
+                              const SizedBox(height: 12),
+                              PaperNotice(
+                                message: lobby.versionNotice!,
+                                icon: Icons.system_update_outlined,
+                              ),
+                            ],
+                            if (bookState.error != null) ...[
+                              const SizedBox(height: 12),
+                              PaperNotice(
+                                message: bookState.error!,
+                                onDismiss: () => ref
+                                    .read(bookProvider.notifier)
+                                    .dismissError(),
+                              ),
+                            ],
+                            if (presenceState.connectionStatus ==
+                                RealtimeConnectionStatus.reconnecting) ...[
+                              const SizedBox(height: 8),
+                              const PaperNotice(
+                                message: 'Reconnecting to the room...',
+                                icon: Icons.sync,
+                              ),
+                            ] else if (presenceState.error != null) ...[
+                              const SizedBox(height: 8),
+                              PaperNotice(
+                                message: presenceState.error!,
+                                icon: Icons.wifi_off,
+                              ),
+                            ],
+                          ],
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-                    ElevatedButton.icon(
-                      onPressed: _isLeaving || !lobby.canOpenReader
-                          ? null
-                          : lobby.isHostStart
-                          ? _startReading
-                          : () => _enterReader(fromHost: false),
-                      icon: const Icon(Icons.auto_stories_outlined),
-                      label: Text(
-                        lobby.isHostStart ? 'Start Reading' : 'Join Reading',
-                      ),
-                    ),
-                    // A disabled button with no reason reads as broken.
-                    if (lobby.hint != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        lobby.hint!,
-                        style: AppTheme.caption,
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-
-                    // Not a reason to disable the button: an app from before
-                    // the protocol field may still read along (GH-33).
-                    if (lobby.versionNotice != null) ...[
-                      const SizedBox(height: 12),
-                      PaperNotice(
-                        message: lobby.versionNotice!,
-                        icon: Icons.system_update_outlined,
-                      ),
-                    ],
-                    if (bookState.error != null) ...[
-                      const SizedBox(height: 12),
-                      PaperNotice(message: bookState.error!),
-                    ],
-                    if (presenceState.connectionStatus ==
-                        RealtimeConnectionStatus.reconnecting) ...[
-                      const SizedBox(height: 8),
-                      const PaperNotice(
-                        message: 'Reconnecting to the room...',
-                        icon: Icons.sync,
-                      ),
-                    ] else if (presenceState.error != null) ...[
-                      const SizedBox(height: 8),
-                      PaperNotice(
-                        message: presenceState.error!,
-                        icon: Icons.wifi_off,
-                      ),
-                    ],
-                  ],
+                  ),
                 ),
               ),
             ),
