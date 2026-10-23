@@ -139,4 +139,40 @@ void main() {
     expect(text, contains('workflow_dispatch:'));
     expect(text, contains('node tool/shared_page_check/check.js'));
   });
+
+  // A branch name, PR title or commit message is chosen by whoever pushes;
+  // written into a `run:` script as `${{ ... }}` it is run as shell (#46).
+  // Such values go in through `env:` and are quoted in the script.
+  test('no workflow writes text someone else chose into a shell script', () {
+    final untrusted = RegExp(
+      r'\$\{\{[^}]*(github\.head_ref|github\.event\.(pull_request|issue|'
+      r'comment|review|head_commit|commits))',
+    );
+    final runKey = RegExp(r'^(\s*)(- )?run:\s*(.*)$');
+    final workflows = Directory('.github/workflows')
+        .listSync()
+        .whereType<File>()
+        .where((file) => file.path.endsWith('.yml'));
+    for (final workflow in workflows) {
+      final lines = workflow.readAsLinesSync();
+      // The indentation of the `run:` key whose script the line is in.
+      int? script;
+      for (var i = 0; i < lines.length; i++) {
+        final line = lines[i];
+        final indent = line.length - line.trimLeft().length;
+        if (script != null && line.trim().isNotEmpty && indent <= script) {
+          script = null;
+        }
+        final run = runKey.firstMatch(line);
+        if (run != null) {
+          script = run.group(1)!.length;
+          if (!untrusted.hasMatch(run.group(3)!)) continue;
+        } else if (script == null || !untrusted.hasMatch(line)) {
+          continue;
+        }
+        fail('${workflow.path}:${i + 1} puts an untrusted value in a '
+            'script; pass it through env: instead');
+      }
+    }
+  });
 }

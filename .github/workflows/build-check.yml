@@ -172,11 +172,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ARTIFACT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload_apk.outputs.artifact-id }}
+          # 分支名稱由推分支的人決定：經 env 傳進來，不直接內插進 shell（#46）。
+          # caption 用 --form-string，名稱裡的 ; 或開頭的 @、< 才不會被 curl 解讀。
+          BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           if curl --ipv4 --connect-timeout 10 --max-time 30 --fail-with-body \
                -F document=@build/app/outputs/flutter-apk/app-release.apk \
-               -F caption="🔨 PR Build - ${{ steps.get_version.outputs.VERSION }}
-          Branch: ${{ github.head_ref || github.ref_name }}
+               --form-string caption="🔨 PR Build - ${{ steps.get_version.outputs.VERSION }}
+          Branch: ${BRANCH}
           Commit: ${GITHUB_SHA::7}
           Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
                "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument?chat_id=${TELEGRAM_CHAT_ID}"; then
