@@ -54,6 +54,69 @@ class SharedPageRenderer {
     );
   }
 
+  /// What is wrong with the layout on the page [apply] last put the book on:
+  /// empty when every view is laid out on it, null when the viewer could not
+  /// be asked (no page applied yet, the WebView gone).
+  ///
+  /// epub.js can leave a view laid out on a box other than the one it is
+  /// shown in, which cuts the bottom lines off every page and makes turns
+  /// skip text. It was only ever seen on a real Android WebView (GH-49), so
+  /// the reader checks for it whenever the page settles rather than trusting
+  /// [apply] alone.
+  static Future<List<String>?> verify(EpubController controller) async {
+    final webView = controller.webViewController;
+    if (webView == null) return null;
+    try {
+      return layoutProblemsFrom(
+        await webView.evaluateJavascript(
+          source:
+              'JSON.stringify(window.cotimeSharedPage ? '
+              'window.cotimeSharedPage.verify() : null)',
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Everything the viewer's script knows about what is on screen, for a
+  /// reader to copy into a bug report. Null when it could not be asked.
+  static Future<Map<String, dynamic>?> diagnose(
+    EpubController controller,
+  ) async {
+    final webView = controller.webViewController;
+    if (webView == null) return null;
+    try {
+      final decoded = _decode(
+        await webView.evaluateJavascript(
+          source:
+              'JSON.stringify(window.cotimeSharedPage ? '
+              'window.cotimeSharedPage.diagnose() : null)',
+        ),
+      );
+      return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// [verify]'s result as the WebView hands it back: a JSON string on some
+  /// platforms, already decoded on others.
+  static List<String>? layoutProblemsFrom(Object? raw) {
+    final decoded = _decode(raw);
+    if (decoded is! List) return null;
+    return [for (final problem in decoded) '$problem'];
+  }
+
+  static Object? _decode(Object? raw) {
+    if (raw is! String) return raw;
+    try {
+      return jsonDecode(raw);
+    } on FormatException {
+      return null;
+    }
+  }
+
   /// Completes once the book has been laid out again; false when the viewer
   /// could not be reached.
   static Future<bool> apply(

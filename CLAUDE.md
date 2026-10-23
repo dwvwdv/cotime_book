@@ -80,9 +80,17 @@ supabase/
      也不要用 CSS transform 縮放頁面——epub.js 會因此算錯頁首 CFI。
      比頁框大的螢幕把整頁放大填滿（GH-37），用的是 WebView 自己的 page scale（viewport meta，
      等同 pinch zoom），它不改變 CSS px 與 `getBoundingClientRect()`；WebView 不吃這個縮放時，
-     `shared_page.js` 退回不縮放、置中。
+     `shared_page.js` 退回不縮放、置中。viewport tag 一定要寫明 `width`：Android WebView
+     開著 `useWideViewport`，有縮放卻沒寫 width 時會換成 980px 的 layout viewport（GH-48）。
+     桌面 Chromium 沒有這些 WebView quirk，`check.js` 用 `--blink-settings` 把它們打開來跑。
+     epub.js 的 `resize()` 遇到「記錄中已經是這個尺寸」會直接略過，所以 `apply()` 一律強制重排，
+     並用 `verify()` 確認容器、layout 與每個 view 的欄高都等於頁框；reader 在畫面停下後也會呼叫
+     `verify()`，不一致就重新套用（GH-49）。實機上的排版問題請使用者從閱讀設定的
+     「Page Layout Report」複製 `diagnose()` 的結果回報——這類問題只在真的 WebView 上出現過。
      頁首 CFI 以「第一個可見字元」計算（`shared_page.js` 換掉了 epub.js 用空白切詞的方法，
-     issue #21）——中文沒有空白，用詞切會讓頁首指到上一頁。沒有字的頁同理：空白頁在翻頁時
+     issue #21）——中文沒有空白，用詞切會讓頁首指到上一頁。而且只算「從這一頁開始的那一行」的字：
+     不能斷行的長網址會溢出到下一頁的範圍，拿溢出的字當下一頁的名字，`display()` 會回到上一頁，
+     全房卡住（GH-52）；共享排版也讓過長的字串與 `pre` 在欄內換行。沒有字的頁同理：空白頁在翻頁時
      直接跳過，只有圖的頁以圖的 element CFI 命名（issue #22）。
      改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，先在本機跑
      `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致（本機約 5 分鐘）。
