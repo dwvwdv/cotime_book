@@ -191,6 +191,7 @@ class RealtimeService {
     'start_reading',
     'membership_changed',
     'room_closed',
+    'room_settings_changed',
   ];
 
   final RoomRealtimeChannelFactory _channelFactory;

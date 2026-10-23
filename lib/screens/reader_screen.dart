@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../config/theme.dart';
 import '../models/page_sync_state.dart';
+import '../models/room_text_size.dart';
 import '../models/shared_page.dart';
 import '../providers/auth_provider.dart';
 import '../providers/book_provider.dart';
@@ -14,6 +15,7 @@ import '../providers/page_sync_provider.dart';
 import '../providers/presence_provider.dart';
 import '../providers/reading_preferences_provider.dart';
 import '../providers/room_provider.dart';
+import '../services/layout_report_service.dart';
 import '../services/shared_page_renderer.dart';
 import '../widgets/layout_report_sheet.dart';
 import '../widgets/page_turn_input.dart';
@@ -132,6 +134,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   bool _leaving = false;
 
+  /// The host changed the room's text size: re-read the room. The signal can
+  /// be lost, so [_roomRecheckTimer] re-reads it now and then as well — a
+  /// reader that missed it would keep the old size, and the room with it.
+  StreamSubscription<Map<String, dynamic>>? _roomSettingsSub;
+  Timer? _roomRecheckTimer;
+  static const _roomRecheckInterval = Duration(seconds: 30);
+
+  /// A text size change on its way to the database. One at a time: each one
+  /// is worked out from the size the room has.
+  final ValueNotifier<bool> _textSizeSaving = ValueNotifier(false);
+
+  /// For the layout report: the viewer's last few moves, oldest first.
+  final List<Map<String, dynamic>> _recentMoves = [];
+  static const _maxRecentMoves = 12;
+  final Stopwatch _sinceOpened = Stopwatch()..start();
+
   PageSyncNotifier get _pageSync => ref.read(pageSyncProvider.notifier);
 
   @override
@@ -163,6 +181,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         await ref.read(roomProvider.notifier).refreshRoomAndGet() ??
         ref.read(roomProvider).currentRoom;
     if (!mounted || _leaving) return;
+    _watchRoomSettings();
 
     final pageSync = _pageSync;
     pageSync.onExecuteTurn = _handleExecuteTurn;
@@ -186,11 +205,80 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _publishReadiness();
   }
 
+  void _watchRoomSettings() {
+    final roomNotifier = ref.read(roomProvider.notifier);
+    _roomSettingsSub = ref
+        .read(realtimeServiceProvider)
+        .broadcastStream('room_settings_changed')
+        .listen((_) => unawaited(roomNotifier.refreshRoom(quiet: true)));
+    _roomRecheckTimer = Timer.periodic(_roomRecheckInterval, (_) {
+      // The host's own copy is the one the database just returned.
+      if (!mounted || _leaving || ref.read(roomProvider).isHost) return;
+      unawaited(roomNotifier.refreshRoom(quiet: true));
+    });
+
+    final roomState = ref.read(roomProvider);
+    if (RoomTextSize.of(
+      roomState.currentRoom,
+      isHost: roomState.isHost,
+    ).needsRoomSize) {
+      unawaited(
+        _setRoomTextSize(
+          locked: true,
+          size: ref.read(readingPreferencesProvider).fontSize.round(),
+          quiet: true,
+        ),
+      );
+    }
+  }
+
+  /// Host only. Returns whether the room took it.
+  Future<bool> _setRoomTextSize({
+    required bool locked,
+    int? size,
+    bool quiet = false,
+  }) async {
+    if (_textSizeSaving.value) return false;
+    _textSizeSaving.value = true;
+    try {
+      final saved = await ref
+          .read(roomProvider.notifier)
+          .setRoomTextSize(locked: locked, textSize: size);
+      if (!mounted) return saved;
+      if (saved) {
+        final room = ref.read(roomProvider).currentRoom;
+        unawaited(
+          ref
+              .read(realtimeServiceProvider)
+              .broadcast(
+                event: 'room_settings_changed',
+                payload: {'room_id': room?.id},
+              )
+              .catchError((Object _) {
+                // The others' periodic re-read picks it up.
+              }),
+        );
+      } else if (!quiet) {
+        showPaperMessage(
+          context,
+          "Couldn't change the room's text size. Try again in a moment.",
+        );
+      }
+      return saved;
+    } finally {
+      // Disposed with the screen.
+      if (mounted) _textSizeSaving.value = false;
+    }
+  }
+
   @override
   void dispose() {
     _displayTimer?.cancel();
     _layoutRetryTimer?.cancel();
     _layoutCheckTimer?.cancel();
+    _roomRecheckTimer?.cancel();
+    unawaited(_roomSettingsSub?.cancel());
+    _textSizeSaving.dispose();
     if (!_leaving) {
       // The route went away without _leaveReader (the room was revoked, say).
       _leaving = true;
@@ -321,6 +409,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   void _onRelocated(EpubLocation location) {
     if (!mounted || _leaving) return;
     final cfi = location.startCfi;
+    _recordMove(cfi);
     _lastLocalCfi = cfi;
     // The first render on this screen's own layout, or a re-layout onto the
     // room's page: nothing is waiting on it, and the page is shown once the
@@ -363,6 +452,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     if (_flushQueuedPosition()) return;
     _publishReadiness();
+  }
+
+  /// What moved the viewer is read before [_onRelocated] acts on it.
+  void _recordMove(String cfi) {
+    _recentMoves.add({
+      'ms': _sinceOpened.elapsedMilliseconds,
+      'cfi': cfi,
+      'by': !_viewerLoaded
+          ? 'layout'
+          : _pendingTurn != null
+          ? 'turn'
+          : _isDisplaying
+          ? 'display'
+          : 'viewer',
+    });
+    if (_recentMoves.length > _maxRecentMoves) _recentMoves.removeAt(0);
   }
 
   void _onChaptersLoaded() {
@@ -429,9 +534,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     Size viewerSize,
     PresenceState presence,
     ReadingPreferences prefs,
+    RoomTextSize textSize,
   ) {
     _viewerSize = viewerSize;
-    final own = PageFit.of(viewerSize, fontSize: prefs.fontSize);
+    final own = PageFit.of(
+      viewerSize,
+      fontSize: textSize.requested(prefs.fontSize),
+    );
     if (own != _ownFit) {
       _ownFit = own;
       final presenceNotifier = ref.read(presenceProvider.notifier);
@@ -590,6 +699,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final presenceState = ref.watch(presenceProvider);
     final bookState = ref.watch(bookProvider);
     final prefs = ref.watch(readingPreferencesProvider);
+    final textSize = ref.watch(roomProvider.select(_roomTextSize));
 
     if (bookState.bookFile == null || !_positionKnown) {
       // Without a way back this state is a dead end: the reader route has no
@@ -659,6 +769,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                         viewerConstraints.biggest,
                         presenceState,
                         prefs,
+                        textSize,
                       );
                       return _buildViewer(bookState, prefs);
                     },
@@ -823,7 +934,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           const Spacer(),
           IconButton(
             style: iconStyle,
-            icon: const Icon(Icons.text_fields),
+            icon: const Icon(Icons.settings_outlined),
             onPressed:
                 syncState.currentRequest == null && _viewerLoaded && !_leaving
                 ? _showReadingSettings
@@ -863,6 +974,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         builder: (sheetContext) => Consumer(
           builder: (context, ref, _) {
             final prefs = ref.watch(readingPreferencesProvider);
+            final textSize = ref.watch(roomProvider.select(_roomTextSize));
             final canChangeLayout =
                 ref.watch(pageSyncProvider).currentRequest == null;
             // Scrolls on a short screen (a landscape phone, a small
@@ -898,50 +1010,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                   const SizedBox(height: 24),
                   const SectionHeader(label: 'Text size'),
                   const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      OutlinedButton(
-                        // No reload: the new size goes out as this reader's
-                        // fit, and the room's page follows once no turn is
-                        // in flight.
-                        onPressed:
-                            prefs.fontSize > ReadingPreferences.minFontSize
-                            ? () => ref
-                                  .read(readingPreferencesProvider.notifier)
-                                  .setFontSize(
-                                    prefs.fontSize -
-                                        ReadingPreferences.fontSizeStep,
-                                  )
-                            : null,
-                        child: const Text('A−', style: TextStyle(fontSize: 16)),
-                      ),
-                      Expanded(
-                        child: Text(
-                          '${prefs.fontSize.round()}',
-                          textAlign: TextAlign.center,
-                          style: AppTheme.title,
-                        ),
-                      ),
-                      OutlinedButton(
-                        // No reload: the new size goes out as this reader's
-                        // fit, and the room's page follows once no turn is
-                        // in flight.
-                        onPressed:
-                            prefs.fontSize < ReadingPreferences.maxFontSize
-                            ? () => ref
-                                  .read(readingPreferencesProvider.notifier)
-                                  .setFontSize(
-                                    prefs.fontSize +
-                                        ReadingPreferences.fontSizeStep,
-                                  )
-                            : null,
-                        child: const Text('A+', style: TextStyle(fontSize: 22)),
-                      ),
-                    ],
+                  ValueListenableBuilder<bool>(
+                    valueListenable: _textSizeSaving,
+                    builder: (context, saving, _) =>
+                        _buildTextSizeControls(prefs, textSize, saving),
                   ),
                   const SizedBox(height: 8),
                   Text(
                     _textSizeNote(
+                      textSize: textSize,
                       ownFontSize: prefs.fontSize.round(),
                       othersFontSize: _largestFontSizeOfOthers(
                         ref.watch(presenceProvider).onlineUsers,
@@ -949,6 +1026,44 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                     ),
                     style: AppTheme.caption,
                   ),
+                  const SizedBox(height: 4),
+                  // A new size is laid out on every reader's screen, which
+                  // takes seconds on an e-reader; without a word about it the
+                  // tap looks ignored and gets tapped again.
+                  const Text(
+                    'A new text size takes a few seconds to show: the book is '
+                    'laid out again on every reader\'s screen. Wait for the '
+                    'page to change before tapping again or turning.',
+                    style: AppTheme.caption,
+                  ),
+                  if (textSize.isHost)
+                    ValueListenableBuilder<bool>(
+                      valueListenable: _textSizeSaving,
+                      builder: (context, saving, _) => SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text(
+                          'Only I set the text size',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        subtitle: const Text(
+                          'Turn off to let everyone pick a size. The room '
+                          'then reads at the largest size anyone picked.',
+                          style: AppTheme.caption,
+                        ),
+                        value: textSize.locked,
+                        onChanged: saving
+                            ? null
+                            : (locked) => unawaited(
+                                _setRoomTextSize(
+                                  locked: locked,
+                                  // Locking again starts from the host's own
+                                  // size, which is what they see while it is
+                                  // unlocked.
+                                  size: locked ? prefs.fontSize.round() : null,
+                                ),
+                              ),
+                      ),
+                    ),
                   const SizedBox(height: 24),
                   const SectionHeader(label: 'Turning pages'),
                   const SizedBox(height: 4),
@@ -991,11 +1106,96 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
+  Widget _buildTextSizeControls(
+    ReadingPreferences prefs,
+    RoomTextSize textSize,
+    bool saving,
+  ) {
+    final shown = textSize.requested(prefs.fontSize).round();
+    final enabled = textSize.canChange && !saving;
+    return Row(
+      children: [
+        OutlinedButton(
+          onPressed: enabled && shown > ReadingPreferences.minFontSize
+              ? () => _stepTextSize(
+                  textSize,
+                  shown - ReadingPreferences.fontSizeStep,
+                )
+              : null,
+          child: const Text('A−', style: TextStyle(fontSize: 16)),
+        ),
+        Expanded(
+          child: Text(
+            // Words, not a spinner: e-ink.
+            saving ? 'Saving...' : '$shown',
+            textAlign: TextAlign.center,
+            style: AppTheme.title,
+          ),
+        ),
+        OutlinedButton(
+          onPressed: enabled && shown < ReadingPreferences.maxFontSize
+              ? () => _stepTextSize(
+                  textSize,
+                  shown + ReadingPreferences.fontSizeStep,
+                )
+              : null,
+          child: const Text('A+', style: TextStyle(fontSize: 22)),
+        ),
+      ],
+    );
+  }
+
+  /// No reload either way: the new size goes out as this reader's fit, and
+  /// the room's page follows once no turn is in flight.
+  void _stepTextSize(RoomTextSize textSize, double size) {
+    final clamped = ReadingPreferences.clampFontSize(size);
+    final preferences = ref.read(readingPreferencesProvider.notifier);
+    if (!textSize.locked) {
+      preferences.setFontSize(clamped);
+      return;
+    }
+    unawaited(() async {
+      // The host's own size follows the room's, so it is the one remembered
+      // for the next room and the one used if they unlock it.
+      if (await _setRoomTextSize(locked: true, size: clamped.round())) {
+        preferences.setFontSize(clamped);
+      }
+    }());
+  }
+
   Future<void> _showLayoutReport() async {
     final script = await SharedPageRenderer.diagnose(_epubController);
+    final appVersion = await loadAppVersion();
     if (!mounted) return;
     final position = _pageSync.position;
+    final roomState = ref.read(roomProvider);
+    final room = roomState.currentRoom;
+    final prefs = ref.read(readingPreferencesProvider);
+    final textSize = _roomTextSize(roomState);
     final report = buildLayoutReport(
+      appVersion: appVersion,
+      device: layoutReportDevice(MediaQuery.of(context)),
+      book: {
+        'hash': room?.currentBookHash,
+        'title': room?.currentBookTitle,
+        'libraryPath': room?.currentBookLibraryPath,
+      },
+      room: {
+        'isHost': roomState.isHost,
+        'textSizeLocked': textSize.locked,
+        'textSize': textSize.roomSize,
+        'readers': layoutReportReaders(
+          ref.read(presenceProvider).onlineUsers,
+          currentUserId: ref.read(authProvider).userId,
+          hostUserId: room?.hostUserId,
+        ),
+      },
+      reading: {
+        'theme': prefs.theme.name,
+        'ownFontSize': prefs.fontSize,
+        'requestedFontSize': textSize.requested(prefs.fontSize),
+        'sync': ref.read(pageSyncProvider).status.name,
+      },
       viewer: _viewerSize,
       ownFit: _ownFit,
       roomPage: _roomPage,
@@ -1007,11 +1207,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       seq: position?.seq,
       roomCfi: position?.cfi,
       localCfi: _lastLocalCfi,
+      recentMoves: List.of(_recentMoves),
       script: script,
     );
     await showPaperSheet<void>(
       context: context,
-      builder: (_) => LayoutReportSheet(report: report),
+      builder: (_) => LayoutReportSheet(
+        report: report,
+        onSend: (note) => LayoutReportService().submit(
+          roomId: room?.id,
+          appVersion: appVersion,
+          note: note,
+          report: report,
+        ),
+      ),
     );
   }
 
@@ -1140,8 +1349,21 @@ class _ThemeOption extends StatelessWidget {
   }
 }
 
-/// Why the text may be larger than the size this reader picked.
-String _textSizeNote({required int ownFontSize, required int? othersFontSize}) {
+RoomTextSize _roomTextSize(RoomState state) =>
+    RoomTextSize.of(state.currentRoom, isHost: state.isHost);
+
+/// Who sets the size, and why the text may be larger than the size this
+/// reader picked.
+String _textSizeNote({
+  required RoomTextSize textSize,
+  required int ownFontSize,
+  required int? othersFontSize,
+}) {
+  if (textSize.locked) {
+    return textSize.isHost
+        ? 'You set the text size for everyone in this room.'
+        : 'The host sets the text size in this room.';
+  }
   const shared =
       'Everyone sees the same page: it fits the smallest screen in the '
       'room, at the largest text size anyone picked.';

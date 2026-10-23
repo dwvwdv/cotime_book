@@ -1,7 +1,7 @@
 name: cotime_book
 description: 頁間（CoTime Book）- 遠程同步看書工具
 publish_to: 'none'
-version: 1.0.8+12
+version: 1.0.9+13
 
 environment:
   sdk: ^3.8.0
@@ -68,3 +68,5 @@ flutter:
     # and the script that lays the book out on the room's page.
     - assets/fonts/literata/
     - assets/reader/
+    # Read back for the app version in layout reports (layout_report_service).
+    - pubspec.yaml
