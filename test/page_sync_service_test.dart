@@ -473,10 +473,11 @@ void main() {
     });
 
     test(
-      'a reader on the app from before versions is not blamed (GH-33)',
+      'a reader on an app that breaks pages the old way is asked to update',
       () async {
-        // v1.0.5 sends no version but speaks the same wire: a timeout there
-        // is a connection problem, not an update to ask for.
+        // v1.0.5 sends no version. It speaks the same wire, but it lays some
+        // books out on other page breaks than this app (GH-49): the timeout
+        // is worth an update, not only a better connection.
         final room = FakeRoom();
         final alice = room.join(
           'alice',
@@ -493,7 +494,8 @@ void main() {
 
         expect(
           alice.service.currentState.errorMessage,
-          'Page turn timed out waiting for Bob',
+          'Page turn timed out waiting for Bob. '
+          'Bob needs to update the app to read together',
         );
       },
     );

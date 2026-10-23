@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/models/shared_page.dart';
 import 'package:cotime_book/providers/presence_provider.dart';
 import 'package:cotime_book/services/presence_merge.dart';
@@ -76,7 +77,30 @@ void main() {
         ProtocolCompatibility.compatible,
       );
       expect(
-        presenceProtocolCompatibility({'user_id': 'bob'}),
+        presenceProtocolCompatibility(
+          {'user_id': 'bob'},
+          localProtocol: 1,
+          localOldestCompatible: 0,
+        ),
+        ProtocolCompatibility.compatible,
+      );
+    });
+
+    test('an app that breaks pages the old way is told to update (GH-49)', () {
+      // v1.0.8 and before squeeze a chapter in a clipping wrapper into one
+      // page: reading with them, the room would show different pages.
+      for (final old in [
+        <String, dynamic>{'user_id': 'bob'},
+        <String, dynamic>{'user_id': 'bob', 'protocol': 1, 'protocol_min': 0},
+      ]) {
+        expect(presenceProtocolCompatibility(old), ProtocolCompatibility.older);
+      }
+      expect(
+        presenceProtocolCompatibility({
+          'user_id': 'bob',
+          'protocol': AppConstants.roomProtocolVersion,
+          'protocol_min': AppConstants.minCompatibleRoomProtocol,
+        }),
         ProtocolCompatibility.compatible,
       );
     });

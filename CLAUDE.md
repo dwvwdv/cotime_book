@@ -106,6 +106,8 @@ supabase/
      對方的 `protocol_min` 才算相容；不相容的成員在 lobby 與 reader 標示「需要更新 App」。
      改了 broadcast 事件名稱或 payload、或改了別人依賴的 Presence 欄位時，同一個 PR 要把
      `roomProtocolVersion` +1；舊版跟不上時，`minCompatibleRoomProtocol` 也要拉到新版本。
+     **共享頁面的分頁點改變時也算**（`SharedPageStyle` 的規則、`shared_page.js` 的頁首或空白頁判斷）：
+     commit 帶的是本機分頁下的頁名，分頁不同的舊版會顯示到別頁。版本 2 就是為了 GH-49 / GH-52 的分頁改變。
      只新增可被忽略的欄位不用改。版號只能往上加。舊版（v1.0.5 以前）不送這兩個欄位，算成 0，
      與目前的版本相容。只提示、不把對方排除在共識之外。
 
