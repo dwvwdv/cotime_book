@@ -213,24 +213,34 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         .listen((_) => unawaited(roomNotifier.refreshRoom(quiet: true)));
     // The host too: the same account reading on a second device misses the
     // signal like anyone else, and its fit would hold the old size up.
-    _roomRecheckTimer = Timer.periodic(_roomRecheckInterval, (_) {
+    _roomRecheckTimer = Timer.periodic(_roomRecheckInterval, (_) async {
       if (!mounted || _leaving) return;
-      unawaited(roomNotifier.refreshRoom(quiet: true));
+      await roomNotifier.refreshRoom(quiet: true);
+      _giveRoomTheHostsTextSize();
     });
+    _giveRoomTheHostsTextSize();
+  }
 
+  /// A locked room without a size takes the host's. Tried again on every
+  /// re-read: a write lost to a dropped connection would otherwise leave the
+  /// room without one for the whole session, and everyone at the default
+  /// once the host leaves the book.
+  void _giveRoomTheHostsTextSize() {
+    if (!mounted || _leaving) return;
     final roomState = ref.read(roomProvider);
-    if (RoomTextSize.of(
+    if (!RoomTextSize.of(
       roomState.currentRoom,
       isHost: roomState.isHost,
     ).needsRoomSize) {
-      unawaited(
-        _setRoomTextSize(
-          locked: true,
-          size: ref.read(readingPreferencesProvider).fontSize.round(),
-          quiet: true,
-        ),
-      );
+      return;
     }
+    unawaited(
+      _setRoomTextSize(
+        locked: true,
+        size: ref.read(readingPreferencesProvider).fontSize.round(),
+        quiet: true,
+      ),
+    );
   }
 
   /// Host only. Returns whether the room took it.
