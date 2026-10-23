@@ -96,7 +96,8 @@ supabase/
      （`RoomTextSize.requested`），而 `SharedPage` 的算法不變、仍取最大——所以對鎖定狀態一時意見不一
      的 reader（重讀還在路上、不認得鎖的舊版）仍排出同一頁，只是字級暫時偏大。不要把鎖做成
      「只採用 host 的 page_fit」，那會讓沒跟上的 reader 排出不同的頁。房主改完廣播
-     `room_settings_changed`，訊號會掉，所以其他 reader 也每 30 秒靜默重讀房間。
+     `room_settings_changed`，訊號會掉，所以每個 reader（包括同一個 host 帳號的其他裝置）也每 30 秒
+     靜默重讀房間。
      頁首 CFI 以「第一個可見字元」計算（`shared_page.js` 換掉了 epub.js 用空白切詞的方法，
      issue #21）——中文沒有空白，用詞切會讓頁首指到上一頁。而且只算「從這一頁開始的那一行」的字：
      不能斷行的長網址會溢出到下一頁的範圍，拿溢出的字當下一頁的名字，`display()` 會回到上一頁，

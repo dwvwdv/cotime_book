@@ -86,6 +86,10 @@ Map<String, dynamic> layoutReportDevice(MediaQueryData media) {
 
 /// Every reader's part in the room's page, without who they are. [self] marks
 /// this device's own row.
+///
+/// [onlineUsers] are merged Presence rows (`mergePresenceUsers`): one per
+/// person, with every device's protocol range in `protocols` and their fits
+/// already combined, which is what the room's page was made from.
 List<Map<String, dynamic>> layoutReportReaders(
   List<Map<String, dynamic>> onlineUsers, {
   required String? currentUserId,
@@ -99,8 +103,8 @@ List<Map<String, dynamic>> layoutReportReaders(
         'reading': user['is_reading'],
         'ready': user['reader_ready'],
         'fit': user['page_fit'],
-        'protocol': user['protocol'],
-        'protocolMin': user['protocol_min'],
+        'protocols': user['protocols'],
+        'sessions': user['session_count'],
       },
   ];
 }
@@ -163,69 +167,76 @@ class _LayoutReportSheetState extends State<LayoutReportSheet> {
   @override
   Widget build(BuildContext context) {
     final sentId = _sentId;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Text('Page layout report', style: AppTheme.title),
-        const SizedBox(height: 8),
-        const Text(
-          'If pages are cut off or a turn skips ahead, send this right after '
-          'it happens. It holds how this screen laid out the page and where '
-          'you are in the book, never the book\'s text.',
-          style: AppTheme.caption,
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _note,
-          enabled: sentId == null && !_sending,
-          maxLines: 2,
-          maxLength: 500,
-          decoration: const InputDecoration(
-            hintText: 'What went wrong? (optional)',
+    // The whole sheet scrolls, and stops above the keyboard: on a landscape
+    // phone or a small e-reader the note field, the report and both buttons
+    // do not fit at once, least of all with the keyboard up.
+    return SingleChildScrollView(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('Page layout report', style: AppTheme.title),
+          const SizedBox(height: 8),
+          const Text(
+            'If pages are cut off or a turn skips ahead, send this right after '
+            'it happens. It holds how this screen laid out the page and where '
+            'you are in the book, never the book\'s text.',
+            style: AppTheme.caption,
           ),
-        ),
-        const SizedBox(height: 8),
-        Flexible(
-          child: Container(
-            decoration: BoxDecoration(border: Border.all(width: 1.5)),
-            padding: const EdgeInsets.all(10),
-            child: SingleChildScrollView(
-              child: SelectableText(
-                _text,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _note,
+            enabled: sentId == null && !_sending,
+            maxLines: 2,
+            maxLength: 500,
+            decoration: const InputDecoration(
+              hintText: 'What went wrong? (optional)',
+            ),
+          ),
+          const SizedBox(height: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 240),
+            child: Container(
+              decoration: BoxDecoration(border: Border.all(width: 1.5)),
+              padding: const EdgeInsets.all(10),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  _text,
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                ),
               ),
             ),
           ),
-        ),
-        const SizedBox(height: 16),
-        if (sentId != null) ...[
-          // The id is the reader's handle on the report, so it is shown, not
-          // flashed in a message.
-          SelectableText(
-            'Sent. Report ID: ${sentId.split('-').first}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontWeight: FontWeight.w700),
+          const SizedBox(height: 16),
+          if (sentId != null) ...[
+            // The id is the reader's handle on the report, so it is shown, not
+            // flashed in a message.
+            SelectableText(
+              'Sent. Report ID: ${sentId.split('-').first}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 12),
+          ] else if (widget.onSend != null) ...[
+            ElevatedButton.icon(
+              onPressed: _sending ? null : _send,
+              icon: const Icon(Icons.send),
+              // Words, not a spinner: e-ink.
+              label: Text(_sending ? 'Sending...' : 'Send Report'),
+            ),
+            const SizedBox(height: 8),
+          ],
+          OutlinedButton.icon(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: _text));
+              if (context.mounted) showPaperMessage(context, 'Report copied');
+            },
+            icon: const Icon(Icons.copy),
+            label: const Text('Copy Report'),
           ),
-          const SizedBox(height: 12),
-        ] else if (widget.onSend != null) ...[
-          ElevatedButton.icon(
-            onPressed: _sending ? null : _send,
-            icon: const Icon(Icons.send),
-            // Words, not a spinner: e-ink.
-            label: Text(_sending ? 'Sending...' : 'Send Report'),
-          ),
-          const SizedBox(height: 8),
         ],
-        OutlinedButton.icon(
-          onPressed: () async {
-            await Clipboard.setData(ClipboardData(text: _text));
-            if (context.mounted) showPaperMessage(context, 'Report copied');
-          },
-          icon: const Icon(Icons.copy),
-          label: const Text('Copy Report'),
-        ),
-      ],
+      ),
     );
   }
 }

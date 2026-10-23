@@ -211,9 +211,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         .read(realtimeServiceProvider)
         .broadcastStream('room_settings_changed')
         .listen((_) => unawaited(roomNotifier.refreshRoom(quiet: true)));
+    // The host too: the same account reading on a second device misses the
+    // signal like anyone else, and its fit would hold the old size up.
     _roomRecheckTimer = Timer.periodic(_roomRecheckInterval, (_) {
-      // The host's own copy is the one the database just returned.
-      if (!mounted || _leaving || ref.read(roomProvider).isHost) return;
+      if (!mounted || _leaving) return;
       unawaited(roomNotifier.refreshRoom(quiet: true));
     });
 

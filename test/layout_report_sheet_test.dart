@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:cotime_book/config/theme.dart';
 import 'package:cotime_book/models/shared_page.dart';
+import 'package:cotime_book/services/presence_merge.dart';
 import 'package:cotime_book/services/layout_report_service.dart';
 import 'package:cotime_book/widgets/layout_report_sheet.dart';
 import 'package:flutter/material.dart';
@@ -67,8 +68,10 @@ void main() {
   });
 
   test('the readers in a report say what made the page, not who they are', () {
+    // The rows the reader actually has: merged, one per person (two devices
+    // for Alice), which is where the protocol ranges live.
     final readers = layoutReportReaders(
-      [
+      mergePresenceUsers([
         {
           'user_id': 'user-a',
           'nickname': 'Alice',
@@ -77,33 +80,35 @@ void main() {
           'page_fit': {'w': 384, 'h': 600, 'font': 18},
           'protocol': 1,
           'protocol_min': 0,
+          'online_at': '2026-10-23T08:00:00Z',
+        },
+        {
+          'user_id': 'user-a',
+          'nickname': 'Alice',
+          'is_reading': true,
+          'reader_ready': false,
+          'page_fit': {'w': 800, 'h': 1000, 'font': 20},
+          'online_at': '2026-10-23T08:00:01Z',
         },
         {'user_id': 'user-b', 'nickname': 'Bob', 'is_reading': false},
-      ],
+      ]),
       currentUserId: 'user-a',
       hostUserId: 'user-b',
     );
 
-    expect(readers, [
-      {
-        'self': true,
-        'host': false,
-        'reading': true,
-        'ready': true,
-        'fit': {'w': 384, 'h': 600, 'font': 18},
-        'protocol': 1,
-        'protocolMin': 0,
-      },
-      {
-        'self': false,
-        'host': true,
-        'reading': false,
-        'ready': null,
-        'fit': null,
-        'protocol': null,
-        'protocolMin': null,
-      },
+    expect(readers, hasLength(2));
+    final alice = readers.firstWhere((reader) => reader['self'] == true);
+    expect(alice['host'], isFalse);
+    expect(alice['ready'], isTrue);
+    expect(alice['fit'], {'w': 384, 'h': 600, 'font': 20});
+    expect(alice['protocols'], [
+      [0, 0],
+      [1, 0],
     ]);
+    expect(alice['sessions'], 2);
+    final bob = readers.firstWhere((reader) => reader['self'] == false);
+    expect(bob['host'], isTrue);
+    expect(bob['fit'], isNull);
     expect(jsonEncode(readers), isNot(contains('Alice')));
     expect(jsonEncode(readers), isNot(contains('user-')));
   });
@@ -233,4 +238,35 @@ void main() {
 
     expect(find.textContaining('Too many reports'), findsOneWidget);
   });
+
+  testWidgets(
+    'on a short screen with the keyboard up, Send is still reachable',
+    (tester) async {
+      // A landscape phone with the keyboard open leaves about 200 px.
+      tester.view.physicalSize = const Size(800, 500);
+      tester.view.devicePixelRatio = 1;
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      addTearDown(tester.view.reset);
+      var sent = 0;
+
+      await pumpSheet(
+        tester,
+        onSend: (_) async {
+          sent++;
+          return '9a8b0000-0000-0000-0000-000000000000';
+        },
+      );
+      await tester.enterText(find.byType(TextField), 'cut off');
+      await tester.scrollUntilVisible(
+        find.text('Send Report'),
+        100,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(find.text('Send Report'));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(sent, 1);
+    },
+  );
 }
