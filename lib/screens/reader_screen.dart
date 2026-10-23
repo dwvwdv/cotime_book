@@ -96,7 +96,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   int _layoutRepairs = 0;
   static const _maxLayoutRepairs = 3;
 
-  /// What the last check found wrong, for the diagnostics.
+  /// For the diagnostics: every re-layout those checks asked for, and what
+  /// the last one that found something found. Kept after a check finds the
+  /// layout right again — the report is opened after the cut-off page was
+  /// seen, by which time the re-layout has usually fixed it.
+  int _layoutRepairsTotal = 0;
   List<String> _lastLayoutProblems = const [];
 
   /// Loaded *and* on the room's page. Until the book is laid out like
@@ -404,6 +408,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _layoutRetryTimer?.cancel();
       _layoutCheckTimer?.cancel();
       _layoutRepairs = 0;
+      _layoutRepairsTotal = 0;
       _lastLayoutProblems = const [];
       _lastLocalCfi = null;
       _displaysInFlight = 0;
@@ -477,13 +482,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         page != _appliedPage) {
       return;
     }
-    _lastLayoutProblems = problems;
     if (problems.isEmpty) {
       _layoutRepairs = 0;
       return;
     }
+    _lastLayoutProblems = problems;
     if (_layoutRepairs >= _maxLayoutRepairs) return;
     _layoutRepairs++;
+    _layoutRepairsTotal++;
     _layoutOwed = true;
     _scheduleLayoutSync();
   }
@@ -559,6 +565,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         _scheduleLayoutSync();
       });
     }
+
+    // Checked once the layout has settled even when nothing is displayed
+    // after it (a room still at the start of the book): no relocation would
+    // ask for the check otherwise. A display's relocation restarts it.
+    _checkLayoutSoon();
 
     // Every page break moved: back onto the room's page.
     final cfi = _queuedCfi ?? _pageSync.position?.cfi ?? '';
@@ -990,7 +1001,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       roomPage: _roomPage,
       appliedPage: _appliedPage,
       appliedViewer: _appliedViewerSize,
-      layoutRepairs: _layoutRepairs,
+      layoutRepairs: _layoutRepairsTotal,
       lastLayoutProblems: _lastLayoutProblems,
       epoch: position?.epoch,
       seq: position?.seq,

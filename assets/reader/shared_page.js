@@ -177,17 +177,20 @@
     var rangePairToCfiPair = proto.rangePairToCfiPair;
     proto.findStart = function (root, start, end) {
       if (!horizontalLtr(this)) return findStart.call(this, root, start, end);
-      var range = firstLineStart(this, root, start, end) ||
-        findStart.call(this, root, start, end);
-      if (range && startsOnPage(range.getBoundingClientRect(), start, end)) {
-        return range;
-      }
+      var line = firstLineStart(this, root, start, end);
+      if (line) return line;
       var picture = firstPictureOnPage(root, start, end);
-      if (!picture) return range;
-      var named = root.ownerDocument.createRange();
-      named.selectNode(picture);
-      named.cotimePicture = picture;
-      return named;
+      if (picture) {
+        var named = root.ownerDocument.createRange();
+        named.selectNode(picture);
+        named.cotimePicture = picture;
+        return named;
+      }
+      // Nothing begins on this page: it holds at most the end of a line that
+      // ran over from the page before, which epub.js would name it by. Such
+      // a page counts as blank (showsSomething), so a turn never stops on it
+      // and that name is never committed.
+      return findStart.call(this, root, start, end);
     };
     // A range always becomes a CFI into a text node, which a picture has
     // none of; the element itself is the name.
@@ -217,10 +220,12 @@
       range.selectNodeContents(node);
       var bounds = range.getBoundingClientRect();
       if (bounds.right <= start || bounds.left >= end) continue;
-      // A paragraph across pages has a box on each; only its lines count.
+      // A paragraph across pages has a box on each; only its lines count,
+      // and only those that begin here: the end of a line too long for the
+      // page before is that page's text (GH-52).
       var lines = range.getClientRects();
       for (var j = 0; j < lines.length; j++) {
-        if (onPage(lines[j])) return true;
+        if (onPage(lines[j]) && lines[j].left >= start - 1) return true;
       }
     }
     return false;
