@@ -6,7 +6,9 @@
 # on them (issue #22): a run of empty paragraphs, and a page break before an
 # empty paragraph. The book itself ends in blank pages, and one chapter holds
 # a picture on a page of its own, with no text on it, and one holds lines too
-# long for the column.
+# long for the column. One chapter is wrapped in a box that clips its
+# overflow, and every chapter's last paragraph is marked so the check can
+# tell it was shown.
 import sys
 import struct, zipfile, zlib, random
 random.seed(7)
@@ -49,7 +51,13 @@ def extra(c, i):
 chapters = []
 for c in range(3):
     ps = "".join(f"<p>{para(i)}</p>" + extra(c, i) for i in range(40))
-    chapters.append(f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>C{c}</title></head><body><h1>Chapter {c+1}</h1>{ps}<p><i>Italic tail</i> <b>bold tail</b></p>{endings[c]}</body></html>')
+    # The last text of each chapter, which some page must show. The first
+    # chapter sits in a wrapper that clips its overflow, as calibre's GitBook
+    # conversions do (GH-49).
+    text = f'<h1>Chapter {c+1}</h1>{ps}<p id="end-c{c}"><i>Italic tail</i> <b>bold tail</b></p>'
+    if c == 0:
+        text = f'<div style="overflow: hidden">{text}</div>'
+    chapters.append(f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>C{c}</title></head><body>{text}{endings[c]}</body></html>')
 z = zipfile.ZipFile(sys.argv[1], "w")
 z.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
 z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')

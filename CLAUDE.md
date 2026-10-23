@@ -90,7 +90,9 @@ supabase/
      頁首 CFI 以「第一個可見字元」計算（`shared_page.js` 換掉了 epub.js 用空白切詞的方法，
      issue #21）——中文沒有空白，用詞切會讓頁首指到上一頁。而且只算「從這一頁開始的那一行」的字：
      不能斷行的長網址會溢出到下一頁的範圍，拿溢出的字當下一頁的名字，`display()` 會回到上一頁，
-     全房卡住（GH-52）；共享排版也讓過長的字串與 `pre` 在欄內換行。沒有字的頁同理：空白頁在翻頁時
+     全房卡住（GH-52）；共享排版也讓過長的字串與 `pre` 在欄內換行。書裡元素的 `overflow` 一律 visible：
+     裁切溢出的容器在分欄排版裡不能拆頁，calibre 的 GitBook 轉檔把整章包在 `overflow: hidden` 裡，
+     整章被擠成一頁、其餘被裁掉、翻一頁就跳章（GH-49）。`check.js` 會確認每章最後一段都有某一頁顯示出來。沒有字的頁同理：空白頁在翻頁時
      直接跳過，只有圖的頁以圖的 element CFI 命名（issue #22）。
      改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，先在本機跑
      `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致（本機約 5 分鐘）。
@@ -104,6 +106,8 @@ supabase/
      對方的 `protocol_min` 才算相容；不相容的成員在 lobby 與 reader 標示「需要更新 App」。
      改了 broadcast 事件名稱或 payload、或改了別人依賴的 Presence 欄位時，同一個 PR 要把
      `roomProtocolVersion` +1；舊版跟不上時，`minCompatibleRoomProtocol` 也要拉到新版本。
+     **共享頁面的分頁點改變時也算**（`SharedPageStyle` 的規則、`shared_page.js` 的頁首或空白頁判斷）：
+     commit 帶的是本機分頁下的頁名，分頁不同的舊版會顯示到別頁。版本 2 就是為了 GH-49 / GH-52 的分頁改變。
      只新增可被忽略的欄位不用改。版號只能往上加。舊版（v1.0.5 以前）不送這兩個欄位，算成 0，
      與目前的版本相容。只提示、不把對方排除在共識之外。
 

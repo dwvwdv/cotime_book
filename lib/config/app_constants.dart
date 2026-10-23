@@ -25,7 +25,8 @@ class AppConstants {
   static const String libraryBucket = 'cotime-book-library';
 
   // Realtime
-  static String roomChannelName(String roomCode) => 'cotime_book:room:$roomCode';
+  static String roomChannelName(String roomCode) =>
+      'cotime_book:room:$roomCode';
 
   /// The version of the room's wire protocol — broadcast events and their
   /// payloads, and the Presence fields others act on. Sent in Presence so a
@@ -34,16 +35,22 @@ class AppConstants {
   ///
   /// Bump it in the same change that alters the wire in a way an app on the
   /// previous version cannot follow (renamed or removed events, payload or
-  /// Presence fields it relies on). Additive, ignorable fields do not need a
-  /// bump. Apps from before this field existed send nothing and count as 0.
-  static const int roomProtocolVersion = 1;
+  /// Presence fields it relies on), or that changes where the shared page
+  /// breaks: a commit names a page by this app's page breaks, and an app that
+  /// breaks the same book elsewhere shows another page. Additive, ignorable
+  /// fields do not need a bump. Apps from before this field existed send
+  /// nothing and count as 0.
+  ///
+  /// 2: chapters in a clipping wrapper are laid out across pages (GH-49) and
+  /// lines too long for the page wrap (GH-52). An app on 1 squeezes such a
+  /// chapter into one page and turns straight to the next chapter.
+  static const int roomProtocolVersion = 2;
 
   /// The oldest [roomProtocolVersion] this app still reads together with,
   /// also sent in Presence. Members below it are told to update; an app whose
   /// own minimum is above this app's version tells this one to update.
   ///
-  /// 0 because version 1 only added the version fields: apps from before
-  /// them (v1.0.5) speak the same wire. Raise it to the new version when a
-  /// bump is one the previous apps cannot follow.
-  static const int minCompatibleRoomProtocol = 0;
+  /// Raise it to the new version when a bump is one the previous apps cannot
+  /// follow, as version 2's page breaks are not.
+  static const int minCompatibleRoomProtocol = 2;
 }
