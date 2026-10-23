@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The app's Chinese name, on the launcher of any Chinese-language device. -->
+    <string name="app_name">頁間</string>
+</resources>

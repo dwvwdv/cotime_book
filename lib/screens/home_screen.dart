@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../config/app_constants.dart';
 import '../config/supabase_config.dart';
 import '../config/theme.dart';
 import '../providers/auth_provider.dart';
@@ -80,7 +81,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 children: [
                   const Icon(Icons.menu_book_outlined, size: 44),
                   const SizedBox(height: 20),
-                  const Text('CoTime Book', style: AppTheme.display),
+                  const Text(AppConstants.appName, style: AppTheme.display),
+                  const SizedBox(height: 4),
+                  const Text(AppConstants.appNameEnglish, style: AppTheme.title),
                   const SizedBox(height: 8),
                   const Text(
                     'Read together, anywhere',

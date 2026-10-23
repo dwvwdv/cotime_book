@@ -3,6 +3,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../config/app_constants.dart';
 import '../config/theme.dart';
 import '../models/room_member.dart';
 import '../models/transfer_state.dart';
@@ -790,10 +791,10 @@ class LobbyReadiness {
       if (ahead.isNotEmpty)
         'Your app is out of date: ${ahead.join(', ')} '
             '${ahead.length == 1 ? 'is' : 'are'} on a newer version. Update '
-            'CoTime Book to read together.',
+            '${AppConstants.appNameEnglish} to read together.',
       if (behind.isNotEmpty)
         '${behind.join(', ')} ${behind.length == 1 ? 'needs' : 'need'} to '
-            'update CoTime Book to read together.',
+            'update ${AppConstants.appNameEnglish} to read together.',
     ];
     return lines.isEmpty ? null : lines.join('\n');
   }

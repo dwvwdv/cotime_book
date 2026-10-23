@@ -34,7 +34,7 @@
 
 ## 專案概觀
 
-Flutter + Supabase 的共讀 App。多人同處一個房間，共享同一本 EPUB，
+**頁間**（英文名 CoTime Book）是 Flutter + Supabase 的共讀 App。多人同處一個房間，共享同一本 EPUB，
 翻頁必須經過**全員共識**——任何一人翻頁前，所有人都要確認。
 
 ```
@@ -78,6 +78,9 @@ supabase/
      （最小的頁框、最大的字級，由 Presence 的 `page_fit` 算出）上、用內建字型與固定行高排版，
      由 `assets/reader/shared_page.js` 在書載入後套用。不要讓書回到用本機視窗或系統字型排版，
      也不要用 CSS transform 縮放頁面——epub.js 會因此算錯頁首 CFI。
+     比頁框大的螢幕把整頁放大填滿（GH-37），用的是 WebView 自己的 page scale（viewport meta，
+     等同 pinch zoom），它不改變 CSS px 與 `getBoundingClientRect()`；WebView 不吃這個縮放時，
+     `shared_page.js` 退回不縮放、置中。
      頁首 CFI 以「第一個可見字元」計算（`shared_page.js` 換掉了 epub.js 用空白切詞的方法，
      issue #21）——中文沒有空白，用詞切會讓頁首指到上一頁。沒有字的頁同理：空白頁在翻頁時
      直接跳過，只有圖的頁以圖的 element CFI 命名（issue #22）。

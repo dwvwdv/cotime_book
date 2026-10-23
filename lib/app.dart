@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'config/app_constants.dart';
 import 'config/supabase_config.dart';
 import 'config/theme.dart';
 import 'providers/auth_provider.dart';
@@ -76,7 +77,7 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
-      title: 'CoTime Book',
+      title: AppConstants.appName,
       theme: AppTheme.paperTheme,
       scrollBehavior: const PaperScrollBehavior(),
       routerConfig: AppRouter.router,
