@@ -6,6 +6,7 @@ import '../screens/home_screen.dart';
 import '../screens/room_lobby_screen.dart';
 import '../screens/reader_screen.dart';
 import '../screens/room_removed.dart';
+import '../screens/txt_convert_screen.dart';
 
 class AppRouter {
   static final router = GoRouter(
@@ -15,6 +16,11 @@ class AppRouter {
         path: '/',
         name: 'home',
         builder: (context, state) => const HomeScreen(),
+      ),
+      GoRoute(
+        path: '/convert',
+        name: 'convert',
+        builder: (context, state) => const TxtConvertScreen(),
       ),
       GoRoute(
         path: '/lobby/:roomCode',

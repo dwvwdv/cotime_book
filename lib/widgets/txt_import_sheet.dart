@@ -124,7 +124,7 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
     setState(() => _rows.insert(index + by, _rows.removeAt(index)));
   }
 
-  bool get _canShare =>
+  bool get _canConvert =>
       _title.text.trim().isNotEmpty &&
       _rows.every((row) => !row.isReading) &&
       _rows.any((row) => !row.analysis.isEmpty);
@@ -162,10 +162,10 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
           const SizedBox(height: 8),
           Text(
             several
-                ? 'These ${_rows.length} files become one book, in this order. '
-                      'Everyone in the room reads the same copy.'
-                : 'This file becomes a book. Everyone in the room reads the '
-                      'same copy.',
+                ? 'These ${_rows.length} files become one EPUB, in this '
+                      'order. You can read it before saving it.'
+                : 'This file becomes an EPUB. You can read it before saving '
+                      'it.',
             style: AppTheme.caption,
           ),
           const SizedBox(height: 12),
@@ -234,11 +234,11 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _canShare ? _confirm : null,
+                  onPressed: _canConvert ? _confirm : null,
                   child: Text(
                     _rows.any((row) => row.isReading)
                         ? 'Reading...'
-                        : 'Share Book',
+                        : 'Make EPUB',
                   ),
                 ),
               ),

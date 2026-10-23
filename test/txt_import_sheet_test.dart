@@ -90,7 +90,7 @@ void main() {
     expect(find.text('Encoding: GBK / GB18030'), findsOneWidget);
     expect(find.textContaining('1 chapter ·'), findsOneWidget);
 
-    await tester.tap(find.text('Share Book'));
+    await tester.tap(find.text('Make EPUB'));
     expect(confirmed!.title, '雨夜');
     expect(confirmed!.parts.single.encoding, TxtEncoding.gbk);
   });
@@ -152,15 +152,15 @@ void main() {
     expect(find.text('Split by length'), findsOneWidget);
     expect(find.textContaining('Split by length ·'), findsOneWidget);
 
-    await tester.ensureVisible(find.text('Share Book'));
-    await tester.tap(find.text('Share Book'));
+    await tester.ensureVisible(find.text('Make EPUB'));
+    await tester.tap(find.text('Make EPUB'));
     expect(confirmed!.findChapters, isFalse);
 
     // And back on.
     await tester.tap(find.text('Split into chapters'));
     await tester.pump();
     expect(find.text('2 chapters'), findsOneWidget);
-    await tester.tap(find.text('Share Book'));
+    await tester.tap(find.text('Make EPUB'));
     expect(confirmed!.findChapters, isTrue);
   });
 
@@ -202,7 +202,7 @@ void main() {
     await tester.pump();
     await tester.tap(find.byTooltip('Move up').at(2));
     await tester.pump();
-    await tester.tap(find.text('Share Book'));
+    await tester.tap(find.text('Make EPUB'));
 
     expect(confirmed!.parts.map((p) => p.source.fileName), [
       '雨夜 上.txt',
@@ -238,21 +238,21 @@ void main() {
 
     await tester.enterText(find.byKey(const ValueKey('txt-title')), '  ');
     await tester.pump();
-    await tester.ensureVisible(find.text('Share Book'));
+    await tester.ensureVisible(find.text('Make EPUB'));
     await tester.pump();
-    await tester.tap(find.text('Share Book'));
+    await tester.tap(find.text('Make EPUB'));
     expect(confirmed, isNull);
 
     await tester.enterText(find.byKey(const ValueKey('txt-title')), 'Book');
     await tester.pump();
-    await tester.ensureVisible(find.text('Share Book'));
+    await tester.ensureVisible(find.text('Make EPUB'));
     await tester.pump();
-    await tester.tap(find.text('Share Book'));
+    await tester.tap(find.text('Make EPUB'));
     expect(confirmed!.parts.map((p) => p.source.fileName), ['a.txt']);
   });
 
   testWidgets('with the keyboard up on a short screen the sheet scrolls '
-      'instead of cutting off Share Book', (tester) async {
+      'instead of cutting off Make EPUB', (tester) async {
     // A 640px screen with a 300px keyboard leaves the sheet 244px: less than
     // the title and author fields and the buttons take on their own.
     TxtBookRequest? confirmed;
@@ -285,9 +285,9 @@ void main() {
 
     await tester.enterText(find.byKey(const ValueKey('txt-title')), '夜雨');
     await tester.pump();
-    await tester.ensureVisible(find.text('Share Book'));
+    await tester.ensureVisible(find.text('Make EPUB'));
     await tester.pump();
-    await tester.tap(find.text('Share Book'));
+    await tester.tap(find.text('Make EPUB'));
 
     expect(confirmed!.title, '夜雨');
   });

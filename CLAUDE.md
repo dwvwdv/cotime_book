@@ -39,8 +39,8 @@
 
 ```
 lib/
-  screens/     home / room_lobby / reader 三個畫面
-  providers/   Riverpod StateNotifier（auth, room, presence, book, page_sync）
+  screens/     home / room_lobby / reader，加上首頁的 TXT 轉檔工具與單機預覽
+  providers/   Riverpod StateNotifier（auth, room, presence, book, page_sync, txt_convert）
   services/    Supabase 與 Realtime 的邊界（realtime, page_sync, room, file_transfer）
   models/      不可變的資料型別與 wire 的 JSON 轉換
   widgets/     無狀態 UI 元件
@@ -157,9 +157,13 @@ supabase/
    `cotime_book.library_catalog` view（bucket left join 目錄），沒有目錄列的書仍要列得出來。
    瀏覽與搜尋在獨立的 `LibraryBrowser`（lobby 的「Library」按鈕），不要塞回「Share Book」
    （issue #AB）。
-   TXT 只是匯入格式：分享端用 `lib/services/txt_book.dart` 轉成 EPUB 再分享，房間裡永遠只有
-   EPUB（PR #27）。不要讓 reader、傳書或儲存認得 TXT；轉換要保持可重現（沒有時間戳、
-   沒有隨機 identifier）。
+   TXT 只是匯入格式，而且**不在房間裡轉**：首頁左下角的「TXT to EPUB」工具
+   （`TxtConvertScreen` / `txtConvertProvider`）用 `lib/services/txt_book.dart` 轉成 EPUB，
+   讓轉換的人先在 `BookPreviewScreen` 單機讀過、存到裝置，再從房間的「Share Book」分享。
+   「Share Book」只收 EPUB——不要把 TXT 加回去，轉壞的書會讓整房等。房間裡永遠只有 EPUB
+   （PR #27）。不要讓 reader、傳書或儲存認得 TXT；轉換要保持可重現（沒有時間戳、
+   沒有隨機 identifier）。預覽用的是與房間相同的 `SharedPage` 規則（一人房的頁框），
+   不要讓它另走一套排版，否則預覽看到的分頁不是房間會看到的。
 
 7. **錯誤狀態要能自己收斂。**
    `PageSyncState.error` 會在 `defaultErrorAutoClearDelay` 後自動回到 idle。

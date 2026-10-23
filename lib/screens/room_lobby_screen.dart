@@ -18,7 +18,6 @@ import '../widgets/library_browser.dart';
 import '../widgets/member_list.dart';
 import '../widgets/paper.dart';
 import '../widgets/room_code_display.dart';
-import '../widgets/txt_import_sheet.dart';
 import '../widgets/transfer_progress_widget.dart';
 import 'room_removed.dart';
 
@@ -307,9 +306,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       final previousIds = (previous?.onlineUserIds ?? const <String>[]).toSet();
       final nextIds = next.onlineUserIds.toSet();
       if (!const SetEquality<String>().equals(previousIds, nextIds)) {
-        unawaited(
-          notifier.refreshMembers(presenceUsers: next.onlineUsers),
-        );
+        unawaited(notifier.refreshMembers(presenceUsers: next.onlineUsers));
         unawaited(notifier.refreshRoom());
       }
     });
@@ -328,9 +325,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       // A static line rather than a spinner: on e-ink a spinner is a panel
       // refresh every frame for as long as the room takes to join.
       return const Scaffold(
-        body: Center(
-          child: Text('Opening the room...', style: AppTheme.title),
-        ),
+        body: Center(child: Text('Opening the room...', style: AppTheme.title)),
       );
     }
 
@@ -452,8 +447,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                               children: [
                                 Expanded(
                                   child: OutlinedButton.icon(
-                                    onPressed:
-                                        _isLeaving || bookState.isLoading
+                                    onPressed: _isLeaving || bookState.isLoading
                                         ? null
                                         : _shareBook,
                                     icon: const Icon(Icons.upload_file),
@@ -467,8 +461,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: OutlinedButton.icon(
-                                    onPressed:
-                                        _isLeaving || bookState.isLoading
+                                    onPressed: _isLeaving || bookState.isLoading
                                         ? null
                                         : _browseLibrary,
                                     icon: const Icon(
@@ -550,16 +543,10 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     );
   }
 
-  /// Shares an EPUB from this device, or TXT files made into one.
+  /// Shares an EPUB from this device. TXT files are converted on the home
+  /// screen first, where the result can be read before the room waits on it.
   Future<void> _shareBook() async {
-    await ref
-        .read(bookProvider.notifier)
-        .pickAndShareBook(
-          confirmTxt: (draft) async {
-            if (!mounted || _isLeaving) return null;
-            return showTxtImportSheet(context: context, draft: draft);
-          },
-        );
+    await ref.read(bookProvider.notifier).pickAndShareBook();
   }
 
   /// Shares a book from the public library.
@@ -623,11 +610,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
             children: [
               const Icon(Icons.meeting_room_outlined, size: 56),
               const SizedBox(height: 16),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: AppTheme.body,
-              ),
+              Text(message, textAlign: TextAlign.center, style: AppTheme.body),
               const SizedBox(height: 24),
               ElevatedButton(
                 onPressed: () => context.goNamed('home'),
@@ -847,8 +830,7 @@ class LobbyReadiness {
     required bool isConnected,
   }) {
     final someoneReading = onlineUsers.any(
-      (user) =>
-          user['user_id'] != currentUserId && user['is_reading'] == true,
+      (user) => user['user_id'] != currentUserId && user['is_reading'] == true,
     );
     // During a running session the host joins like anyone else. "Start" would
     // broadcast start_reading and pull back in members who chose to leave.
@@ -889,16 +871,17 @@ class LobbyReadiness {
       for (final user in onlineUsers)
         if (user['user_id'] is String) user['user_id'] as String: user,
     };
-    final stillReceiving = members
-        .where((member) => member.userId != currentUserId)
-        .where((member) {
-          final presence = onlineById[member.userId];
-          if (presence == null) return false;
-          return !presenceHoldsBook(presence, currentBookHash);
-        })
-        .map((member) => member.nickname)
-        .toList()
-      ..sort();
+    final stillReceiving =
+        members
+            .where((member) => member.userId != currentUserId)
+            .where((member) {
+              final presence = onlineById[member.userId];
+              if (presence == null) return false;
+              return !presenceHoldsBook(presence, currentBookHash);
+            })
+            .map((member) => member.nickname)
+            .toList()
+          ..sort();
 
     return LobbyReadiness(
       canOpenReader: true,
