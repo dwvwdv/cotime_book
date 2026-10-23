@@ -367,13 +367,17 @@ class RoomNotifier extends StateNotifier<RoomState> {
   }
 
   /// Fetch the latest room data from DB (e.g. to get updated CFI on re-entry).
-  Future<void> refreshRoom() async {
-    await refreshRoomAndGet();
+  ///
+  /// [quiet] is for background re-reads: a failed one says nothing, since
+  /// [RoomState.error] stays up until something clears it (GH-30) and the
+  /// next re-read is only seconds away.
+  Future<void> refreshRoom({bool quiet = false}) async {
+    await refreshRoomAndGet(quiet: quiet);
   }
 
   /// Fetch and return an authoritative room snapshot when recovery depends on
   /// knowing whether the read completed for the current room session.
-  Future<Room?> refreshRoomAndGet() async {
+  Future<Room?> refreshRoomAndGet({bool quiet = false}) async {
     final room = state.currentRoom;
     if (room == null) return null;
     final roomSessionGeneration = _roomSessionGeneration;
@@ -400,11 +404,41 @@ class RoomNotifier extends StateNotifier<RoomState> {
         return state.currentRoom;
       }
     } catch (error) {
-      if (_isCurrentRoomSession(room.id, roomSessionGeneration)) {
+      if (!quiet && _isCurrentRoomSession(room.id, roomSessionGeneration)) {
         state = state.copyWith(error: error.toString());
       }
     }
     return null;
+  }
+
+  /// Host only: who sets the room's text size, and the size while the host
+  /// does. Returns false when the change did not happen; the room is then
+  /// re-read, since the refusal usually means someone else is host now.
+  Future<bool> setRoomTextSize({required bool locked, int? textSize}) async {
+    final room = state.currentRoom;
+    if (room == null) return false;
+    final roomSessionGeneration = _roomSessionGeneration;
+    try {
+      final updated = await _roomService.setRoomTextSize(
+        roomId: room.id,
+        locked: locked,
+        textSize: textSize,
+      );
+      _applyRoomUpdate(
+        updated,
+        originRoom: room,
+        roomSessionGeneration: roomSessionGeneration,
+      );
+      return _isCurrentRoomSession(room.id, roomSessionGeneration);
+    } on RoomSessionRevokedException catch (error) {
+      await _revokeSession(room.id, error.message, roomSessionGeneration);
+      return false;
+    } catch (_) {
+      if (_isCurrentRoomSession(room.id, roomSessionGeneration)) {
+        await refreshRoom(quiet: true);
+      }
+      return false;
+    }
   }
 
   Future<void> updateCfi(String cfi) async {

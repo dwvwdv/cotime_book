@@ -8,6 +8,72 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('RoomNotifier', () {
+    test('the host\'s text size change lands in the room at once', () async {
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+      await notifier.joinRoom('ABC234', 'Alice');
+
+      expect(
+        await notifier.setRoomTextSize(locked: true, textSize: 24),
+        isTrue,
+      );
+
+      expect(service.textSizeWrites, [(true, 24)]);
+      expect(notifier.state.currentRoom?.textSize, 24);
+      expect(notifier.state.currentRoom?.textSizeLocked, isTrue);
+    });
+
+    test('a refused text size change re-reads the room and keeps it', () async {
+      // The refusal usually means someone else is host now: the room as the
+      // database has it is what the settings must show, and the reader stays.
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+      await notifier.joinRoom('ABC234', 'Alice');
+      final readsBefore = service.roomReads;
+      service.textSizeError = Exception('Only the host can change it');
+
+      expect(await notifier.setRoomTextSize(locked: false), isFalse);
+
+      expect(service.roomReads, readsBefore + 1);
+      expect(notifier.state.currentRoom, isNotNull);
+      expect(notifier.state.error, isNull);
+    });
+
+    test('a text size change from a reader no longer in the room leaves it',
+        () async {
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+      await notifier.joinRoom('ABC234', 'Alice');
+      service.textSizeError = const RoomSessionRevokedException('gone');
+
+      expect(
+        await notifier.setRoomTextSize(locked: true, textSize: 20),
+        isFalse,
+      );
+
+      expect(notifier.state.currentRoom, isNull);
+      expect(notifier.state.error, 'gone');
+    });
+
+    test('a quiet re-read that fails puts up no error', () async {
+      // The reader re-reads the room every 30 seconds for the text size; a
+      // failed background read must not leave a message up (GH-30).
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+      await notifier.joinRoom('ABC234', 'Alice');
+      service.roomReadError = Exception('offline');
+
+      await notifier.refreshRoom(quiet: true);
+      expect(notifier.state.error, isNull);
+
+      await notifier.refreshRoom();
+      expect(notifier.state.error, contains('offline'));
+    });
+
     test('overlapping position saves never leave an older page behind', () async {
       // Regression: two saves raced; the newer committed first and the older
       // one's conflict retry then wrote the older page over it.
@@ -836,7 +902,32 @@ class FakeRoomService extends RoomService {
 
   @override
   Future<Room?> getRoom(String roomId) async {
+    roomReads++;
+    final error = roomReadError;
+    if (error != null) throw error;
     return roomRead?.future ?? nextRoom;
+  }
+
+  int roomReads = 0;
+  Object? roomReadError;
+  Object? textSizeError;
+  final List<(bool, int?)> textSizeWrites = [];
+
+  @override
+  Future<Room> setRoomTextSize({
+    required String roomId,
+    required bool locked,
+    int? textSize,
+  }) async {
+    textSizeWrites.add((locked, textSize));
+    final error = textSizeError;
+    if (error != null) throw error;
+    nextRoom = nextRoom.copyWith(
+      textSizeLocked: locked,
+      textSize: textSize ?? nextRoom.textSize,
+      revision: nextRoom.revision + 1,
+    );
+    return nextRoom;
   }
 
   @override

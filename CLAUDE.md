@@ -86,7 +86,18 @@ supabase/
      epub.js 的 `resize()` 遇到「記錄中已經是這個尺寸」會直接略過，所以 `apply()` 一律強制重排，
      並用 `verify()` 確認容器、layout 與每個 view 的欄高都等於頁框；reader 在畫面停下後也會呼叫
      `verify()`，不一致就重新套用（GH-49）。實機上的排版問題請使用者從閱讀設定的
-     「Page Layout Report」複製 `diagnose()` 的結果回報——這類問題只在真的 WebView 上出現過。
+     「Page Layout Report」按「Send Report」——這類問題只在真的 WebView 上出現過。報告經
+     `submit_layout_report` RPC 存進 `cotime_book_private.layout_reports`（App 讀不到，從 dashboard /
+     SQL Editor 查）：裝置、書、房內每個 reader 的 page_fit、最近幾次移動與 `diagnose()`，
+     同一房間同一時刻的報告用 `room_id` 配對；使用者會拿到報告 ID 可以貼進 issue。
+     報告的 key 是查詢用的，不要隨意改名；也不要放書的內文、暱稱或 user id。
+   - **字級預設由房主決定**：`rooms.text_size_locked`（預設 true）與 `text_size`，只能經
+     `set_room_text_size` RPC（host 限定）改。鎖定時每個 reader 在 page_fit 裡要求的是房間的字級
+     （`RoomTextSize.requested`），而 `SharedPage` 的算法不變、仍取最大——所以對鎖定狀態一時意見不一
+     的 reader（重讀還在路上、不認得鎖的舊版）仍排出同一頁，只是字級暫時偏大。不要把鎖做成
+     「只採用 host 的 page_fit」，那會讓沒跟上的 reader 排出不同的頁。房主改完廣播
+     `room_settings_changed`，訊號會掉，所以每個 reader（包括同一個 host 帳號的其他裝置）也每 30 秒
+     靜默重讀房間。
      頁首 CFI 以「第一個可見字元」計算（`shared_page.js` 換掉了 epub.js 用空白切詞的方法，
      issue #21）——中文沒有空白，用詞切會讓頁首指到上一頁。而且只算「從這一頁開始的那一行」的字：
      不能斷行的長網址會溢出到下一頁的範圍，拿溢出的字當下一頁的名字，`display()` 會回到上一頁，

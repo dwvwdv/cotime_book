@@ -211,6 +211,32 @@ class RoomService {
     }
   }
 
+  /// Host only. [textSize] null keeps the size the room has.
+  Future<Room> setRoomTextSize({
+    required String roomId,
+    required bool locked,
+    int? textSize,
+  }) async {
+    try {
+      final roomData = await _database.rpc(
+        'set_room_text_size',
+        params: {
+          'p_room_id': roomId,
+          'p_locked': locked,
+          'p_text_size': textSize,
+        },
+      ).single();
+      return Room.fromJson(roomData);
+    } on PostgrestException catch (error) {
+      if (error.code == '42501' || error.code == 'P0002') {
+        throw const RoomSessionRevokedException(
+          'This room membership is inactive or has expired.',
+        );
+      }
+      rethrow;
+    }
+  }
+
   Future<Never> _throwRoomUpdateFailure(String roomId) async {
     final currentRoom = await getRoom(roomId);
     if (currentRoom == null) {

@@ -14,6 +14,14 @@ class Room {
   /// there. Null for any other book.
   final String? currentBookLibraryPath;
   final String? currentCfi;
+
+  /// Only the host sets the room's text size (the default). When the host
+  /// turns this off, every reader asks for their own size again.
+  final bool textSizeLocked;
+
+  /// The size every reader asks for while [textSizeLocked]. Null until the
+  /// host first opens the book with the lock on.
+  final int? textSize;
   final bool isActive;
   final DateTime? closedAt;
   final DateTime? expiresAt;
@@ -31,6 +39,8 @@ class Room {
     this.currentBookHash,
     this.currentBookLibraryPath,
     this.currentCfi,
+    this.textSizeLocked = true,
+    this.textSize,
     this.isActive = true,
     this.closedAt,
     this.expiresAt,
@@ -50,6 +60,10 @@ class Room {
       currentBookHash: json['current_book_hash'] as String?,
       currentBookLibraryPath: json['current_book_library_path'] as String?,
       currentCfi: json['current_cfi'] as String?,
+      // Locked, like the column's default, when a database from before the
+      // column does not send it.
+      textSizeLocked: json['text_size_locked'] as bool? ?? true,
+      textSize: (json['text_size'] as num?)?.toInt(),
       isActive: json['is_active'] as bool? ?? true,
       closedAt: json['closed_at'] != null
           ? DateTime.parse(json['closed_at'] as String)
@@ -76,6 +90,8 @@ class Room {
       'current_book_hash': currentBookHash,
       'current_book_library_path': currentBookLibraryPath,
       'current_cfi': currentCfi,
+      'text_size_locked': textSizeLocked,
+      'text_size': textSize,
       'is_active': isActive,
       'closed_at': closedAt?.toIso8601String(),
       'expires_at': expiresAt?.toIso8601String(),
@@ -95,6 +111,8 @@ class Room {
     String? currentBookHash,
     Object? currentBookLibraryPath = _unset,
     String? currentCfi,
+    bool? textSizeLocked,
+    Object? textSize = _unset,
     bool? isActive,
     DateTime? closedAt,
     DateTime? expiresAt,
@@ -114,6 +132,8 @@ class Room {
           ? this.currentBookLibraryPath
           : currentBookLibraryPath as String?,
       currentCfi: currentCfi ?? this.currentCfi,
+      textSizeLocked: textSizeLocked ?? this.textSizeLocked,
+      textSize: identical(textSize, _unset) ? this.textSize : textSize as int?,
       isActive: isActive ?? this.isActive,
       closedAt: closedAt ?? this.closedAt,
       expiresAt: expiresAt ?? this.expiresAt,
