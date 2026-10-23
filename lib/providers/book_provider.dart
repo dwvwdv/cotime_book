@@ -110,13 +110,44 @@ class BookNotifier extends StateNotifier<BookState> {
   Future<void> _transferOperationTail = Future<void>.value();
   bool _isDisposed = false;
 
+  /// How long a book error stays up on its own (GH-44). Longer than a page
+  /// sync error: the lobby is where people wait, often looking away, and the
+  /// notice can be dismissed sooner. Retrying is always just another share.
+  static const defaultErrorAutoClearDelay = Duration(seconds: 20);
+
+  final Duration _errorAutoClearDelay;
+  Timer? _errorAutoClearTimer;
+
   BookNotifier({
     required this.ref,
     required EpubStorageService storageService,
     required LibraryService library,
+    Duration errorAutoClearDelay = defaultErrorAutoClearDelay,
   }) : _storageService = storageService,
        _library = library,
+       _errorAutoClearDelay = errorAutoClearDelay,
        super(const BookState());
+
+  /// Takes the error notice down (the reader closed it).
+  void dismissError() {
+    _errorAutoClearTimer?.cancel();
+    _errorAutoClearTimer = null;
+    if (state.error != null) state = state.copyWith(clearError: true);
+  }
+
+  /// Shows [error] for [_errorAutoClearDelay]. Only that error is cleared:
+  /// unrelated updates in between keep it (GH-30), and a newer error gets its
+  /// own full time.
+  void _showError(String error, {bool? isLoading}) {
+    state = state.copyWith(isLoading: isLoading, error: error);
+    final shown = state.error;
+    _errorAutoClearTimer?.cancel();
+    _errorAutoClearTimer = Timer(_errorAutoClearDelay, () {
+      _errorAutoClearTimer = null;
+      if (_isDisposed || !identical(state.error, shown)) return;
+      state = state.copyWith(clearError: true);
+    });
+  }
 
   Future<void> initTransferService({
     required RealtimeService realtimeService,
@@ -186,7 +217,7 @@ class BookNotifier extends StateNotifier<BookState> {
           ).catchError((Object error) {
             if (_isCurrent(sessionGeneration) &&
                 transferGeneration == _transferGeneration) {
-              state = state.copyWith(error: error.toString());
+              _showError(error.toString());
             }
           }),
         );
@@ -370,9 +401,11 @@ class BookNotifier extends StateNotifier<BookState> {
     if (!_isCurrent(generation)) return;
     final superseded =
         shareGeneration != null && shareGeneration != _shareGeneration;
-    state = superseded
-        ? state.copyWith(isLoading: false)
-        : state.copyWith(isLoading: false, error: error);
+    if (superseded) {
+      state = state.copyWith(isLoading: false);
+    } else {
+      _showError(error, isLoading: false);
+    }
   }
 
   Future<void> _shareBytes({
@@ -635,6 +668,7 @@ class BookNotifier extends StateNotifier<BookState> {
   @override
   void dispose() {
     _isDisposed = true;
+    _errorAutoClearTimer?.cancel();
     ++_sessionGeneration;
     unawaited(_serializeTransferOperation(_disposeTransferServiceInternal));
     super.dispose();

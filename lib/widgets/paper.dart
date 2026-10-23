@@ -62,10 +62,14 @@ class PaperNotice extends StatelessWidget {
   final String message;
   final IconData icon;
 
+  /// Shows a close button when set.
+  final VoidCallback? onDismiss;
+
   const PaperNotice({
     super.key,
     required this.message,
     this.icon = Icons.error_outline,
+    this.onDismiss,
   });
 
   @override
@@ -96,6 +100,15 @@ class PaperNotice extends StatelessWidget {
               ),
             ),
           ),
+          if (onDismiss != null)
+            IconButton(
+              onPressed: onDismiss,
+              icon: const Icon(Icons.close, size: 20),
+              tooltip: 'Dismiss',
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 24),
+            ),
         ],
       ),
     );
