@@ -90,7 +90,9 @@ supabase/
      頁首 CFI 以「第一個可見字元」計算（`shared_page.js` 換掉了 epub.js 用空白切詞的方法，
      issue #21）——中文沒有空白，用詞切會讓頁首指到上一頁。而且只算「從這一頁開始的那一行」的字：
      不能斷行的長網址會溢出到下一頁的範圍，拿溢出的字當下一頁的名字，`display()` 會回到上一頁，
-     全房卡住（GH-52）；共享排版也讓過長的字串與 `pre` 在欄內換行。沒有字的頁同理：空白頁在翻頁時
+     全房卡住（GH-52）；共享排版也讓過長的字串與 `pre` 在欄內換行。書裡元素的 `overflow` 一律 visible：
+     裁切溢出的容器在分欄排版裡不能拆頁，calibre 的 GitBook 轉檔把整章包在 `overflow: hidden` 裡，
+     整章被擠成一頁、其餘被裁掉、翻一頁就跳章（GH-49）。`check.js` 會確認每章最後一段都有某一頁顯示出來。沒有字的頁同理：空白頁在翻頁時
      直接跳過，只有圖的頁以圖的 element CFI 命名（issue #22）。
      改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，先在本機跑
      `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致（本機約 5 分鐘）。

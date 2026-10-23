@@ -128,6 +128,14 @@ class SharedPageStyle {
       // Code keeps its line breaks but wraps at the column for the same
       // reason: a page is never scrolled sideways.
       'pre, pre *': {'white-space': 'pre-wrap !important'},
+      // A box that clips its overflow cannot be split across columns, so
+      // the book's own `overflow: hidden` on a wrapper (calibre's GitBook
+      // conversions put every chapter in one) squeezed the whole chapter
+      // into one page: the rest was cut off at its foot, and the next turn
+      // went to the next chapter (GH-49). Nothing in a paginated book is
+      // meant to be scrolled or clipped. Not on body itself: epub.js sets
+      // its overflow for the columns.
+      'body *': {'overflow': 'visible !important'},
     };
   }
 }
