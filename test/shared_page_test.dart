@@ -221,6 +221,13 @@ void main() {
       expect(text['font-family'], endsWith('!important'));
       expect(text['line-height'], '${SharedPageStyle.lineHeight} !important');
       expect(text['hyphens'], 'manual !important');
+      // A URL or a code line wider than the page wraps instead of running
+      // past its edge, where it was cut off (GH-52).
+      expect(text['overflow-wrap'], 'break-word !important');
+      expect(
+        (rules['pre, pre *'] as Map<String, dynamic>)['white-space'],
+        'pre-wrap !important',
+      );
     });
   });
 }

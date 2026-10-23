@@ -120,7 +120,14 @@ class SharedPageStyle {
         // using the font's own metrics; older ones do neither.
         'text-spacing-trim': 'space-all !important',
         'text-autospace': 'no-autospace !important',
+        // A word too long for the column (a URL) breaks instead of running
+        // past it: the overflow was cut off at the page edge and named the
+        // next page by a character of this one (GH-52).
+        'overflow-wrap': 'break-word !important',
       },
+      // Code keeps its line breaks but wraps at the column for the same
+      // reason: a page is never scrolled sideways.
+      'pre, pre *': {'white-space': 'pre-wrap !important'},
     };
   }
 }

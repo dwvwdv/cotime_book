@@ -124,6 +124,45 @@
     return null;
   }
 
+  // The first character of the first line that begins on this page. epub.js
+  // takes the first character, in document order, that lies in the page's
+  // strip; but a line that cannot break (a long URL) runs out of its column
+  // into the next page's strip, so the next page was named by a character
+  // of the page before. display() places a name by the whole line, which is
+  // still on the page before: every reader shown that name went back a page,
+  // and turning from there committed the same name again, so the room could
+  // not get past the page (GH-52). Characters of a line that began on an
+  // earlier page never name this one. Null when no line begins here.
+  function firstLineStart(mapping, root, start, end) {
+    var doc = root.ownerDocument;
+    var walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    var range = doc.createRange();
+    var node;
+    while ((node = walker.nextNode())) {
+      if (!/\S/.test(node.data)) continue;
+      range.selectNodeContents(node);
+      var bounds = range.getBoundingClientRect();
+      if (bounds.width === 0 && bounds.height === 0) continue;
+      // Text after the page: nothing later in the flow is on it either.
+      if (bounds.left >= end) break;
+      if (bounds.right <= start) continue;
+      var lines = range.getClientRects();
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.width === 0 || !startsOnPage(line, start, end)) continue;
+        var characters = mapping.splitTextNodeIntoRanges(node);
+        for (var j = 0; j < characters.length; j++) {
+          var box = characters[j].getBoundingClientRect();
+          if (box.width > 0 && startsOnPage(box, start, end) &&
+              box.top < line.bottom && box.bottom > line.top) {
+            return characters[j];
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   // A page with no text on it has no character to be named by, and epub.js
   // then falls back to the last text before it — on an earlier page. A
   // follower shown that name stayed where it was while the requester was
@@ -137,8 +176,9 @@
     var findStart = proto.findStart;
     var rangePairToCfiPair = proto.rangePairToCfiPair;
     proto.findStart = function (root, start, end) {
-      var range = findStart.call(this, root, start, end);
-      if (!horizontalLtr(this)) return range;
+      if (!horizontalLtr(this)) return findStart.call(this, root, start, end);
+      var range = firstLineStart(this, root, start, end) ||
+        findStart.call(this, root, start, end);
       if (range && startsOnPage(range.getBoundingClientRect(), start, end)) {
         return range;
       }

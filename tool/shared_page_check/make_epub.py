@@ -5,7 +5,8 @@
 # Chapters also end the ways converted books do, leaving pages with nothing
 # on them (issue #22): a run of empty paragraphs, and a page break before an
 # empty paragraph. The book itself ends in blank pages, and one chapter holds
-# a picture on a page of its own, with no text on it.
+# a picture on a page of its own, with no text on it, and one holds lines too
+# long for the column.
 import sys
 import struct, zipfile, zlib, random
 random.seed(7)
@@ -32,9 +33,22 @@ endings = [
     '<div style="page-break-before: always"><p>&#160;</p></div>',
     empty_paragraphs,
 ]
+# Lines that cannot break where the column ends (GH-52): a URL in Chinese
+# text, which the shared stylesheet must wrap, and the same paragraph kept
+# from breaking the way a book's own !important style can. Its URL line
+# spills into the next page's strip with the rest of the paragraph on the
+# lines below it, which is what named the next page by a character of this
+# one. Repeated, so one of them lands at the foot of a page.
+url = "可以先尝试通过在线网站CloudFlareWatch（http://www.crimeflare.us/cfs.xhtml#box-and-a-much-longer-anchor-that-cannot-break）对CloudFlare客户网站进行真实IP查询，结果如图1-12所示，" + cjk * 2
+def extra(c, i):
+    if c == 2 and i == 3:
+        return picture
+    if c == 1 and i % 3 == 0:
+        return f'<p>{url}</p><p style="overflow-wrap: normal !important">{url}</p>'
+    return ""
 chapters = []
 for c in range(3):
-    ps = "".join(f"<p>{para(i)}</p>" + (picture if c == 2 and i == 3 else "") for i in range(40))
+    ps = "".join(f"<p>{para(i)}</p>" + extra(c, i) for i in range(40))
     chapters.append(f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>C{c}</title></head><body><h1>Chapter {c+1}</h1>{ps}<p><i>Italic tail</i> <b>bold tail</b></p>{endings[c]}</body></html>')
 z = zipfile.ZipFile(sys.argv[1], "w")
 z.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
