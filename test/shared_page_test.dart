@@ -228,6 +228,12 @@ void main() {
         (rules['pre, pre *'] as Map<String, dynamic>)['white-space'],
         'pre-wrap !important',
       );
+      // A chapter in a clipping wrapper is laid out across pages, not
+      // squeezed into one (GH-49).
+      expect(
+        (rules['body *'] as Map<String, dynamic>)['overflow'],
+        'visible !important',
+      );
     });
   });
 }

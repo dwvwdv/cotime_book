@@ -173,13 +173,19 @@ void main() {
           {
             ...online('host'),
             'protocols': [
-              [1, 0],
+              [
+                AppConstants.roomProtocolVersion,
+                AppConstants.minCompatibleRoomProtocol,
+              ],
             ],
           },
           {
             ...online('bob'),
             'protocols': [
-              [1, 0],
+              [
+                AppConstants.roomProtocolVersion,
+                AppConstants.minCompatibleRoomProtocol,
+              ],
             ],
           },
         ],
@@ -299,7 +305,12 @@ void main() {
           'protocol': AppConstants.roomProtocolVersion,
           'protocol_min': AppConstants.minCompatibleRoomProtocol,
         },
-        {'user_id': 'bob', 'nickname': 'Bob'},
+        {
+          'user_id': 'bob',
+          'nickname': 'Bob',
+          'protocol': AppConstants.roomProtocolVersion,
+          'protocol_min': AppConstants.minCompatibleRoomProtocol,
+        },
         {
           'user_id': 'carol',
           'nickname': 'Carol',

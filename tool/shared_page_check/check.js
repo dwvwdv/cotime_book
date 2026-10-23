@@ -56,8 +56,12 @@ execFileSync('flutter', ['test', 'tool/shared_page_check/make_txt_book_test.dart
 const rules = JSON.parse(fs.readFileSync(path.join(work, 'rules.json'), 'utf8'));
 // `pictures`: the book has a picture-only page, which must be found.
 const books = {
-  'mixed EPUB': { bytes: [...fs.readFileSync(path.join(work, 'book.epub'))], pictures: true },
-  'TXT import': { bytes: [...fs.readFileSync(path.join(work, 'txt_book.epub'))], pictures: false },
+  'mixed EPUB': {
+    bytes: [...fs.readFileSync(path.join(work, 'book.epub'))], pictures: true, ends: 3,
+  },
+  'TXT import': {
+    bytes: [...fs.readFileSync(path.join(work, 'txt_book.epub'))], pictures: false, ends: 0,
+  },
 };
 let book;
 // SHARED_PAGE_SCRIPT runs another copy, e.g. the one before a change.
@@ -198,6 +202,27 @@ function pageShows() {
   return shows;
 }
 
+/// The marked last paragraphs of chapters ("end-c0", ...) wholly on the page
+/// in view. A chapter squeezed into one clipped page never shows its end
+/// (GH-49).
+function endsShown() {
+  const box = document.getElementById('viewer').getBoundingClientRect();
+  const seen = [];
+  for (const iframe of document.querySelectorAll('#viewer iframe')) {
+    const frame = iframe.getBoundingClientRect();
+    const doc = iframe.contentDocument;
+    if (!doc) continue;
+    for (const el of doc.querySelectorAll('[id^="end-c"]')) {
+      const rects = [...el.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+      const inView = rects.length > 0 && rects.every((r) =>
+        frame.left + r.left >= box.left - 1 && frame.left + r.right <= box.right + 1 &&
+        frame.top + r.top >= box.top - 1 && frame.top + r.bottom <= box.bottom + 1);
+      if (inView) seen.push(el.id);
+    }
+  }
+  return seen;
+}
+
 /// Turns one page; resolves once the viewer has reported where it is.
 /// A turn that cannot move (the end of the book) never reports.
 function turn(tab, direction) {
@@ -222,6 +247,7 @@ async function pageStarts(browser, device, shared, turns) {
   const starts = [];
   const blank = [];
   const pictures = [];
+  const ends = new Set();
   const back = [];
   for (const direction of ['next', 'prev']) {
     const seen = direction === 'next' ? starts : back;
@@ -237,13 +263,14 @@ async function pageStarts(browser, device, shared, turns) {
       const shows = await tab.evaluate(pageShows);
       if (shows === '') blank.push(`${direction} ${i}`);
       if (shows === 'picture' && direction === 'next') pictures.push(i);
+      if (direction === 'next') (await tab.evaluate(endsShown)).forEach((id) => ends.add(id));
       if (!shared && (direction === 'next' ? here.atEnd : here.atStart)) break;
       if (!(await turn(tab, direction))) break;
     }
   }
   back.reverse();
   await context.close();
-  return { starts, blank, pictures, back, scale };
+  return { starts, blank, pictures, ends, back, scale };
 }
 
 /// Whether a frame that no longer matches the book's layout is noticed and
@@ -297,7 +324,7 @@ async function missedCommits(browser, device, starts) {
   });
   const turns = 400;
   let failed = false;
-  for (const [name, { bytes, pictures }] of Object.entries(books)) {
+  for (const [name, { bytes, pictures, ends }] of Object.entries(books)) {
     book = bytes;
     console.log(`${name}:`);
     for (const shared of [false, true]) {
@@ -324,6 +351,12 @@ async function missedCommits(browser, device, starts) {
         // Without one the picture case would pass by not being there.
         console.log(`pictures    : on page ${phone.pictures.join(', ') || 'none'}`);
         if (pictures && phone.pictures.length === 0) failed = true;
+        if (ends > 0) {
+          // Every chapter's last paragraph is on some page: no chapter was
+          // cut short and skipped past.
+          console.log(`chapter ends: ${phone.ends.size}/${ends} shown`);
+          if (phone.ends.size !== ends) failed = true;
+        }
         const named = new Set(a).size;
         console.log(`page names  : ${named}/${a.length} distinct`);
         if (named !== a.length) failed = true;
