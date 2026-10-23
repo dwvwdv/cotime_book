@@ -54,6 +54,11 @@ void main() {
             return const Scaffold(body: Text('Lobby'));
           },
         ),
+        GoRoute(
+          path: '/convert',
+          name: 'convert',
+          builder: (_, _) => const Scaffold(body: Text('Converter')),
+        ),
       ],
     );
     addTearDown(router.dispose);
@@ -211,6 +216,27 @@ void main() {
 
     expect(find.byType(RecentRoomsList), findsNothing);
     expect(store.recentRooms, isEmpty);
+  });
+
+  testWidgets('TXT to EPUB is a tool of its own on the home screen, '
+      'outside any room', (tester) async {
+    await pumpHome(tester);
+
+    await tester.tap(find.text('TXT to EPUB'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Converter'), findsOneWidget);
+    expect(visitedLobbies, isEmpty);
+  });
+
+  testWidgets('TXT to EPUB stays reachable while in a room', (tester) async {
+    await pumpHome(tester);
+    await container.read(roomProvider.notifier).createRoom('Alice');
+    await tester.pump();
+
+    expect(find.text('Continue'), findsOneWidget);
+    expect(find.text('TXT to EPUB'), findsOneWidget);
+    await leave(tester);
   });
 
   test('visit dates read as words', () {

@@ -18,7 +18,6 @@ import '../widgets/library_browser.dart';
 import '../widgets/member_list.dart';
 import '../widgets/paper.dart';
 import '../widgets/room_code_display.dart';
-import '../widgets/txt_import_sheet.dart';
 import '../widgets/transfer_progress_widget.dart';
 import 'room_removed.dart';
 
@@ -550,16 +549,10 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     );
   }
 
-  /// Shares an EPUB from this device, or TXT files made into one.
+  /// Shares an EPUB from this device. TXT files are converted on the home
+  /// screen first, where the result can be read before the room waits on it.
   Future<void> _shareBook() async {
-    await ref
-        .read(bookProvider.notifier)
-        .pickAndShareBook(
-          confirmTxt: (draft) async {
-            if (!mounted || _isLeaving) return null;
-            return showTxtImportSheet(context: context, draft: draft);
-          },
-        );
+    await ref.read(bookProvider.notifier).pickAndShareBook();
   }
 
   /// Shares a book from the public library.

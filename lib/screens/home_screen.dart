@@ -71,173 +71,201 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       },
       child: Scaffold(
         body: SafeArea(
-          child: Center(
-            // E-readers are mostly 7-10" portrait panels; a full-width form
-            // on those reads like a spreadsheet. Keep a book-page measure.
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 480),
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(28, 48, 28, 28),
-                children: [
-                  const Masthead(),
-                  const SizedBox(height: 28),
-                  const Divider(thickness: AppTheme.heavyRuleWidth),
-                  const SizedBox(height: 28),
-
-                  if (roomState.currentRoom != null) ...[
-                    const SectionHeader(label: 'Active room'),
-                    const SizedBox(height: 14),
-                    Text(
-                      roomState.currentRoom!.code,
-                      style: AppTheme.title.copyWith(letterSpacing: 6),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
+          child: Column(
+            children: [
+              Expanded(
+                child: Center(
+                  // E-readers are mostly 7-10" portrait panels; a full-width form
+                  // on those reads like a spreadsheet. Keep a book-page measure.
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 480),
+                    child: ListView(
+                      padding: const EdgeInsets.fromLTRB(28, 48, 28, 28),
                       children: [
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: _isLeavingRoom
-                                ? null
-                                : () => context.goNamed(
-                                    'lobby',
-                                    pathParameters: {
-                                      'roomCode': roomState.currentRoom!.code,
-                                    },
+                        const Masthead(),
+                        const SizedBox(height: 28),
+                        const Divider(thickness: AppTheme.heavyRuleWidth),
+                        const SizedBox(height: 28),
+
+                        if (roomState.currentRoom != null) ...[
+                          const SectionHeader(label: 'Active room'),
+                          const SizedBox(height: 14),
+                          Text(
+                            roomState.currentRoom!.code,
+                            style: AppTheme.title.copyWith(letterSpacing: 6),
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: _isLeavingRoom
+                                      ? null
+                                      : () => context.goNamed(
+                                          'lobby',
+                                          pathParameters: {
+                                            'roomCode':
+                                                roomState.currentRoom!.code,
+                                          },
+                                        ),
+                                  child: const Text('Continue'),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: _isLeavingRoom
+                                      ? null
+                                      : _leaveActiveRoom,
+                                  // Words, not a spinner: a spinning indicator
+                                  // keeps an e-ink panel refreshing until it stops.
+                                  child: Text(
+                                    _isLeavingRoom
+                                        ? 'Leaving...'
+                                        : 'Leave Room',
                                   ),
-                            child: const Text('Continue'),
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: _isLeavingRoom ? null : _leaveActiveRoom,
-                            // Words, not a spinner: a spinning indicator
-                            // keeps an e-ink panel refreshing until it stops.
-                            child: Text(
-                              _isLeavingRoom ? 'Leaving...' : 'Leave Room',
+                          const SizedBox(height: 28),
+                        ],
+
+                        if (!roomState.isInRoom) ...[
+                          TextField(
+                            controller: _nicknameController,
+                            decoration: const InputDecoration(
+                              labelText: 'Nickname',
+                              hintText: 'What should others call you?',
+                              prefixIcon: Icon(Icons.person_outline),
                             ),
+                            style: AppTheme.body,
+                            maxLength: 20,
+                            buildCounter:
+                                (
+                                  _, {
+                                  required currentLength,
+                                  required isFocused,
+                                  maxLength,
+                                }) => null,
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 28),
-                  ],
+                          const SizedBox(height: 20),
 
-                  if (!roomState.isInRoom) ...[
-                    TextField(
-                      controller: _nicknameController,
-                      decoration: const InputDecoration(
-                        labelText: 'Nickname',
-                        hintText: 'What should others call you?',
-                        prefixIcon: Icon(Icons.person_outline),
-                      ),
-                      style: AppTheme.body,
-                      maxLength: 20,
-                      buildCounter:
-                          (
-                            _, {
-                            required currentLength,
-                            required isFocused,
-                            maxLength,
-                          }) => null,
-                    ),
-                    const SizedBox(height: 20),
-
-                    if (_isJoinMode) ...[
-                      RoomCodeInput(controller: _roomCodeController),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
+                          if (_isJoinMode) ...[
+                            RoomCodeInput(controller: _roomCodeController),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: roomState.isLoading
+                                        ? null
+                                        : () => setState(
+                                            () => _isJoinMode = false,
+                                          ),
+                                    child: const Text('Back'),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: roomState.isLoading
+                                        ? null
+                                        : _joinRoom,
+                                    child: Text(
+                                      roomState.isLoading
+                                          ? 'Joining...'
+                                          : 'Join Room',
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ] else ...[
+                            ElevatedButton.icon(
                               onPressed: roomState.isLoading
                                   ? null
-                                  : () => setState(() => _isJoinMode = false),
-                              child: const Text('Back'),
+                                  : _createRoom,
+                              icon: const Icon(Icons.add),
+                              label: Text(
+                                roomState.isLoading
+                                    ? 'Creating...'
+                                    : 'Create Room',
+                              ),
                             ),
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: roomState.isLoading
+                                  ? null
+                                  : () => setState(() => _isJoinMode = true),
+                              icon: const Icon(Icons.login),
+                              label: const Text('Join Room'),
+                            ),
+                            if (recentRooms.isNotEmpty) ...[
+                              const SizedBox(height: 36),
+                              RecentRoomsList(
+                                rooms: recentRooms,
+                                enabled: !roomState.isLoading,
+                                onOpen: _openRecentRoom,
+                                onForget: (room) => ref
+                                    .read(recentRoomsProvider.notifier)
+                                    .remove(room.code),
+                              ),
+                            ],
+                          ],
+                        ],
+
+                        if (roomState.error != null ||
+                            authState.error != null) ...[
+                          const SizedBox(height: 20),
+                          PaperNotice(
+                            message: roomState.error ?? authState.error!,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: roomState.isLoading ? null : _joinRoom,
+                        ],
+
+                        const SizedBox(height: 40),
+
+                        // Auth status
+                        if (!SupabaseConfig.isConfigured)
+                          const Text(
+                            'Supabase not configured.\n'
+                            'Run with --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...',
+                            style: TextStyle(
+                              color: AppTheme.inkMuted,
+                              fontSize: 12,
+                            ),
+                            textAlign: TextAlign.center,
+                          )
+                        else if (authState.isAuthenticated)
+                          const Text(
+                            'Connected',
+                            style: AppTheme.caption,
+                            textAlign: TextAlign.center,
+                          )
+                        else
+                          Center(
+                            child: TextButton(
+                              onPressed: authState.isLoading
+                                  ? null
+                                  : () async {
+                                      await ref
+                                          .read(authProvider.notifier)
+                                          .signInAnonymously();
+                                    },
                               child: Text(
-                                roomState.isLoading ? 'Joining...' : 'Join Room',
+                                authState.isLoading
+                                    ? 'Connecting...'
+                                    : 'Tap to connect',
                               ),
                             ),
                           ),
-                        ],
-                      ),
-                    ] else ...[
-                      ElevatedButton.icon(
-                        onPressed: roomState.isLoading ? null : _createRoom,
-                        icon: const Icon(Icons.add),
-                        label: Text(
-                          roomState.isLoading ? 'Creating...' : 'Create Room',
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      OutlinedButton.icon(
-                        onPressed: roomState.isLoading
-                            ? null
-                            : () => setState(() => _isJoinMode = true),
-                        icon: const Icon(Icons.login),
-                        label: const Text('Join Room'),
-                      ),
-                      if (recentRooms.isNotEmpty) ...[
-                        const SizedBox(height: 36),
-                        RecentRoomsList(
-                          rooms: recentRooms,
-                          enabled: !roomState.isLoading,
-                          onOpen: _openRecentRoom,
-                          onForget: (room) => ref
-                              .read(recentRoomsProvider.notifier)
-                              .remove(room.code),
-                        ),
                       ],
-                    ],
-                  ],
-
-                  if (roomState.error != null || authState.error != null) ...[
-                    const SizedBox(height: 20),
-                    PaperNotice(message: roomState.error ?? authState.error!),
-                  ],
-
-                  const SizedBox(height: 40),
-
-                  // Auth status
-                  if (!SupabaseConfig.isConfigured)
-                    const Text(
-                      'Supabase not configured.\n'
-                      'Run with --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...',
-                      style: TextStyle(color: AppTheme.inkMuted, fontSize: 12),
-                      textAlign: TextAlign.center,
-                    )
-                  else if (authState.isAuthenticated)
-                    const Text(
-                      'Connected',
-                      style: AppTheme.caption,
-                      textAlign: TextAlign.center,
-                    )
-                  else
-                    Center(
-                      child: TextButton(
-                        onPressed: authState.isLoading
-                            ? null
-                            : () async {
-                                await ref
-                                    .read(authProvider.notifier)
-                                    .signInAnonymously();
-                              },
-                        child: Text(
-                          authState.isLoading
-                              ? 'Connecting...'
-                              : 'Tap to connect',
-                        ),
-                      ),
                     ),
-                ],
+                  ),
+                ),
               ),
-            ),
+              const _ToolsBar(),
+            ],
           ),
         ),
       ), // end Scaffold
@@ -347,5 +375,31 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (errors.isNotEmpty) {
       _showError('Room cleanup needs attention: ${errors.join('; ')}');
     }
+  }
+}
+
+/// Tools that work on this device alone, kept apart from rooms (bottom left).
+///
+/// TXT to EPUB lives here rather than in a room's Share Book: the person who
+/// converts a book reads it first, so a bad conversion never has a whole room
+/// waiting on it, and rooms only ever deal in EPUB.
+class _ToolsBar extends StatelessWidget {
+  const _ToolsBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      decoration: const BoxDecoration(border: Border(top: AppTheme.rule)),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          onPressed: () => context.pushNamed('convert'),
+          icon: const Icon(Icons.swap_horiz),
+          label: const Text('TXT to EPUB'),
+        ),
+      ),
+    );
   }
 }

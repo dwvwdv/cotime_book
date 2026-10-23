@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/models/library_book.dart';
 import 'package:cotime_book/providers/book_provider.dart';
 import 'package:cotime_book/providers/presence_provider.dart';
@@ -10,9 +9,6 @@ import 'package:cotime_book/providers/room_provider.dart';
 import 'package:cotime_book/services/epub_storage_service.dart';
 import 'package:cotime_book/services/library_service.dart';
 import 'package:cotime_book/services/realtime_service.dart';
-import 'package:cotime_book/services/txt_book.dart';
-import 'package:archive/archive.dart';
-import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -67,30 +63,6 @@ class HookedPresence extends PresenceNotifier {
     await super.updateHasBook(hasBook, bookHash: bookHash);
   }
 }
-
-/// A channel that is always connected and keeps what was broadcast.
-class RecordingRealtime extends RealtimeService {
-  final events = <String>[];
-
-  @override
-  Future<void> broadcast({
-    required String event,
-    required Map<String, dynamic> payload,
-  }) async {
-    events.add(event);
-  }
-}
-
-TxtSource txt(String name, String text) =>
-    TxtSource(fileName: name, bytes: Uint8List.fromList(utf8.encode(text)));
-
-/// The XHTML of [epub] in archive order, which is reading order.
-String epubText(Uint8List epub) => ZipDecoder()
-    .decodeBytes(epub)
-    .files
-    .where((f) => f.name.startsWith('OEBPS/text/'))
-    .map((f) => utf8.decode(f.content as List<int>))
-    .join();
 
 void main() {
   test('a library download that finishes after someone else shared a book '
@@ -261,158 +233,12 @@ void main() {
     expect(state.isLoading, isFalse);
   });
 
-  group('TXT import', () {
-    late MemoryEpubStorage storage;
-    late RecordingRealtime realtime;
-    late FakeRoomService rooms;
-    late ProviderContainer container;
-
-    setUp(() async {
-      storage = MemoryEpubStorage();
-      realtime = RecordingRealtime();
-      rooms = FakeRoomService();
-      container = ProviderContainer(
-        overrides: [
-          epubStorageProvider.overrideWithValue(storage),
-          libraryServiceProvider.overrideWithValue(SlowLibrary()),
-          realtimeServiceProvider.overrideWithValue(realtime),
-          roomProvider.overrideWith((ref) => RoomNotifier(rooms)),
-        ],
-      );
-      await container.read(roomProvider.notifier).createRoom('Alice');
-    });
-
-    tearDown(() {
-      container.dispose();
-      storage.dir.deleteSync(recursive: true);
-    });
-
-    test('TXT volumes picked together become one book the room reads, '
-        'in volume order', () async {
-      final books = container.read(bookProvider.notifier);
-      TxtImportDraft? shown;
-
-      await books.shareTxtBooks(
-        [
-          txt('雨夜_卷二.txt', '第二章 天亮\n　　院子里的树倒了。\n'),
-          txt('雨夜_卷一.txt', '作者：林某\n第一章 雨夜\n　　他一个人走在路上。\n'),
-        ],
-        confirm: (draft) async {
-          shown = draft;
-          return TxtBookRequest(
-            title: draft.title,
-            author: draft.author,
-            parts: [
-              for (var i = 0; i < draft.sources.length; i++)
-                TxtPart(draft.sources[i], draft.analyses[i].encoding),
-            ],
-          );
-        },
-      );
-
-      expect(shown!.sources.map((s) => s.fileName), ['雨夜_卷一.txt', '雨夜_卷二.txt']);
-      expect(shown!.title, '雨夜');
-      expect(shown!.author, '林某');
-
-      final state = container.read(bookProvider);
-      expect(state.error, isNull);
-      expect(state.isLoading, isFalse);
-      expect(state.currentBook!.title, '雨夜');
-      expect(state.currentBook!.author, '林某');
-
-      // The room's book is the converted EPUB, announced like any other.
-      final epub = storage.saved.values.single;
-      expect(
-        container.read(roomProvider).currentRoom?.currentBookHash,
-        sha256.convert(epub).toString(),
-      );
-      expect(realtime.events, contains('book_shared'));
-      final text = epubText(epub);
-      expect(text.indexOf('他一个人走在路上'), lessThan(text.indexOf('院子里的树倒了')));
-    });
-
-    test(
-      'backing out of the TXT sheet shares nothing and frees Share',
-      () async {
-        final books = container.read(bookProvider.notifier);
-
-        await books.shareTxtBooks([
-          txt('雨夜.txt', '第一章\n　　雨。\n'),
-        ], confirm: (_) async => null);
-
-        final state = container.read(bookProvider);
-        expect(state.isLoading, isFalse);
-        expect(state.error, isNull);
-        expect(state.currentBook, isNull);
-        expect(
-          container.read(roomProvider).currentRoom?.currentBookHash,
-          isNull,
-        );
-        expect(storage.saved, isEmpty);
-      },
-    );
-
-    test('a book someone shares while the TXT sheet is open does not cancel '
-        'the import the reader then confirms', () async {
-      final books = container.read(bookProvider.notifier);
-      final bobHash = sha256.convert([7, 7, 7]).toString();
-
-      await books.shareTxtBooks(
-        [txt('雨夜.txt', '第一章\n　　雨。\n')],
-        confirm: (draft) async {
-          await books.prepareForSharedBook(bobHash);
-          return TxtBookRequest(
-            title: 'Rain',
-            parts: [TxtPart(draft.sources.single, TxtEncoding.utf8)],
-          );
-        },
-      );
-
-      final state = container.read(bookProvider);
-      expect(state.error, isNull);
-      expect(state.currentBook!.title, 'Rain');
-      expect(
-        container.read(roomProvider).currentRoom?.currentBookHash,
-        sha256.convert(storage.saved.values.single).toString(),
-      );
-    });
-
-    test('TXT files over the size limit are refused before anything is '
-        'decoded', () async {
-      final books = container.read(bookProvider.notifier);
-      var asked = false;
-
-      await books.shareTxtBooks(
-        [
-          TxtSource(
-            fileName: 'huge.txt',
-            bytes: Uint8List(AppConstants.maxFileSize + 1),
-          ),
-        ],
-        confirm: (_) async {
-          asked = true;
-          return null;
-        },
-      );
-
-      final state = container.read(bookProvider);
-      expect(asked, isFalse);
-      expect(state.isLoading, isFalse);
-      expect(
-        state.error,
-        'This file is 40.0 MB. A book can be made of at '
-        'most 40.0 MB of text.',
-      );
-    });
-  });
-
-  test('a pick is one EPUB or any number of TXT files', () {
-    expect(pickedBookKind(['a.epub']), PickedBookKind.epub);
-    expect(pickedBookKind(['a.TXT']), PickedBookKind.txt);
-    expect(pickedBookKind(['a.txt', 'b.txt']), PickedBookKind.txt);
-    expect(pickedBookKind(['a.epub', 'b.txt']), PickedBookKind.mixed);
-    expect(pickedBookKind(['a.epub', 'b.epub']), PickedBookKind.mixed);
-    expect(pickedBookKind(['a.pdf']), PickedBookKind.mixed);
+  test('only EPUB files are shared; TXT is converted on the home screen', () {
+    expect(isEpubFileName('a.epub'), isTrue);
+    expect(isEpubFileName('A.EPUB'), isTrue);
+    expect(isEpubFileName('a.txt'), isFalse);
+    expect(isEpubFileName('a.epub.txt'), isFalse);
+    expect(notEpubMessage, contains('TXT to EPUB'));
   });
 
   test('a failed share stays reported until the room has a book', () async {
