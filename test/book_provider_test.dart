@@ -446,4 +446,63 @@ void main() {
     expect(state.hasBook, isTrue);
     expect(state.error, isNull);
   });
+
+  group('a book error clears itself (GH-44)', () {
+    late MemoryEpubStorage storage;
+    late SlowLibrary library;
+    late ProviderContainer container;
+    late BookNotifier books;
+
+    setUp(() {
+      storage = MemoryEpubStorage();
+      addTearDown(() => storage.dir.deleteSync(recursive: true));
+      library = SlowLibrary();
+      container = ProviderContainer(
+        overrides: [
+          bookProvider.overrideWith(
+            (ref) => BookNotifier(
+              ref: ref,
+              storageService: storage,
+              library: library,
+              errorAutoClearDelay: const Duration(milliseconds: 80),
+            ),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      books = container.read(bookProvider.notifier);
+    });
+
+    Future<void> failShare(String path) async {
+      final sharing = books.shareLibraryBook(LibraryBook(path: path));
+      library.downloads[path]!.completeError(Exception('timed out'));
+      await sharing;
+    }
+
+    test('a failed share is no longer reported after a while', () async {
+      await failShare('Alice.epub');
+      expect(container.read(bookProvider).error, contains('Alice'));
+
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(container.read(bookProvider).error, isNull);
+    });
+
+    test('a newer failure gets its own full time', () async {
+      await failShare('Alice.epub');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await failShare('Bob.epub');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      // Past the first error's time, within the second's.
+      expect(container.read(bookProvider).error, contains('Bob'));
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(container.read(bookProvider).error, isNull);
+    });
+
+    test('the reader can close the notice', () async {
+      await failShare('Alice.epub');
+      books.dismissError();
+      expect(container.read(bookProvider).error, isNull);
+    });
+  });
 }

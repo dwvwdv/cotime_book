@@ -1,4 +1,10 @@
 class AppConstants {
+  // The app's name. The Chinese name is the official one; the English name
+  // stays for the launcher of non-Chinese devices (android res/values) and
+  // the English UI text that names the app.
+  static const String appName = '頁間';
+  static const String appNameEnglish = 'CoTime Book';
+
   // Room
   static const int roomCodeLength = 6;
   static const String roomCodeChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

@@ -29,4 +29,21 @@ void main() {
     expect(target, greaterThanOrEqualTo(36));
     expect(_sdkLevel('compileSdk'), greaterThanOrEqualTo(target));
   });
+
+  // The Chinese name is the official one; other devices keep the English.
+  test('the launcher shows 頁間 on Chinese devices', () {
+    final manifest =
+        File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
+    expect(manifest, contains('android:label="@string/app_name"'));
+    String appName(String values) => RegExp(
+          r'<string name="app_name">([^<]*)</string>',
+        )
+            .firstMatch(
+              File('android/app/src/main/res/$values/strings.xml')
+                  .readAsStringSync(),
+            )!
+            .group(1)!;
+    expect(appName('values-zh'), '頁間');
+    expect(appName('values'), 'CoTime Book');
+  });
 }

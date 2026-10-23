@@ -293,7 +293,7 @@ jobs:
             -d chat_id="${TELEGRAM_CHAT_ID}" \
             -d text="${EMOJI} ${MSG}${MODE}
           ${VERSION_LINE}
-          App：CoTime Book
+          App：頁間 CoTime Book
           軌道：${TRACK}（${RELEASE_STATUS}）
           優先級：${PRIORITY}$([ "$PRIORITY" = "5" ] && echo "（強制更新）" || echo "")
           Commit：${GITHUB_SHA::7}

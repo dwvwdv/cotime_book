@@ -381,11 +381,6 @@ void main() {
         // GH-28: the library path was only in the share broadcast, so someone
         // who opened the lobby afterwards waited on the slower peer-to-peer
         // transfer, which also needs a member holding the book to be online.
-        // A phone-sized screen: the default 800x600 test view is too short
-        // for the lobby with both the transfer and the book card showing.
-        tester.view.physicalSize = const Size(1080, 2400);
-        tester.view.devicePixelRatio = 3;
-        addTearDown(tester.view.reset);
         final storage = MemoryEpubStorage();
         addTearDown(() => storage.dir.deleteSync(recursive: true));
         final library = _PendingLibrary();
@@ -419,6 +414,86 @@ void main() {
         await disposeLobby(tester, container);
       },
     );
+  });
+
+  group('RoomLobbyScreen on a short screen (GH-45)', () {
+    late MemoryEpubStorage storage;
+    late _PendingLibrary library;
+    final book = Uint8List.fromList(List.generate(4000, (i) => i % 13));
+
+    /// Lets the room's book arrive, so no transfer is left waiting.
+    Future<void> finishDownload(WidgetTester tester) async {
+      library.downloads['classics/moby-dick.epub']!.complete(book);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+    }
+
+    Future<ProviderContainer> lobbyWithBook(WidgetTester tester) async {
+      // A phone on its side.
+      tester.view.physicalSize = const Size(1920, 1080);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      storage = MemoryEpubStorage();
+      addTearDown(() => storage.dir.deleteSync(recursive: true));
+      library = _PendingLibrary();
+      final rooms = FakeRoomService()
+        ..members = [testMember('alice'), testMember('bob')]
+        ..nextRoom = testRoom().copyWith(
+          currentBookTitle: 'Moby-Dick',
+          currentBookHash: sha256.convert(book).toString(),
+          currentBookLibraryPath: 'classics/moby-dick.epub',
+        );
+      final container = await joinedContainer(
+        tester,
+        rooms,
+        library: library,
+        storage: storage,
+      );
+      await pumpLobby(tester, container);
+      return container;
+    }
+
+    testWidgets('the transfer and the book card do not push the lobby off '
+        'the screen', (tester) async {
+      final container = await lobbyWithBook(tester);
+      expect(
+        find.text('Downloading the book from the library...'),
+        findsOneWidget,
+      );
+      expect(find.text('Moby-Dick'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      // Everything is still there, a scroll away.
+      final read = find.byWidgetPredicate((w) => w is ElevatedButton);
+      await tester.ensureVisible(read);
+      await tester.pump();
+      expect(read.hitTestable(), findsOneWidget);
+      expect(find.text('Bob'), findsOneWidget);
+      await finishDownload(tester);
+      await disposeLobby(tester, container);
+    });
+
+    testWidgets('a book error can be closed (GH-44)', (tester) async {
+      final container = await lobbyWithBook(tester);
+      final sharing = container
+          .read(bookProvider.notifier)
+          .shareLibraryBook(const LibraryBook(path: 'Alice.epub'));
+      library.downloads['Alice.epub']!.completeError(Exception('timed out'));
+      await sharing;
+      await tester.pump();
+      final notice = find.textContaining('Could not get "Alice"');
+      expect(notice, findsOneWidget);
+
+      final close = find.byTooltip('Dismiss');
+      await tester.ensureVisible(close);
+      await tester.pump();
+      await tester.tap(close);
+      await tester.pump();
+      expect(notice, findsNothing);
+      await finishDownload(tester);
+      await disposeLobby(tester, container);
+    });
   });
 }
 

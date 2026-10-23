@@ -12,11 +12,17 @@ class MemberList extends StatelessWidget {
   /// Online members' app versions relative to this one, by user ID (GH-33).
   final Map<String, ProtocolCompatibility> appVersions;
 
+  /// Lists every member at full height, for a page that scrolls as a whole
+  /// (GH-45). Otherwise the list fills the space it is given and scrolls on
+  /// its own.
+  final bool shrinkWrap;
+
   const MemberList({
     super.key,
     required this.members,
     this.currentUserId,
     this.appVersions = const {},
+    this.shrinkWrap = false,
   });
 
   /// Online first, each group in join order. A member whose app was killed
@@ -35,14 +41,21 @@ class MemberList extends StatelessWidget {
   Widget build(BuildContext context) {
     final members = ordered(this.members);
     if (members.isEmpty) {
-      return const Center(
-        child: Text('No members yet', style: AppTheme.caption),
-      );
+      const empty = Text('No members yet', style: AppTheme.caption);
+      return shrinkWrap
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Center(child: empty),
+            )
+          : const Center(child: empty);
     }
 
-    // The list fills an Expanded slot, so it must scroll on its own: a
-    // shrink-wrapped, unscrollable list silently clipped members past the fold.
+    // In an Expanded slot the list must scroll on its own: a shrink-wrapped,
+    // unscrollable list there silently clipped members past the fold. Only
+    // inside a page that itself scrolls may it give up scrolling.
     return ListView.separated(
+      shrinkWrap: shrinkWrap,
+      physics: shrinkWrap ? const NeverScrollableScrollPhysics() : null,
       itemCount: members.length,
       separatorBuilder: (_, _) =>
           const Divider(height: 1, thickness: 1, color: AppTheme.inkFaint),

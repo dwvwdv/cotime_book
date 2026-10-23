@@ -1,6 +1,6 @@
-# CoTime Book
+# 頁間 CoTime Book
 
-A collaborative reading app built with Flutter and Supabase.
+頁間 (CoTime Book in English) is a collaborative reading app built with Flutter and Supabase.
 
 ## 🚀 Quick Start
 
