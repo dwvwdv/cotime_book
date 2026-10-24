@@ -179,7 +179,7 @@ class SignalingBookPeerLink implements BookPeerLink {
   Future<void> _runFetch(_Fetch fetch) async {
     PeerWire? wire;
     try {
-      wire = await fetch.until<PeerWire>(_createWire());
+      wire = await _openWire(fetch);
       final offer = await fetch.until(wire.createOffer());
       await fetch.until(
         _transport.broadcast(
@@ -359,7 +359,7 @@ class SignalingBookPeerLink implements BookPeerLink {
       if (bytes == null || _servedHash != serve.hash) {
         throw const PeerBookException('the book is not here');
       }
-      wire = await serve.until<PeerWire>(_createWire());
+      wire = await _openWire(serve);
       final answer = await serve.until(wire.answerOffer(offer));
       await serve.until(
         _sendSignal({...reply, 'kind': 'answer', 'sdp': answer}),
@@ -420,6 +420,19 @@ class SignalingBookPeerLink implements BookPeerLink {
       await subscription?.cancel();
       await _closeQuietly(wire);
     }
+  }
+
+  /// A wire for [run]. Stopping [run] does not stop the wire being made (the
+  /// ICE servers can take a while to fetch), so one that arrives after [run]
+  /// was stopped is closed here: nobody else will ever see it.
+  Future<PeerWire> _openWire(_Run run) {
+    final creating = _createWire();
+    unawaited(
+      creating.then((wire) {
+        if (run.isAborted) unawaited(_closeQuietly(wire));
+      }, onError: (Object _) {}),
+    );
+    return run.until(creating);
   }
 
   Future<void> _sendSignal(Map<String, dynamic> payload) async {

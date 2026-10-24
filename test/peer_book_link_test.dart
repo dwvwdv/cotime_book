@@ -190,6 +190,51 @@ void main() {
     await network.waitFor(() => alice.activeServeCount == 0);
   });
 
+  test('a wire that is made after its fetch was cancelled is closed', () async {
+    // Regression: cancelling while the ICE servers were still being fetched
+    // left the wire that came afterwards open, holding a native connection.
+    final alice = network.join('alice');
+    alice.serve(bookHash, () async => book);
+    final bob = network.join('bob');
+    final gate = network.wireGates['bob'] = Completer<void>();
+
+    final fetch = bob.fetch(
+      bookHash: bookHash,
+      holderId: 'alice',
+      onProgress: (_, _) {},
+    );
+    fetch.cancel();
+    await expectLater(fetch.bytes, throwsA(isA<PeerBookException>()));
+    gate.complete();
+
+    await network.waitFor(() => network.wiresMade == 1);
+    await network.waitFor(() => network.openWires == 0);
+  });
+
+  test('a wire that is made after its send was stopped is closed', () async {
+    final alice = network.join('alice');
+    alice.serve(bookHash, () async => book);
+    final bob = network.join('bob');
+    // Alice's wire is only made after she has moved on to no book.
+    final gate = network.wireGates['alice'] = Completer<void>();
+
+    final fetch = bob.fetch(
+      bookHash: bookHash,
+      holderId: 'alice',
+      onProgress: (_, _) {},
+    );
+    await network.waitFor(() => alice.activeServeCount == 1);
+    alice.serve(null, () async => null);
+    // The stopped send has given up on its wire before the wire exists.
+    await network.waitFor(() => alice.activeServeCount == 0);
+    gate.complete();
+
+    await network.waitFor(() => network.wiresMade == 2);
+    fetch.cancel();
+    await expectLater(fetch.bytes, throwsA(isA<PeerBookException>()));
+    await network.waitFor(() => network.openWires == 0);
+  });
+
   test('a link that is closed fails its fetches and serves nothing', () async {
     final alice = network.join('alice');
     alice.serve(bookHash, () async => book);
@@ -217,7 +262,12 @@ class PeerNetwork {
   bool corruptNextBytes = false;
   bool holdAcks = false;
 
+  /// A member's wires are only made once their gate completes (slow ICE
+  /// servers).
+  final Map<String, Completer<void>> wireGates = {};
+
   int get openWires => _wires.where((wire) => !wire.isClosed).length;
+  int get wiresMade => _wires.length;
   final List<MemoryWire> _wires = [];
 
   SignalingBookPeerLink join(String userId) {
@@ -227,6 +277,7 @@ class PeerNetwork {
       transport: transport,
       currentUserId: userId,
       createWire: () async {
+        await wireGates[userId]?.future;
         final wire = MemoryWire(this, 'wire${_nextWire++}');
         _wires.add(wire);
         return wire;
