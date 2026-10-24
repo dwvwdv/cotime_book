@@ -61,33 +61,43 @@ This will create:
 
 ### Public library
 
-`supabase/migrations/20261004200000_public_library_bucket.sql` creates the public
-Storage bucket `cotime-book-library` (40MB per file, the same limit as the app).
-To add a book, upload an `.epub` file to that bucket from the Supabase Dashboard
-(**Storage → cotime-book-library**); folders are fine. App users can list and
-download books but cannot add, change, or remove them.
+The books are files in a pCloud public folder, set in `AppConstants.libraryUrl`
+(`lib/config/app_constants.dart`). To add a book, put an `.epub` file in that
+folder; the app lists the folder's page itself, so there is no storage quota in
+Supabase to stay under. Files larger than 40MB (the app's limit) are not listed,
+and only `.epub` files directly in the folder count: subfolders (for covers) and
+notes are ignored. App users can only list and download.
 
-`supabase/migrations/20261005120000_library_catalog.sql` adds the catalog the
-app's library browser searches and filters by. For each book, add a row to
-`cotime_book.library_books` (**Table Editor**):
+The catalog the browser searches and filters by is `cotime_book.library_books`
+(**Table Editor**), one row per file:
 
 | Column | Example | Notes |
 |--------|---------|-------|
-| `path` | `classics/hongloumeng.epub` | The object's name in the bucket, folders included |
-| `title` | `紅樓夢` | Any script; object names themselves only accept ASCII |
-| `author` | `曹雪芹` | Optional |
-| `language` | `zh-Hant` | Optional BCP 47 tag; `en`, `zh-Hant`, `zh-Hans`, `ja`… are shown by name |
-| `category` | `Classics` | Optional; shown as written, one filter per distinct value |
-| `cover_path` | `covers/hongloumeng.jpg` | Optional; an image in the same bucket (about 400px wide JPEG), added by `20261005130000_library_covers.sql` |
+| `path` | `pg1342-images-3.epub` | The file's name in the folder |
+| `title` | `傲慢與偏見` | Shown on the shelf; any script |
+| `original_title` | `Pride and Prejudice` | Optional; the published title when `title` is a translation. Searchable |
+| `author` | `珍·奧斯汀` | Optional, searchable |
+| `original_author` | `Jane Austen` | Optional, searchable |
+| `language` | `en` | The language the book is written in, as a BCP 47 tag; `en`, `zh-Hant`, `zh-Hans`, `ja`… are shown by name |
+| `tags` | `{愛情,文學經典}` | Any number; each distinct tag is a filter, the most used first |
+| `cover_path` | `covers/pg1342.jpg` | Optional; an image in the folder (about 400px wide JPEG) or a full URL |
 
-Upload covers to the `covers/` folder of the bucket; most EPUBs carry one
-(the `cover-image` item in the book's OPF). A book without a cover shows a
-plain jacket with its title.
+The help button next to the library's title shows `書籍來源聲明.txt`
+(`AppConstants.libraryNoticeFile`) from the same folder: a plain UTF-8 text
+file saying where the books come from. Edit it in the folder to change it.
 
-A book without a row is still listed, titled by its file name
+The browser's tag filter takes any number of tags and shows the books that
+carry any of them; a ribbon across each cover's top-left corner names the
+book's language (`English`, `Chinese`).
+
+`20261024054844_library_public_folder.sql` catalogues the books the folder
+started with. A book without a row is still listed, titled by its file name
 (`The_Time_Machine.epub` shows as "The Time Machine"), and only appears when no
-category or language filter is chosen. The app reads `cotime_book.library_catalog`,
-a view of the bucket joined with this table.
+tag or language filter is chosen. A row whose file is not in the folder shows
+nothing.
+
+The Storage bucket `cotime-book-library`, its `library_catalog` view and the
+`category` column are what apps before 1.0.12 read; current apps do not use them.
 
 ### 2. Get Your Supabase Credentials
 
@@ -126,7 +136,7 @@ Then run: `chmod +x run.sh && ./run.sh`
 - Anonymous authentication (no sign-up required)
 - EPUB book support (up to 40MB per book)
 - A TXT to EPUB tool on the home screen (UTF-8, UTF-16, GBK or Big5; several files become one book): read the result on your own device, save it, then share the EPUB in a room
-- A public library of open-source books any room can read, shown as a shelf of covers, searchable by title or author and filterable by category and language
+- A public library of open-source books any room can read, shown as a shelf of covers, searchable by title or author (translated or original) and filterable by tag and language
 
 ## 🛠️ Development
 
