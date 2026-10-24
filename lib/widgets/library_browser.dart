@@ -36,7 +36,7 @@ Future<LibraryBook?> showLibraryBrowser({
 }
 
 /// Browses the public library: search by title or author, and narrow by
-/// category and language.
+/// tag and language.
 ///
 /// The whole catalog is loaded once and filtered on the device, so typing
 /// never waits on the network and never flashes a loading state on e-ink.
@@ -61,7 +61,7 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
   String? _error;
   LibraryFilter _filter = const LibraryFilter();
 
-  /// Category and language are advanced: hidden behind the filter button so
+  /// Tag and language are advanced: hidden behind the filter button so
   /// the books get the room, and so the search box is the obvious way in.
   bool _showFilters = false;
 
@@ -101,17 +101,17 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
     setState(() {
       _filter = LibraryFilter(
         query: query,
-        category: _filter.category,
+        tag: _filter.tag,
         language: _filter.language,
       );
     });
   }
 
-  void _setCategory(String? category) {
+  void _setTag(String? tag) {
     setState(() {
       _filter = LibraryFilter(
         query: _filter.query,
-        category: category,
+        tag: tag,
         language: _filter.language,
       );
     });
@@ -121,7 +121,7 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
     setState(() {
       _filter = LibraryFilter(
         query: _filter.query,
-        category: _filter.category,
+        tag: _filter.tag,
         language: language,
       );
     });
@@ -136,14 +136,12 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
   Widget build(BuildContext context) {
     final books = _books;
     final shown = books == null ? null : _filter.apply(books);
-    final categories = books == null
-        ? const <String>[]
-        : libraryCategories(books);
+    final tags = books == null ? const <String>[] : libraryTags(books);
     final languages = books == null
         ? const <String>[]
         : libraryLanguages(books);
-    final canFilter = categories.isNotEmpty || languages.isNotEmpty;
-    final filtersActive = _filter.category != null || _filter.language != null;
+    final canFilter = tags.isNotEmpty || languages.isNotEmpty;
+    final filtersActive = _filter.tag != null || _filter.language != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -203,11 +201,11 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
                     padding: const EdgeInsets.only(bottom: 16),
                     sliver: SliverToBoxAdapter(
                       child: _FilterPanel(
-                        categories: categories,
+                        tags: tags,
                         languages: languages,
-                        category: _filter.category,
+                        tag: _filter.tag,
                         language: _filter.language,
-                        onCategory: _setCategory,
+                        onTag: _setTag,
                         onLanguage: _setLanguage,
                       ),
                     ),
@@ -337,7 +335,7 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
   }
 }
 
-/// Opens and closes the category and language filters. Inverted while a
+/// Opens and closes the tag and language filters. Inverted while a
 /// filter is applied, so a narrowed list is never mistaken for the whole
 /// library when the panel is closed; a heavier rule while the panel is open.
 class _FilterButton extends StatelessWidget {
@@ -389,19 +387,19 @@ class _FilterButton extends StatelessWidget {
 }
 
 class _FilterPanel extends StatelessWidget {
-  final List<String> categories;
+  final List<String> tags;
   final List<String> languages;
-  final String? category;
+  final String? tag;
   final String? language;
-  final ValueChanged<String?> onCategory;
+  final ValueChanged<String?> onTag;
   final ValueChanged<String?> onLanguage;
 
   const _FilterPanel({
-    required this.categories,
+    required this.tags,
     required this.languages,
-    required this.category,
+    required this.tag,
     required this.language,
-    required this.onCategory,
+    required this.onTag,
     required this.onLanguage,
   });
 
@@ -417,14 +415,14 @@ class _FilterPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (categories.isNotEmpty)
+          if (tags.isNotEmpty)
             _FilterGroup(
-              label: 'Category',
-              options: categories,
-              selected: category,
-              onChanged: onCategory,
+              label: 'Tag',
+              options: tags,
+              selected: tag,
+              onChanged: onTag,
             ),
-          if (categories.isNotEmpty && languages.isNotEmpty)
+          if (tags.isNotEmpty && languages.isNotEmpty)
             const SizedBox(height: 12),
           if (languages.isNotEmpty)
             _FilterGroup(

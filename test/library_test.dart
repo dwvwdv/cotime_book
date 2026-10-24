@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cotime_book/config/app_constants.dart';
@@ -9,24 +9,36 @@ import 'package:cotime_book/services/library_service.dart';
 import 'package:cotime_book/widgets/library_browser.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 Map<String, dynamic> row(
   String path, {
-  int? size,
   String? title,
+  String? originalTitle,
   String? author,
+  String? originalAuthor,
   String? language,
-  String? category,
+  List<Object?>? tags,
   String? cover,
 }) => {
   'path': path,
-  'size_bytes': size,
   'title': title,
+  'original_title': originalTitle,
   'author': author,
+  'original_author': originalAuthor,
   'language': language,
-  'category': category,
+  'tags': tags,
   'cover_path': cover,
 };
+
+/// A pCloud public folder page, trimmed to what the app reads.
+String folderPage(List<Map<String, Object?>> content) =>
+    '''<!doctype html><html><body><table></table>
+<script>
+  var directLinkData=${const JsonEncoder.withIndent('\t').convert({'code': 'abc', 'dirpath': '/books/', 'content': content})};
+</script>
+</body></html>''';
 
 class FakeLibrary implements LibraryService {
   final List<Future<List<LibraryBook>> Function()> answers;
@@ -47,19 +59,27 @@ class FakeLibrary implements LibraryService {
 void main() {
   group('the library shows', () {
     test('catalogued books by their catalog title, the rest by file name', () {
-      final books = libraryBooksFromRows([
-        row('the_time_machine.epub', size: 300 * 1024),
-        row(
-          'classics/hongloumeng.epub',
-          size: 2 * 1024 * 1024,
-          title: '紅樓夢',
-          author: '曹雪芹',
-          language: 'zh-Hant',
-          category: 'Classics',
-          cover: 'covers/hongloumeng.jpg',
-        ),
-        row('Alice in Wonderland.EPUB', title: '  ', author: '', cover: ' '),
-      ]);
+      final books = libraryBooksFrom(
+        const [
+          LibraryFile('the_time_machine.epub', sizeBytes: 300 * 1024),
+          LibraryFile('classics/hongloumeng.epub', sizeBytes: 2 * 1024 * 1024),
+          LibraryFile('Alice in Wonderland.EPUB'),
+        ],
+        [
+          row(
+            'classics/hongloumeng.epub',
+            title: '紅樓夢',
+            originalTitle: 'Dream of the Red Chamber',
+            author: '曹雪芹',
+            language: 'zh-Hant',
+            tags: ['Classics', ' ', null, 'Classics', 'Chinese'],
+            cover: 'covers/hongloumeng.jpg',
+          ),
+          row('Alice in Wonderland.EPUB', title: '  ', author: '', cover: ' '),
+          // Catalogued, but the file is not in the folder.
+          row('missing.epub', title: 'Missing'),
+        ],
+      );
 
       expect(books.map((book) => book.title), [
         'Alice in Wonderland',
@@ -74,14 +94,18 @@ void main() {
       expect(books.last.languageName, 'Chinese (Traditional)');
       expect(books.last.fileName, 'hongloumeng.epub');
       expect(books.last.sizeFormatted, '2.0 MB');
+      expect(books.last.originalTitle, 'Dream of the Red Chamber');
+      // Blank and repeated tags are dropped.
+      expect(books.last.tags, ['Classics', 'Chinese']);
+      expect(books.first.tags, isEmpty);
       expect(books[1].sizeFormatted, '300 KB');
     });
 
     test('no book larger than every device accepts', () {
-      final books = libraryBooksFromRows([
-        row('fits.epub', size: AppConstants.maxFileSize),
-        row('too-big.epub', size: AppConstants.maxFileSize + 1),
-      ]);
+      final books = libraryBooksFrom(const [
+        LibraryFile('fits.epub', sizeBytes: AppConstants.maxFileSize),
+        LibraryFile('too-big.epub', sizeBytes: AppConstants.maxFileSize + 1),
+      ], const []);
 
       expect(books.map((book) => book.fileName), ['fits.epub']);
     });
@@ -93,24 +117,29 @@ void main() {
       title: '紅樓夢',
       author: '曹雪芹',
       language: 'zh-Hant',
-      category: 'Classics',
+      tags: ['Classics'],
     );
     const alice = LibraryBook(
       path: 'alice.epub',
-      title: "Alice's Adventures in Wonderland",
-      author: 'Lewis Carroll',
+      title: '愛麗絲夢遊仙境',
+      originalTitle: "Alice's Adventures in Wonderland",
+      author: '路易斯·卡羅',
+      originalAuthor: 'Lewis Carroll',
       language: 'en',
-      category: 'Children',
+      tags: ['Children', 'Classics'],
     );
     const machine = LibraryBook(
       path: 'The_Time_Machine.epub',
       language: 'en-GB',
-      category: 'Science Fiction',
+      tags: ['Science Fiction'],
     );
     const books = [dream, alice, machine];
 
     test('by title, author or file name, in any order and case', () {
       expect(const LibraryFilter(query: '樓夢').apply(books), [dream]);
+      // A translated book is found by its own title and author too.
+      expect(const LibraryFilter(query: '愛麗絲').apply(books), [alice]);
+      expect(const LibraryFilter(query: '卡羅').apply(books), [alice]);
       expect(const LibraryFilter(query: 'carroll').apply(books), [alice]);
       expect(const LibraryFilter(query: 'wonderland LEWIS').apply(books), [
         alice,
@@ -123,8 +152,10 @@ void main() {
       expect(const LibraryFilter(query: '   ').apply(books), books);
     });
 
-    test('by category and language together with the words', () {
-      expect(const LibraryFilter(category: 'Classics').apply(books), [dream]);
+    test('by tag and language together with the words', () {
+      // A book is under every tag it carries.
+      expect(const LibraryFilter(tag: 'Classics').apply(books), [dream, alice]);
+      expect(const LibraryFilter(tag: 'Children').apply(books), [alice]);
       expect(const LibraryFilter(language: 'English').apply(books), [
         alice,
         machine,
@@ -132,22 +163,18 @@ void main() {
       expect(
         const LibraryFilter(
           query: 'time',
-          category: 'Children',
+          tag: 'Children',
           language: 'English',
         ).apply(books),
         isEmpty,
       );
     });
 
-    test('offers each category and language once, by name', () {
-      expect(libraryCategories(books), [
-        'Children',
-        'Classics',
-        'Science Fiction',
-      ]);
+    test('offers each tag and language once, the most used tag first', () {
+      expect(libraryTags(books), ['Classics', 'Children', 'Science Fiction']);
       // en and en-GB are one language to a reader.
       expect(libraryLanguages(books), ['Chinese (Traditional)', 'English']);
-      expect(libraryCategories(const [LibraryBook(path: 'x.epub')]), isEmpty);
+      expect(libraryTags(const [LibraryBook(path: 'x.epub')]), isEmpty);
     });
 
     test('names the language tags the catalog is likely to use', () {
@@ -195,24 +222,119 @@ void main() {
     expect(isPlainLibraryPath(r'..\x.epub'), isFalse);
   });
 
-  test('the library bucket matches the app limit', () {
-    // A bucket that accepts bigger files would list books every device
-    // refuses; a smaller one would refuse books the app can share.
-    final migration = File(
-      'supabase/migrations/20261004200000_public_library_bucket.sql',
-    ).readAsStringSync();
+  group('the library folder', () {
+    test('lists the EPUB files on its page, not folders or notes', () {
+      final files = parseLibraryListing(
+        folderPage([
+          {'name': 'pg1342-images-3.epub', 'size': 2048, 'icon': 0},
+          {'name': 'Upper.EPUB', 'size': 10, 'icon': 0},
+          {'name': 'covers', 'icon': 20},
+          {'name': '書籍來源聲明.txt', 'size': 305, 'icon': 4},
+        ]),
+      );
 
-    expect(migration, contains("'${AppConstants.libraryBucket}'"));
-    expect(AppConstants.maxFileSize, 40 * 1024 * 1024);
-    expect(migration, contains('40 * 1024 * 1024'));
-  });
+      expect(files.map((file) => file.path), [
+        'pg1342-images-3.epub',
+        'Upper.EPUB',
+      ]);
+      expect(files.first.sizeBytes, 2048);
+    });
 
-  test('the catalog lists the same bucket the app downloads from', () {
-    final migration = File(
-      'supabase/migrations/20261005120000_library_catalog.sql',
-    ).readAsStringSync();
+    test('a page without a listing is an error, not an empty library', () {
+      expect(
+        () => parseLibraryListing('<html>Service unavailable</html>'),
+        throwsFormatException,
+      );
+    });
 
-    expect(migration, contains("bucket_id = '${AppConstants.libraryBucket}'"));
+    PublicFolderLibraryService service(
+      Future<http.Response> Function(http.Request request) handler, {
+      List<Map<String, dynamic>> catalog = const [],
+    }) => PublicFolderLibraryService(
+      baseUrl: 'https://folder.test/books/',
+      client: () => MockClient(handler),
+      readCatalog: () async => catalog,
+    );
+
+    test('joins the files with the catalog', () async {
+      final library = service(
+        (request) async => http.Response.bytes(
+          utf8.encode(
+            folderPage([
+              {'name': 'pg1342-images-3.epub', 'size': 2048, 'icon': 0},
+              {'name': 'new_book.epub', 'size': 1024, 'icon': 0},
+            ]),
+          ),
+          200,
+        ),
+        catalog: [
+          row(
+            'pg1342-images-3.epub',
+            title: '傲慢與偏見',
+            language: 'en',
+            tags: ['愛情'],
+          ),
+        ],
+      );
+
+      final books = await library.listBooks();
+
+      expect(books.map((book) => book.title), ['new book', '傲慢與偏見']);
+      expect(books.last.languageName, 'English');
+      expect(books.last.tags, ['愛情']);
+    });
+
+    test('a folder that cannot be read fails the listing', () async {
+      final library = service((request) async => http.Response('', 503));
+
+      await expectLater(library.listBooks(), throwsA(anything));
+    });
+
+    test('downloads a book and finds a cover inside the folder', () async {
+      Uri? requested;
+      final library = service((request) async {
+        requested = request.url;
+        return http.Response.bytes([1, 2, 3], 200);
+      });
+
+      expect(await library.download('classics/A Book.epub'), [1, 2, 3]);
+      expect(
+        requested.toString(),
+        'https://folder.test/books/classics/A%20Book.epub',
+      );
+      expect(
+        library.coverUrl('covers/a.jpg'),
+        'https://folder.test/books/covers/a.jpg',
+      );
+      expect(
+        library.coverUrl('https://img.test/a.jpg'),
+        'https://img.test/a.jpg',
+      );
+    });
+
+    test('a missing book is an error, not an empty book', () async {
+      final library = service((request) async => http.Response('gone', 404));
+
+      await expectLater(library.download('gone.epub'), throwsA(anything));
+    });
+
+    test('stops downloading a book larger than every device accepts', () async {
+      final library = PublicFolderLibraryService(
+        baseUrl: 'https://folder.test/books/',
+        client: () => MockClient.streaming(
+          (request, body) async => http.StreamedResponse(
+            Stream.fromIterable([
+              Uint8List(AppConstants.maxFileSize),
+              Uint8List(1),
+            ]),
+            200,
+          ),
+        ),
+        readCatalog: () async => const [],
+      );
+
+      await expectLater(library.download('huge.epub'), throwsA(anything));
+    });
   });
 
   group('the library browser', () {
@@ -274,7 +396,7 @@ void main() {
         title: '紅樓夢',
         author: '曹雪芹',
         language: 'zh-Hant',
-        category: 'Classics',
+        tags: ['Classics'],
       ),
       LibraryBook(
         path: 'alice.epub',
@@ -282,7 +404,7 @@ void main() {
         title: "Alice's Adventures in Wonderland",
         author: 'Lewis Carroll',
         language: 'en',
-        category: 'Children',
+        tags: ['Children'],
       ),
       LibraryBook(path: 'The_Time_Machine.epub', language: 'en'),
     ];
@@ -355,18 +477,18 @@ void main() {
     ) async {
       await openBrowser(tester, FakeLibrary([() async => catalog]));
 
-      expect(find.text('CATEGORY'), findsNothing);
+      expect(find.text('TAG'), findsNothing);
       expect(choice('English'), findsNothing);
 
       await openFilters(tester);
-      expect(find.text('CATEGORY'), findsOneWidget);
+      expect(find.text('TAG'), findsOneWidget);
       expect(find.text('LANGUAGE'), findsOneWidget);
 
       await openFilters(tester);
-      expect(find.text('CATEGORY'), findsNothing);
+      expect(find.text('TAG'), findsNothing);
     });
 
-    testWidgets('narrows by category and by language', (tester) async {
+    testWidgets('narrows by tag and by language', (tester) async {
       await openBrowser(tester, FakeLibrary([() async => catalog]));
       await openFilters(tester);
 
@@ -379,7 +501,7 @@ void main() {
       expect(shelved('The Time Machine'), findsNothing);
       expect(shelved("Alice's Adventures in Wonderland"), findsOneWidget);
 
-      // Tapping the chosen category again lets go of it.
+      // Tapping the chosen tag again lets go of it.
       await tapChoice(tester, 'Children');
       expect(shelved('The Time Machine'), findsOneWidget);
 

@@ -150,11 +150,15 @@ supabase/
 6. **傳書是 receiver 驅動的。** `FileTransferService` 的初次分享只是快速路徑；
    收書端缺什麼就向 Presence 裡持有這本書的人要，停滯就輪替持有者再要。
    收書**沒有失敗終態**，也不能阻擋分享新書（見 issue #16）。
-   公共圖書館的書（Storage bucket `cotime-book-library`）例外地先由收書端直接下載、
-   以 hash 驗證，失敗或逾時才回到上面的 P2P 路徑（issue #M）。圖書館只能讀，
-   書由維護者從 dashboard 放進去；bucket 的大小上限必須等於 `AppConstants.maxFileSize`。
-   書名、作者、語言、分類、封面（`cover_path`）來自目錄表 `cotime_book.library_books`；App 讀的是
-   `cotime_book.library_catalog` view（bucket left join 目錄），沒有目錄列的書仍要列得出來。
+   公共圖書館的書例外地先由收書端直接下載、以 hash 驗證，失敗或逾時才回到上面的 P2P 路徑
+   （issue #M）。書放在 pCloud 的公開資料夾（`AppConstants.libraryUrl`），不放 Supabase Storage
+   ——Storage 的 1GB 額度會卡住整座圖書館。`PublicFolderLibraryService` 解析資料夾頁面裡的
+   `directLinkData` JSON 列出檔案；資料夾沒有大小上限，所以列表與下載都要擋掉超過
+   `AppConstants.maxFileSize` 的書。圖書館只能讀，書由維護者直接放進資料夾。
+   書名（`title`，中文）、原文書名與作者、語言（書本身的語言）、tags、封面來自目錄表
+   `cotime_book.library_books`，以相對於資料夾的 `path` 對應；App 直接讀這張表、在裝置上和資料夾的
+   檔案清單合併，沒有目錄列的書仍要列得出來。`rooms.current_book_library_path` 也是相對於資料夾的路徑。
+   Storage bucket `cotime-book-library`、`library_catalog` view 與 `category` 欄位只留給 1.0.12 以前的 App。
    瀏覽與搜尋在獨立的 `LibraryBrowser`（lobby 的「Library」按鈕），不要塞回「Share Book」
    （issue #AB）。
    TXT 只是匯入格式，而且**不在房間裡轉**：首頁左下角的「TXT to EPUB」工具
