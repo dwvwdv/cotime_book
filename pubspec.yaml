@@ -1,7 +1,7 @@
 name: cotime_book
 description: 頁間（CoTime Book）- 遠程同步看書工具
 publish_to: 'none'
-version: 1.0.11+15
+version: 1.0.12+16
 
 environment:
   sdk: ^3.8.0
@@ -31,6 +31,10 @@ dependencies:
   # stays on 1.6: 1.7 needs Dart 3.11, newer than CI's Flutter 3.32.4.
   enough_convert: ">=1.6.0 <1.7.0"
   archive: ^4.0.0
+
+  # Interstitial ads. Stays on 6.x: 7.0 needs Flutter 3.35, newer than CI's
+  # Flutter 3.32.4.
+  google_mobile_ads: ">=6.0.0 <7.0.0"
 
   # UI
   gap: ^3.0.1

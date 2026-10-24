@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'config/app_constants.dart';
 import 'config/supabase_config.dart';
 import 'config/theme.dart';
+import 'providers/ads_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/presence_provider.dart';
 import 'providers/room_provider.dart';
@@ -23,6 +24,8 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Loads the first ad now, so the first one due is usually ready.
+    ref.read(interstitialAdsProvider);
     _initAuth();
   }
 

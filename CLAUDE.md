@@ -175,6 +175,12 @@ supabase/
    - 不要動畫：不用 `CircularProgressIndicator`（改成「Loading...」之類的文字）、
      snackbar 用 `showPaperMessage()`、bottom sheet 用 `showPaperSheet()`。
    - 不要半透明與陰影；用 1.5px 的線分隔。
+   - 插頁式廣告（AdMob）是唯一的例外：閱讀時每翻 `AdConfig.pageTurnsPerAd`（20）頁、
+     以及 TXT 轉檔存檔前各播一則。翻頁的廣告只在頁面落定、`SyncStatus.idle` 時才顯示——
+     蓋在別人的翻頁請求上會讓全房等這則廣告。廣告一律不能阻擋流程：沒載好就略過
+     （`InterstitialAds.show()` 立刻回 false）。廣告是半透明的 Activity，App 只進 `inactive`，
+     不會被當成離開房間（`appActivityFor`）。廣告 ID 目前是 Google 的測試 ID，換正式 ID 時
+     `lib/config/ad_config.dart` 的 ad unit 與 `AndroidManifest.xml` 的 App ID 要一起改。
    - **viewer 周圍的 chrome 必須固定高度。** 任何改變 `EpubViewer` 尺寸的東西都會讓
      epub.js 重新分頁、改掉本機 CFI（見 issue #13）；
      而 viewer 的可用區域就是自己的 `page_fit`，它一變，全房都要重新排版（issue #20）。
