@@ -76,7 +76,7 @@ typedef BookDownload = Future<Uint8List> Function();
 /// * A holder serves requests from one send queue, so several receivers asking
 ///   at once share the same broadcast instead of multiplying it.
 /// * The initial share is still pushed to everyone; it is just the fast path.
-/// * A library book is downloaded straight from Storage instead. The room is
+/// * A library book is downloaded straight from the library instead. The room is
 ///   only the fallback: if the download fails or takes too long, the receive
 ///   carries on as above.
 class FileTransferService {

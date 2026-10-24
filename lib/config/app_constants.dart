@@ -16,13 +16,20 @@ class AppConstants {
   // 32KB raw → ~43KB base64; safe within Supabase Realtime broadcast limit
   static const int fileChunkSize = 32 * 1024;
   // Large enough for illustrated books; a 40MB book is ~1280 broadcasts, which
-  // is why library books are downloaded straight from Storage instead.
+  // is why library books are downloaded straight from the library instead.
   static const int maxFileSize = 40 * 1024 * 1024;
   static const Duration chunkDelay = Duration(milliseconds: 100);
 
-  // Public library: a Storage bucket of EPUBs anyone can list and download.
-  // Must match the bucket created in supabase/migrations.
-  static const String libraryBucket = 'cotime-book-library';
+  // Public library: a pCloud public folder of EPUBs anyone can list and
+  // download. The maintainers add books by putting them in the folder and
+  // describe them in cotime_book.library_books. Paths in the catalog and in
+  // rooms.current_book_library_path are relative to this folder.
+  static const String libraryUrl =
+      'https://filedn.eu/lyWyjTiBuD9uWONu3Or0JNX/lazyrhythm/CotimeBook/eBook/';
+
+  // Where the library's books come from and their copyright status, shown by
+  // the library's help button. A plain UTF-8 text file in the library folder.
+  static const String libraryNoticeFile = '書籍來源聲明.txt';
 
   // Realtime
   static String roomChannelName(String roomCode) =>

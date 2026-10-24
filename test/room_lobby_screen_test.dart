@@ -623,6 +623,9 @@ class _PendingLibrary implements LibraryService {
 
   @override
   String coverUrl(String path) => 'https://library.test/$path';
+
+  @override
+  Future<String> readNotice() async => '';
 }
 
 /// A channel that never connects: the lobby must work from the database

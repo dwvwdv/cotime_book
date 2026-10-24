@@ -19,7 +19,7 @@ final epubStorageProvider = Provider<EpubStorageService>((ref) {
 });
 
 final libraryServiceProvider = Provider<LibraryService>((ref) {
-  return const SupabaseLibraryService();
+  return PublicFolderLibraryService();
 });
 
 /// Only EPUB books are shared; see [BookNotifier.pickAndShareBook].
@@ -580,7 +580,8 @@ class BookNotifier extends StateNotifier<BookState> {
   }
 }
 
-/// A library object name: no leading slash, no `..` segment, no backslash.
+/// A path inside the library folder: no leading slash, no `..` segment, no
+/// backslash.
 bool isPlainLibraryPath(String path) {
   if (path.isEmpty || path.startsWith('/') || path.contains('\\')) {
     return false;
