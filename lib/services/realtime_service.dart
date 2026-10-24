@@ -188,6 +188,9 @@ class RealtimeService {
     'book_shared',
     'book_chunk',
     'transfer_request',
+    // SignalingBookPeerLink.signalEvent (GH-60). An event missing here is
+    // never delivered: broadcastStream only hands out what is registered.
+    'book_peer_signal',
     'start_reading',
     'membership_changed',
     'room_closed',

@@ -16,6 +16,12 @@ import 'peer_book_link.dart';
 class WebRtcPeerWire implements PeerWire {
   static const defaultGatherTimeout = Duration(seconds: 4);
 
+  @visibleForTesting
+  WebRtcPeerWire.forConnection(
+    RTCPeerConnection connection, {
+    Duration gatherTimeout = defaultGatherTimeout,
+  }) : this._(connection, gatherTimeout);
+
   WebRtcPeerWire._(this._connection, this._gatherTimeout) {
     _opened.future.ignore();
     _connection.onIceGatheringState = (state) {
@@ -54,7 +60,14 @@ class WebRtcPeerWire implements PeerWire {
   final _messages = StreamController<PeerWireMessage>();
   RTCDataChannel? _channel;
   Completer<void>? _gathered;
+
+  /// The connection is over: failed, closed by the other side, or by us.
   bool _closed = false;
+
+  /// The native connection has been let go. Separate from [_closed]: a
+  /// connection the other side ended is over long before its owner calls
+  /// [close], and still holds native resources until then.
+  bool _released = false;
 
   @override
   Future<void> get opened => _opened.future;
@@ -99,7 +112,8 @@ class WebRtcPeerWire implements PeerWire {
 
   @override
   Future<void> close() async {
-    if (_closed) return;
+    if (_released) return;
+    _released = true;
     _end(const PeerBookException('closed'));
     try {
       await _channel?.close();

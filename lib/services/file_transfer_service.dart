@@ -611,6 +611,9 @@ class FileTransferService {
     _stopReceiving();
     _heldHash = hash;
     _heldBytes = bytes;
+    // Presence will say this device holds the book; whoever comes next may
+    // fetch it from here directly.
+    _peerLink?.serve(hash, () => _loadHeldBytes(hash));
     _updateState(
       TransferState(
         status: TransferStatus.completed,

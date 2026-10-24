@@ -470,6 +470,29 @@ void main() {
       expect(bob.store.books.containsKey(bookHash), isFalse);
     });
 
+    test('a member who just received the book sends it on directly', () async {
+      // Regression: a finished receive held the book without telling the
+      // link, so the next member waited out the connect timeout and fell
+      // back to the broadcast.
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      // An older app: it pushes the book and cannot send it directly.
+      final alice = room.join('alice');
+      final bob = room.join('bob', direct: true);
+      bob.service.expectBook(bookHash);
+      await alice.share(book, bookHash);
+      await room.waitFor(() => bob.store.books.containsKey(bookHash));
+      room.announceHolder('bob', bookHash);
+      final requestsBefore = room.requests.length;
+
+      final carol = room.join('carol', direct: true);
+      carol.service.expectBook(bookHash);
+
+      await room.waitFor(() => carol.store.books.containsKey(bookHash));
+      expect(carol.peerLink!.fetchedFrom, ['bob']);
+      expect(room.requests, hasLength(requestsBefore));
+    });
+
     test('the link serves whatever book this device holds', () async {
       final room = TransferRoom();
       addTearDown(room.dispose);
