@@ -1,4 +1,6 @@
 import 'package:cotime_book/config/app_constants.dart';
+import 'package:cotime_book/services/file_transfer_service.dart';
+import 'package:cotime_book/services/peer_book_link.dart';
 import 'package:cotime_book/services/realtime_service.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/foundation.dart';
@@ -415,6 +417,48 @@ void main() {
         'room_closed',
       ]),
     );
+  });
+
+  test('Presence says this app sends books directly (GH-60)', () async {
+    await service.joinRoom(
+      roomCode: 'abc234',
+      userId: 'alice',
+      nickname: 'Alice',
+      avatarColorIndex: 2,
+      hasBook: false,
+    );
+    channels.single.emitStatus(RealtimeSubscribeStatus.subscribed);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      channels.single.tracked.single['direct_transfer'],
+      AppConstants.directBookTransfer,
+    );
+  });
+
+  test('direct transfer signals reach the book link (GH-60)', () async {
+    // Regression: the signal event was not registered on the channel, so no
+    // offer or answer ever arrived and every direct fetch timed out.
+    await service.joinRoom(
+      roomCode: 'abc234',
+      userId: 'alice',
+      nickname: 'Alice',
+      avatarColorIndex: 2,
+      hasBook: false,
+    );
+    channels.single.emitStatus(RealtimeSubscribeStatus.subscribed);
+    await Future<void>.delayed(Duration.zero);
+
+    final transport = RealtimeBookTransferTransport(service);
+    final received = transport
+        .broadcastStream(SignalingBookPeerLink.signalEvent)
+        .first;
+    channels.single.emitBroadcast(SignalingBookPeerLink.signalEvent, {
+      'kind': 'offer',
+      'to_user': 'alice',
+    });
+
+    expect((await received)['kind'], 'offer');
   });
 
   test('same-room join is idempotent and updates presence', () async {

@@ -20,6 +20,16 @@ class AppConstants {
   static const int maxFileSize = 40 * 1024 * 1024;
   static const Duration chunkDelay = Duration(milliseconds: 100);
 
+  /// Whether this app sends and fetches books over a direct WebRTC
+  /// connection, with the Realtime broadcast above as the fallback (GH-60).
+  /// Announced in Presence as `direct_transfer`.
+  static const bool directBookTransfer = true;
+
+  /// Supabase Edge Function that hands out short-lived TURN credentials
+  /// (supabase/functions/turn-credentials). Without it, direct connections
+  /// use STUN only and fall back to Realtime more often.
+  static const String turnCredentialsFunction = 'turn-credentials';
+
   // Public library: a pCloud public folder of EPUBs anyone can list and
   // download. The maintainers add books by putting them in the folder and
   // describe them in cotime_book.library_books. Paths in the catalog and in

@@ -188,6 +188,9 @@ class RealtimeService {
     'book_shared',
     'book_chunk',
     'transfer_request',
+    // SignalingBookPeerLink.signalEvent (GH-60). An event missing here is
+    // never delivered: broadcastStream only hands out what is registered.
+    'book_peer_signal',
     'start_reading',
     'membership_changed',
     'room_closed',
@@ -816,6 +819,9 @@ class RealtimeService {
       // update of its own (see _schedulePresenceTrack).
       'protocol': AppConstants.roomProtocolVersion,
       'protocol_min': AppConstants.minCompatibleRoomProtocol,
+      // Static too. Additive: older apps ignore it, and are never asked for a
+      // book directly (GH-60).
+      'direct_transfer': AppConstants.directBookTransfer,
       'user_id': userId,
       'nickname': nickname,
       'avatar_color': avatarColorIndex,

@@ -46,6 +46,40 @@ void main() {
     expect(alice['reader_ready'], isTrue);
   });
 
+  test('a book is sent directly only by a device that has it and can send '
+      'it that way (GH-60)', () {
+    final users = mergePresenceUsers([
+      // An older app on a phone that has the book.
+      {
+        'user_id': 'alice',
+        'has_book': true,
+        'book_hash': 'book-a',
+        'online_at': '2026-08-12T01:00:00Z',
+      },
+      // A newer app on a tablet that is still waiting for it.
+      {
+        'user_id': 'alice',
+        'has_book': false,
+        'direct_transfer': true,
+        'online_at': '2026-08-12T02:00:00Z',
+      },
+      {
+        'user_id': 'bob',
+        'has_book': true,
+        'book_hash': 'book-a',
+        'direct_transfer': true,
+        'online_at': '2026-08-12T03:00:00Z',
+      },
+    ]);
+
+    final alice = users.singleWhere((user) => user['user_id'] == 'alice');
+    final bob = users.singleWhere((user) => user['user_id'] == 'bob');
+    expect(presenceHoldsBook(alice, 'book-a'), isTrue);
+    expect(presenceSendsBookDirectly(alice, 'book-a'), isFalse);
+    expect(presenceSendsBookDirectly(bob, 'book-a'), isTrue);
+    expect(presenceSendsBookDirectly(bob, 'book-b'), isFalse);
+  });
+
   group('app versions in Presence (GH-33)', () {
     Map<String, dynamic> meta(
       String userId,

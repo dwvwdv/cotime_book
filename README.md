@@ -99,6 +99,28 @@ nothing.
 The Storage bucket `cotime-book-library`, its `library_catalog` view and the
 `category` column are what apps before 1.0.12 read; current apps do not use them.
 
+### Direct book transfer (TURN)
+
+Books a member shares from their device go device to device over WebRTC; the
+room's Realtime channel only carries the connection details. Devices that cannot
+reach each other connect through Cloudflare's managed TURN relay, which needs
+short-lived credentials from the `turn-credentials` Edge Function:
+
+1. In the Cloudflare dashboard, open **Realtime** → **TURN Server** and create a
+   key. Note its key ID and API token.
+2. Store them as function secrets and deploy the function:
+
+   ```bash
+   supabase secrets set CLOUDFLARE_TURN_KEY_ID=... CLOUDFLARE_TURN_API_TOKEN=...
+   supabase functions deploy turn-credentials
+   ```
+
+3. Set a usage notification in Cloudflare. The first 1,000 GB a month are free.
+
+The function only answers signed-in users who are in a room, and tells Cloudflare
+nothing about who asked. Until it is deployed the app connects with STUN alone,
+and a transfer that cannot connect falls back to Realtime as before.
+
 ### 2. Get Your Supabase Credentials
 
 1. In your Supabase Dashboard, go to **Settings** → **API**
@@ -152,6 +174,7 @@ lib/
 └── widgets/         # Reusable UI components
 
 supabase/
+├── functions/       # Edge Functions (turn-credentials)
 └── migrations/      # Database schema migrations
 ```
 
