@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/models/transfer_state.dart';
 import 'package:cotime_book/services/file_transfer_service.dart';
+import 'package:cotime_book/services/peer_book_link.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -294,6 +295,196 @@ void main() {
     });
   });
 
+  group('direct transfer (GH-60)', () {
+    test('a receiver gets the book straight from the holder, with nothing '
+        'broadcast', () async {
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final alice = room.join('alice', direct: true);
+      final bob = room.join('bob', direct: true);
+
+      await alice.share(book, bookHash);
+      bob.service.expectBook(bookHash);
+
+      await room.waitFor(() => bob.store.books.containsKey(bookHash));
+      expect(bob.store.books[bookHash], book);
+      expect(bob.service.currentState.status, TransferStatus.completed);
+      expect(bob.peerLink!.fetchedFrom, ['alice']);
+      expect(room.requests, isEmpty);
+      expect(room.chunksSent, 0);
+    });
+
+    test('an app that cannot fetch directly still gets a book that was not '
+        'pushed', () async {
+      // A sharer that sends directly no longer pushes the book; an older app
+      // in the room asks for it like a late joiner does.
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final alice = room.join('alice', direct: true);
+      final bob = room.join('bob');
+
+      await alice.share(book, bookHash);
+      expect(room.chunksSent, 0);
+      bob.service.expectBook(bookHash);
+
+      await room.waitFor(() => bob.store.books.containsKey(bookHash));
+      expect(bob.store.books[bookHash], book);
+      expect(room.requests.single['sender_id'], 'alice');
+    });
+
+    test(
+      'a holder whose app cannot send directly is asked over the room',
+      () async {
+        final room = TransferRoom();
+        addTearDown(room.dispose);
+        final alice = room.join('alice');
+        final bob = room.join('bob', direct: true);
+
+        await alice.share(book, bookHash);
+        bob.service.expectBook(bookHash);
+
+        await room.waitFor(() => bob.store.books.containsKey(bookHash));
+        expect(bob.peerLink!.fetchedFrom, isEmpty);
+      },
+    );
+
+    test('a direct fetch that fails falls back to asking the room', () async {
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final alice = room.join('alice', direct: true);
+      final bob = room.join('bob', direct: true);
+      room.peerMode = PeerMode.fail;
+
+      await alice.share(book, bookHash);
+      bob.service.expectBook(bookHash);
+
+      await room.waitFor(() => bob.store.books.containsKey(bookHash));
+      expect(bob.store.books[bookHash], book);
+      expect(bob.peerLink!.fetchedFrom, ['alice']);
+      expect(room.requests, isNotEmpty);
+    });
+
+    test('a direct fetch that stalls is given up on', () async {
+      // Regression guard: a connection that never opens must not leave the
+      // receiver on "Getting the book..." with nobody asking the room.
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final alice = room.join('alice', direct: true);
+      final bob = room.join('bob', direct: true);
+      room.peerMode = PeerMode.stall;
+
+      await alice.share(book, bookHash);
+      bob.service.expectBook(bookHash);
+      await room.waitFor(
+        () => bob.service.currentState.message?.contains('from alice') == true,
+      );
+
+      await room.waitFor(() => bob.store.books.containsKey(bookHash));
+      expect(bob.peerLink!.cancels, 1);
+      expect(room.requests, isNotEmpty);
+    });
+
+    test(
+      'a slow direct fetch that keeps arriving is not given up on',
+      () async {
+        final room = TransferRoom(
+          peerConnectTimeout: const Duration(milliseconds: 200),
+          peerStallTimeout: const Duration(milliseconds: 200),
+        );
+        addTearDown(room.dispose);
+        final alice = room.join('alice', direct: true);
+        final bob = room.join('bob', direct: true);
+        // Longer than either timeout in total, never quiet for one of them.
+        room.peerMode = PeerMode.slow;
+
+        await alice.share(book, bookHash);
+        bob.service.expectBook(bookHash);
+        await room.waitFor(
+          () => bob.service.currentState.status == TransferStatus.transferring,
+        );
+        expect(bob.service.currentState.totalBytes, book.length);
+
+        await room.waitFor(() => bob.store.books.containsKey(bookHash));
+        expect(bob.peerLink!.cancels, 0);
+        expect(room.requests, isEmpty);
+      },
+    );
+
+    test('a damaged direct copy is not kept', () async {
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final alice = room.join('alice', direct: true);
+      final bob = room.join('bob', direct: true);
+      room.peerMode = PeerMode.corrupt;
+
+      await alice.share(book, bookHash);
+      bob.service.expectBook(bookHash);
+
+      await room.waitFor(() => bob.store.books.containsKey(bookHash));
+      expect(bob.store.books[bookHash], book);
+      expect(room.requests, isNotEmpty);
+    });
+
+    test(
+      'each holder is tried directly once, then the room is asked',
+      () async {
+        final room = TransferRoom();
+        addTearDown(room.dispose);
+        final alice = room.join('alice', direct: true);
+        final carol = room.join('carol', direct: true);
+        final bob = room.join('bob', direct: true);
+        room.peerMode = PeerMode.fail;
+
+        await alice.share(book, bookHash);
+        carol.store.books[bookHash] = book;
+        carol.service.holdBook(bookHash);
+        room.announceHolder('carol', bookHash);
+        bob.service.expectBook(bookHash);
+
+        await room.waitFor(() => bob.store.books.containsKey(bookHash));
+        expect(bob.peerLink!.fetchedFrom, ['alice', 'carol']);
+        expect(room.requests, isNotEmpty);
+      },
+    );
+
+    test('a direct fetch still running when another book is shared is '
+        'cancelled and cannot replace it', () async {
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final alice = room.join('alice', direct: true);
+      final bob = room.join('bob', direct: true);
+      room.peerMode = PeerMode.gated;
+
+      await alice.share(book, bookHash);
+      bob.service.expectBook(bookHash);
+      await room.waitFor(() => bob.peerLink!.fetchedFrom.isNotEmpty);
+
+      final other = Uint8List.fromList(List.generate(5000, (i) => i % 7));
+      final otherHash = sha256.convert(other).toString();
+      await bob.share(other, otherHash);
+      room.peerGate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+
+      expect(bob.peerLink!.cancels, 1);
+      expect(bob.service.heldBookHash, otherHash);
+      expect(bob.store.books.containsKey(bookHash), isFalse);
+    });
+
+    test('the link serves whatever book this device holds', () async {
+      final room = TransferRoom();
+      addTearDown(room.dispose);
+      final alice = room.join('alice', direct: true);
+
+      alice.store.books[bookHash] = book;
+      alice.service.holdBook(bookHash);
+      expect(alice.peerLink!.servedHash, bookHash);
+      expect(await alice.peerLink!.read!(), book);
+
+      alice.service.reset();
+      expect(alice.peerLink!.servedHash, isNull);
+    });
+  });
+
   test('a 40MB book can be shared', () async {
     // The limit used to be 10MB, which turned away illustrated books.
     final room = TransferRoom();
@@ -336,8 +527,15 @@ class TransferClient {
   final FileTransferService service;
   final MemoryStore store;
   final TransferTransport transport;
+  final FakePeerLink? peerLink;
 
-  TransferClient(this.userId, this.service, this.store, this.transport);
+  TransferClient(
+    this.userId,
+    this.service,
+    this.store,
+    this.transport, {
+    this.peerLink,
+  });
 
   Future<void> share(Uint8List bytes, String hash) async {
     store.books[hash] = bytes;
@@ -348,6 +546,8 @@ class TransferClient {
 
 class TransferRoom {
   final Duration directDownloadGrace;
+  final Duration peerConnectTimeout;
+  final Duration peerStallTimeout;
   final Map<String, TransferClient> clients = {};
   final Map<String, Set<String>> _holdings = {};
   final List<Map<String, dynamic>> requests = [];
@@ -355,24 +555,41 @@ class TransferRoom {
   Set<int> dropChunkIndices = {};
   bool corruptNextChunk = false;
   int chunksSent = 0;
+  PeerMode peerMode = PeerMode.ok;
+  final peerGate = Completer<void>();
 
-  TransferRoom({this.directDownloadGrace = const Duration(milliseconds: 500)});
+  TransferRoom({
+    this.directDownloadGrace = const Duration(milliseconds: 500),
+    this.peerConnectTimeout = const Duration(milliseconds: 30),
+    this.peerStallTimeout = const Duration(milliseconds: 30),
+  });
 
-  TransferClient join(String userId) {
+  /// [direct]: this member's app sends and fetches books directly.
+  TransferClient join(String userId, {bool direct = false}) {
     final store = MemoryStore();
     final transport = TransferTransport(this, userId);
+    final peerLink = direct ? FakePeerLink(this) : null;
     final service = FileTransferService(
       transport: transport,
       store: store,
       currentUserId: userId,
+      peerLink: peerLink,
       chunkDelay: const Duration(milliseconds: 1),
       firstRequestDelay: const Duration(milliseconds: 10),
       stallTimeout: const Duration(milliseconds: 25),
       directDownloadGrace: directDownloadGrace,
+      peerConnectTimeout: peerConnectTimeout,
+      peerStallTimeout: peerStallTimeout,
     );
     service.initialize();
     _holdings.putIfAbsent(userId, () => {});
-    final client = TransferClient(userId, service, store, transport);
+    final client = TransferClient(
+      userId,
+      service,
+      store,
+      transport,
+      peerLink: peerLink,
+    );
     clients[userId] = client;
     _presenceChanged();
     return client;
@@ -390,6 +607,8 @@ class TransferRoom {
         'nickname': entry.key,
         'has_book': entry.value.isNotEmpty,
         'ready_book_hashes': entry.value.toList(),
+        if (clients[entry.key]?.peerLink != null)
+          'direct_book_hashes': entry.value.toList(),
       },
   ];
 
@@ -481,4 +700,97 @@ class TransferTransport implements BookTransferTransport {
       await controller.close();
     }
   }
+}
+
+enum PeerMode {
+  ok,
+
+  /// The connection fails at once.
+  fail,
+
+  /// Nothing ever arrives.
+  stall,
+
+  /// The book arrives in steps, each sooner than the stall timeout.
+  slow,
+
+  /// The book arrives, one byte wrong.
+  corrupt,
+
+  /// The book arrives once [TransferRoom.peerGate] completes.
+  gated,
+}
+
+/// Direct transfer between the room's members, without WebRTC.
+class FakePeerLink implements BookPeerLink {
+  FakePeerLink(this.room);
+
+  final TransferRoom room;
+  final List<String> fetchedFrom = [];
+  int cancels = 0;
+  String? servedHash;
+  Future<Uint8List?> Function()? read;
+
+  @override
+  void initialize() {}
+
+  @override
+  BookPeerFetch fetch({
+    required String bookHash,
+    required String holderId,
+    required void Function(int received, int total) onProgress,
+  }) {
+    fetchedFrom.add(holderId);
+    final result = Completer<Uint8List>();
+    result.future.ignore();
+
+    Future<void> run() async {
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+      final holder = room.clients[holderId]?.peerLink;
+      final read = holder?.read;
+      if (room.peerMode == PeerMode.fail ||
+          holder?.servedHash != bookHash ||
+          read == null) {
+        throw const PeerBookException('could not connect');
+      }
+      if (room.peerMode == PeerMode.stall) return;
+      if (room.peerMode == PeerMode.gated) await room.peerGate.future;
+      final bytes = await read();
+      if (bytes == null) throw const PeerBookException('no book');
+      if (room.peerMode == PeerMode.slow) {
+        final step = room.peerStallTimeout ~/ 4;
+        for (var part = 0; part < 6; part++) {
+          await Future<void>.delayed(step);
+          if (result.isCompleted) return;
+          onProgress(bytes.length * part ~/ 6, bytes.length);
+        }
+      }
+      onProgress(bytes.length, bytes.length);
+      if (room.peerMode == PeerMode.corrupt) {
+        final damaged = Uint8List.fromList(bytes)..[0] ^= 0xff;
+        if (!result.isCompleted) result.complete(damaged);
+        return;
+      }
+      if (!result.isCompleted) result.complete(bytes);
+    }
+
+    run().catchError((Object error) {
+      if (!result.isCompleted) result.completeError(error);
+    });
+    return BookPeerFetch(result.future, () {
+      cancels++;
+      if (!result.isCompleted) {
+        result.completeError(const PeerBookException('cancelled'));
+      }
+    });
+  }
+
+  @override
+  void serve(String? bookHash, Future<Uint8List?> Function() read) {
+    servedHash = bookHash;
+    this.read = bookHash == null ? null : read;
+  }
+
+  @override
+  Future<void> dispose() async {}
 }

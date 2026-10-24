@@ -10,6 +10,11 @@
 - 同一個 PR 只有一個版本條目（見 `version-update.md`）；review 修復追加在同一條目下。
 - 只動文件、`.claude/`、`.github/` 的 PR 不 bump 版號，不必新增條目。
 
+### v1.0.13+17 (2026-10-24)
+
+- ⚡ 自己分享的書改成裝置對裝置直傳（WebRTC），房間的 Realtime 只送連線資訊，書不經過、也不存在伺服器上（#60，#35）。一本 40MB 的書以前要 1280 個 broadcast、兩分多鐘，現在直連通常幾秒到十幾秒；接不通時經 Cloudflare 的 TURN 中繼，再不行才退回原本的 broadcast。分享者不再先 push 整本書，舊版 App 仍照晚加入者的方式向持有者要。需要部署 `turn-credentials` Edge Function 並設好 Cloudflare TURN 的 secrets（見 README）；沒部署時只用 STUN，接不通的情況會多一些。
+- ⚡ 新增 `flutter_webrtc`，arm64 APK 會變大。
+
 ### v1.0.12+16 (2026-10-24)
 
 - ✨ 公共圖書館改讀 pCloud 公開資料夾：維護者把 EPUB 丟進資料夾就上架，不再受 Supabase Storage 1GB 的限制。超過 40MB 的書仍不列出。需要先套 `20261024054844_library_public_folder.sql` 再發版；舊版 App 仍讀原本的 Storage bucket。

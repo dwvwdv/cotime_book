@@ -417,6 +417,23 @@ void main() {
     );
   });
 
+  test('Presence says this app sends books directly (GH-60)', () async {
+    await service.joinRoom(
+      roomCode: 'abc234',
+      userId: 'alice',
+      nickname: 'Alice',
+      avatarColorIndex: 2,
+      hasBook: false,
+    );
+    channels.single.emitStatus(RealtimeSubscribeStatus.subscribed);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      channels.single.tracked.single['direct_transfer'],
+      AppConstants.directBookTransfer,
+    );
+  });
+
   test('same-room join is idempotent and updates presence', () async {
     await service.joinRoom(
       roomCode: 'abc234',
