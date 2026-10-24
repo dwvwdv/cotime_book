@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -44,9 +45,13 @@ void main() {
     if (dir.existsSync()) dir.deleteSync(recursive: true);
   });
 
-  TxtConvertNotifier converter({Duration? errorAutoClearDelay}) {
+  TxtConvertNotifier converter({
+    Duration? errorAutoClearDelay,
+    BeforeSave? beforeSave,
+  }) {
     final notifier = TxtConvertNotifier(
       directory: () async => dir,
+      beforeSave: beforeSave ?? () async {},
       export: (fileName, bytes) async {
         exported.add((fileName, bytes));
         return exportTo;
@@ -113,6 +118,55 @@ void main() {
     expect(exported.last.$1, 'Rain_ Part 1.epub');
     expect(exported.last.$2, tool.state.book!.file.readAsBytesSync());
   });
+
+  test('every save shows the ad first, and the save dialog opens only once '
+      'the ad is closed', () async {
+    var ad = Completer<void>();
+    var adsShown = 0;
+    final tool = converter(
+      beforeSave: () {
+        adsShown++;
+        return ad.future;
+      },
+    );
+    await tool.convert([
+      txt('雨夜.txt', '第一章\n　　雨。\n'),
+    ], confirm: (draft) async => everything(draft));
+
+    final saving = tool.saveBook();
+    await pumpEventQueue();
+    expect(adsShown, 1);
+    expect(exported, isEmpty, reason: 'the ad is still on screen');
+    expect(tool.state.busy, 'Saving...');
+
+    ad.complete();
+    await saving;
+    expect(exported, hasLength(1));
+    expect(tool.state.isSaved, isTrue);
+
+    ad = Completer<void>()..complete();
+    await tool.saveBook();
+    expect(adsShown, 2, reason: 'Save Again shows one as well');
+    expect(exported, hasLength(2));
+  });
+
+  test(
+    'an ad that goes wrong does not keep the book from being saved',
+    () async {
+      final tool = converter(
+        beforeSave: () async => throw StateError('no ad SDK'),
+      );
+      await tool.convert([
+        txt('雨夜.txt', '第一章\n　　雨。\n'),
+      ], confirm: (draft) async => everything(draft));
+
+      await tool.saveBook();
+
+      expect(exported, hasLength(1));
+      expect(tool.state.isSaved, isTrue);
+      expect(tool.state.error, isNull);
+    },
+  );
 
   test('backing out of the TXT sheet makes nothing', () async {
     final tool = converter();

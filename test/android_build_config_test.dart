@@ -30,6 +30,20 @@ void main() {
     expect(_sdkLevel('compileSdk'), greaterThanOrEqualTo(target));
   });
 
+  // The Mobile Ads SDK stops the app at launch when the manifest has no
+  // AdMob app ID.
+  test('the manifest carries an AdMob app ID for the interstitial ads', () {
+    final manifest =
+        File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
+    expect(
+      manifest,
+      matches(RegExp(
+        r'android:name="com\.google\.android\.gms\.ads\.APPLICATION_ID"'
+        r'\s+android:value="ca-app-pub-\d+~\d+"',
+      )),
+    );
+  });
+
   // The Chinese name is the official one; other devices keep the English.
   test('the launcher shows 頁間 on Chinese devices', () {
     final manifest =
