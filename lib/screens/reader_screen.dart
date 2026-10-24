@@ -153,7 +153,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   final Stopwatch _sinceOpened = Stopwatch()..start();
 
   /// An interstitial every [PageTurnAdCounter.every] page moves, shown once
-  /// the page has settled and nobody is waiting on this reader.
+  /// the page has settled and nobody is waiting on this reader. While it is
+  /// up, this reader is not ready: nobody waits for it to close the ad.
   Timer? _pageTurnAdTimer;
   bool _adShowing = false;
   static const _pageTurnAdDelay = Duration(seconds: 1);
@@ -321,6 +322,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// Can this reader start or carry out a turn right now?
   bool get _viewerReadyForTurns =>
       !_leaving &&
+      !_adShowing &&
       _viewerLoaded &&
       _lastLocalCfi != null &&
       !_isDisplaying &&
@@ -331,7 +333,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   void _publishReadiness() {
     if (!mounted) return;
     _pageSync.setViewerReady(_viewerReadyForTurns);
-    final isLoaded = !_leaving && _viewerLoaded && _lastLocalCfi != null;
+    // Under an ad this reader cannot answer, so the room is told not to ask
+    // it, as when the app is in the background. It follows the room's page
+    // once the ad is closed.
+    final isLoaded =
+        !_leaving && !_adShowing && _viewerLoaded && _lastLocalCfi != null;
     unawaited(
       ref
           .read(presenceProvider.notifier)
@@ -506,11 +512,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       return;
     }
     final ads = ref.read(interstitialAdsProvider);
-    _adShowing = true;
+    if (!ads.isReady) {
+      // Checked first: going not-ready and back costs two Presence updates,
+      // which are rate limited, and must not be spent on every page while
+      // no ad loads.
+      ads.preload();
+      return;
+    }
+    setState(() => _adShowing = true);
+    _publishReadiness();
     try {
       if (await ads.show()) counter.adShown();
     } finally {
-      _adShowing = false;
+      if (mounted) {
+        setState(() => _adShowing = false);
+        _publishReadiness();
+      }
     }
   }
 

@@ -35,7 +35,9 @@ void main() {
   });
 
   test('without the ad SDK nothing is shown and nothing waits', () async {
-    expect(await const NoInterstitialAds().show(), isFalse);
+    const ads = NoInterstitialAds();
+    expect(ads.isReady, isFalse);
+    expect(await ads.show(), isFalse);
   });
 
   test('the ad IDs are AdMob IDs for this platform', () {

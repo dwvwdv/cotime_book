@@ -14,6 +14,9 @@ abstract class InterstitialAds {
   /// Starts loading an ad, if none is ready or on its way.
   void preload();
 
+  /// An ad is loaded and [show] would show it.
+  bool get isReady;
+
   /// Shows the ad that is ready. Resolves once it is gone: true when one was
   /// shown, false when none was ready (one is then loaded for next time).
   Future<bool> show();
@@ -25,6 +28,9 @@ class NoInterstitialAds implements InterstitialAds {
 
   @override
   void preload() {}
+
+  @override
+  bool get isReady => false;
 
   @override
   Future<bool> show() async => false;
@@ -68,6 +74,9 @@ class AdMobInterstitialAds implements InterstitialAds {
     return loadedAt != null &&
         DateTime.now().difference(loadedAt) > AdConfig.adLifetime;
   }
+
+  @override
+  bool get isReady => _ad != null && !_showing && !_isStale;
 
   @override
   void preload() {
