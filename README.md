@@ -82,6 +82,14 @@ The catalog the browser searches and filters by is `cotime_book.library_books`
 | `tags` | `{愛情,文學經典}` | Any number; each distinct tag is a filter, the most used first |
 | `cover_path` | `covers/pg1342.jpg` | Optional; an image in the folder (about 400px wide JPEG) or a full URL |
 
+The help button next to the library's title shows `書籍來源聲明.txt`
+(`AppConstants.libraryNoticeFile`) from the same folder: a plain UTF-8 text
+file saying where the books come from. Edit it in the folder to change it.
+
+The browser's tag filter takes any number of tags and keeps the books that
+carry all of them; each cover shows the book's language in its corner
+(`En`, `Zh`).
+
 `20261024054844_library_public_folder.sql` catalogues the books the folder
 started with. A book without a row is still listed, titled by its file name
 (`The_Time_Machine.epub` shows as "The Time Machine"), and only appears when no

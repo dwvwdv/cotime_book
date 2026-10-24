@@ -18,6 +18,11 @@ abstract interface class LibraryService {
 
   /// Where a cover image in the library can be loaded from.
   String coverUrl(String path);
+
+  /// The note about where the books come from, kept in the folder as
+  /// [AppConstants.libraryNoticeFile] so the maintainers edit it along with
+  /// the books.
+  Future<String> readNotice();
 }
 
 /// Reads the files from a pCloud public folder ([AppConstants.libraryUrl])
@@ -73,6 +78,25 @@ class PublicFolderLibraryService implements LibraryService {
   @override
   Future<Uint8List> download(String path) =>
       _get(fileUri(path), downloadTimeout, maxBytes: AppConstants.maxFileSize);
+
+  /// A note, not a book: anything larger is not the notice.
+  static const noticeMaxBytes = 64 * 1024;
+
+  @override
+  Future<String> readNotice() async {
+    final bytes = await _get(
+      fileUri(AppConstants.libraryNoticeFile),
+      listTimeout,
+      maxBytes: noticeMaxBytes,
+    );
+    // Written by hand on any system: a Windows editor leaves a byte order
+    // mark and CRLF line ends.
+    return utf8
+        .decode(bytes, allowMalformed: true)
+        .replaceFirst('\uFEFF', '')
+        .replaceAll('\r\n', '\n')
+        .trim();
+  }
 
   @override
   String coverUrl(String path) {

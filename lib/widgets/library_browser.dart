@@ -68,6 +68,13 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
   /// A retry must not be overwritten by the slower attempt it replaced.
   int _loadGeneration = 0;
 
+  /// The note on where the books come from, behind the help button. Loaded
+  /// the first time it is opened and kept while the browser is.
+  bool _showNotice = false;
+  String? _notice;
+  String? _noticeError;
+  int _noticeGeneration = 0;
+
   @override
   void initState() {
     super.initState();
@@ -97,31 +104,56 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
     }
   }
 
+  void _toggleNotice() {
+    setState(() => _showNotice = !_showNotice);
+    if (_showNotice && _notice == null) _loadNotice();
+  }
+
+  Future<void> _loadNotice() async {
+    final generation = ++_noticeGeneration;
+    setState(() => _noticeError = null);
+    try {
+      final notice = await widget.library.readNotice();
+      if (!mounted || generation != _noticeGeneration) return;
+      setState(() => _notice = notice);
+    } catch (error) {
+      debugPrint('Unable to read the library notice: $error');
+      if (!mounted || generation != _noticeGeneration) return;
+      setState(() => _noticeError = 'The note could not be loaded.');
+    }
+  }
+
   void _setQuery(String query) {
     setState(() {
       _filter = LibraryFilter(
         query: query,
-        tag: _filter.tag,
+        tags: _filter.tags,
         language: _filter.language,
       );
     });
   }
 
-  void _setTag(String? tag) {
+  void _setTags(Set<String> tags) {
     setState(() {
       _filter = LibraryFilter(
         query: _filter.query,
-        tag: tag,
+        tags: tags,
         language: _filter.language,
       );
     });
+  }
+
+  void _toggleTag(String tag) {
+    final tags = {..._filter.tags};
+    if (!tags.remove(tag)) tags.add(tag);
+    _setTags(tags);
   }
 
   void _setLanguage(String? language) {
     setState(() {
       _filter = LibraryFilter(
         query: _filter.query,
-        tag: _filter.tag,
+        tags: _filter.tags,
         language: language,
       );
     });
@@ -141,12 +173,24 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
         ? const <String>[]
         : libraryLanguages(books);
     final canFilter = tags.isNotEmpty || languages.isNotEmpty;
-    final filtersActive = _filter.tag != null || _filter.language != null;
+    final filtersActive = _filter.tags.isNotEmpty || _filter.language != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text('Public Library', style: AppTheme.title),
+        Row(
+          children: [
+            const Expanded(
+              child: Text('Public Library', style: AppTheme.title),
+            ),
+            _ToggleIconButton(
+              icon: Icons.help_outline,
+              tooltip: 'About these books',
+              open: _showNotice,
+              onPressed: _toggleNotice,
+            ),
+          ],
+        ),
         const SizedBox(height: 16),
         // Stretched so the filter button is exactly as tall as the field,
         // whatever the theme and text size make that.
@@ -196,6 +240,17 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
           child: LayoutBuilder(
             builder: (context, constraints) => CustomScrollView(
               slivers: [
+                if (_showNotice)
+                  SliverPadding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    sliver: SliverToBoxAdapter(
+                      child: _NoticePanel(
+                        notice: _notice,
+                        error: _noticeError,
+                        onRetry: _loadNotice,
+                      ),
+                    ),
+                  ),
                 if (canFilter && _showFilters)
                   SliverPadding(
                     padding: const EdgeInsets.only(bottom: 16),
@@ -203,9 +258,10 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
                       child: _FilterPanel(
                         tags: tags,
                         languages: languages,
-                        tag: _filter.tag,
+                        selectedTags: _filter.tags,
                         language: _filter.language,
-                        onTag: _setTag,
+                        onTag: _toggleTag,
+                        onAllTags: () => _setTags(const {}),
                         onLanguage: _setLanguage,
                       ),
                     ),
@@ -389,17 +445,19 @@ class _FilterButton extends StatelessWidget {
 class _FilterPanel extends StatelessWidget {
   final List<String> tags;
   final List<String> languages;
-  final String? tag;
+  final Set<String> selectedTags;
   final String? language;
-  final ValueChanged<String?> onTag;
+  final ValueChanged<String> onTag;
+  final VoidCallback onAllTags;
   final ValueChanged<String?> onLanguage;
 
   const _FilterPanel({
     required this.tags,
     required this.languages,
-    required this.tag,
+    required this.selectedTags,
     required this.language,
     required this.onTag,
+    required this.onAllTags,
     required this.onLanguage,
   });
 
@@ -416,11 +474,15 @@ class _FilterPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (tags.isNotEmpty)
+            // Any number at once; the label says how they combine, since
+            // a reader could as well expect a wider shelf.
             _FilterGroup(
-              label: 'Tag',
+              label: 'Tags',
+              hint: selectedTags.length > 1 ? 'Books with all of them' : null,
               options: tags,
-              selected: tag,
-              onChanged: onTag,
+              isSelected: selectedTags.contains,
+              onAll: onAllTags,
+              onTap: onTag,
             ),
           if (tags.isNotEmpty && languages.isNotEmpty)
             const SizedBox(height: 12),
@@ -428,8 +490,10 @@ class _FilterPanel extends StatelessWidget {
             _FilterGroup(
               label: 'Language',
               options: languages,
-              selected: language,
-              onChanged: onLanguage,
+              isSelected: (option) => option == language,
+              onAll: () => onLanguage(null),
+              // Tapping the chosen one again lets go of it.
+              onTap: (option) => onLanguage(option == language ? null : option),
             ),
         ],
       ),
@@ -437,43 +501,52 @@ class _FilterPanel extends StatelessWidget {
   }
 }
 
-/// One set of mutually exclusive choices, "All" first. The label sits above
-/// and the choices wrap, so neither is cut off on a narrow screen.
+/// One set of choices, "All" first; "All" is chosen when nothing else is.
+/// The label sits above and the choices wrap, so neither is cut off on a
+/// narrow screen.
 class _FilterGroup extends StatelessWidget {
   final String label;
+  final String? hint;
   final List<String> options;
-  final String? selected;
-  final ValueChanged<String?> onChanged;
+  final bool Function(String option) isSelected;
+  final VoidCallback onAll;
+  final ValueChanged<String> onTap;
 
   const _FilterGroup({
     required this.label,
+    this.hint,
     required this.options,
-    required this.selected,
-    required this.onChanged,
+    required this.isSelected,
+    required this.onAll,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final anySelected = options.any(isSelected);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label.toUpperCase(), style: AppTheme.overline),
+        Row(
+          children: [
+            Text(label.toUpperCase(), style: AppTheme.overline),
+            if (hint != null) ...[
+              const SizedBox(width: 8),
+              Flexible(child: Text(hint!, style: AppTheme.caption)),
+            ],
+          ],
+        ),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
           runSpacing: 8,
           children: [
-            _FilterChoice(
-              label: 'All',
-              selected: selected == null,
-              onTap: () => onChanged(null),
-            ),
+            _FilterChoice(label: 'All', selected: !anySelected, onTap: onAll),
             for (final option in options)
               _FilterChoice(
                 label: option,
-                selected: option == selected,
-                // Tapping the chosen one again lets go of it.
-                onTap: () => onChanged(option == selected ? null : option),
+                selected: isSelected(option),
+                onTap: () => onTap(option),
               ),
           ],
         ),
@@ -555,7 +628,21 @@ class _BookTile extends StatelessWidget {
         children: [
           AspectRatio(
             aspectRatio: LibraryCover.aspectRatio,
-            child: LibraryCover(url: coverUrl, title: book.title),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                LibraryCover(url: coverUrl, title: book.title),
+                if (book.languageBadge case final badge?)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    child: _LanguageBadge(
+                      label: badge,
+                      semanticsLabel: book.languageName ?? badge,
+                    ),
+                  ),
+              ],
+            ),
           ),
           const SizedBox(height: gap),
           Text(
@@ -657,6 +744,130 @@ class _PlainJacket extends StatelessWidget {
             ),
           ),
           const Divider(height: 1, thickness: AppTheme.ruleWidth),
+        ],
+      ),
+    );
+  }
+}
+
+/// The book's language on the corner of its cover, so a shelf of mixed
+/// languages reads at a glance. Ink reversed out of paper, not a tint: the
+/// panel is grayscale, and it has to stand out on any cover.
+class _LanguageBadge extends StatelessWidget {
+  final String label;
+  final String semanticsLabel;
+
+  const _LanguageBadge({required this.label, required this.semanticsLabel});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: semanticsLabel,
+      excludeSemantics: true,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        color: AppTheme.ink,
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            height: 1.2,
+            fontWeight: FontWeight.w700,
+            color: AppTheme.paper,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// An icon button that stays inverted while the panel it opens is open, so
+/// the reader can tell what the extra box at the top belongs to.
+class _ToggleIconButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final bool open;
+  final VoidCallback onPressed;
+
+  const _ToggleIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.open,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      toggled: open,
+      child: Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(AppTheme.radius),
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: open ? AppTheme.ink : AppTheme.paper,
+              borderRadius: BorderRadius.circular(AppTheme.radius),
+            ),
+            child: Icon(icon, color: open ? AppTheme.paper : AppTheme.ink),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The library's note on where its books come from, as the maintainers wrote
+/// it in the folder. Selectable, so its links can be copied.
+class _NoticePanel extends StatelessWidget {
+  final String? notice;
+  final String? error;
+  final VoidCallback onRetry;
+
+  const _NoticePanel({
+    required this.notice,
+    required this.error,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget content;
+    if (notice != null) {
+      content = SelectableText(
+        notice!.isEmpty ? 'No note has been written yet.' : notice!,
+        style: AppTheme.body.copyWith(height: 1.5),
+      );
+    } else if (error != null) {
+      content = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          PaperNotice(message: error!, icon: Icons.wifi_off),
+          const SizedBox(height: 8),
+          TextButton(onPressed: onRetry, child: const Text('Try Again')),
+        ],
+      );
+    } else {
+      // Text, not a spinner: e-ink.
+      content = const Text('Loading...', style: AppTheme.body);
+    }
+    return Container(
+      key: const Key('library-notice'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: const Border.fromBorderSide(AppTheme.rule),
+        borderRadius: BorderRadius.circular(AppTheme.radius),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('ABOUT THESE BOOKS', style: AppTheme.overline),
+          const SizedBox(height: 8),
+          content,
         ],
       ),
     );

@@ -44,6 +44,9 @@ class SlowLibrary implements LibraryService {
 
   @override
   String coverUrl(String path) => 'https://library.test/$path';
+
+  @override
+  Future<String> readNotice() async => '';
 }
 
 /// Runs [onHoldingBook] while this device announces it holds a book: the

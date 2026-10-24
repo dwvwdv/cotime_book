@@ -91,6 +91,20 @@ class LibraryBook {
     return title.isEmpty ? name : title;
   }
 
+  /// The language as the badge on the cover shows it ("En", "Zh"), or null
+  /// when uncatalogued. Only the primary subtag: the badge is a glance, and
+  /// the filter tells Traditional and Simplified Chinese apart.
+  String? get languageBadge {
+    final primary = language
+        ?.trim()
+        .replaceAll('_', '-')
+        .split('-')
+        .first
+        .toLowerCase();
+    if (primary == null || primary.isEmpty) return null;
+    return primary[0].toUpperCase() + primary.substring(1);
+  }
+
   /// The language as a reader would name it, or null when uncatalogued.
   String? get languageName {
     final tag = language;
@@ -166,24 +180,28 @@ const _languageNames = {
   'th': 'Thai',
 };
 
-/// What the library browser is narrowed to. Null filters mean "all".
+/// What the library browser is narrowed to. No tags and a null language
+/// mean "all".
 class LibraryFilter {
   final String query;
-  final String? tag;
+
+  /// A book has to carry every one of these: each tag picked narrows the
+  /// shelf further, as a filter does.
+  final Set<String> tags;
 
   /// Compared with [LibraryBook.languageName], not the raw tag.
   final String? language;
 
-  const LibraryFilter({this.query = '', this.tag, this.language});
+  const LibraryFilter({this.query = '', this.tags = const {}, this.language});
 
-  bool get isEmpty => query.trim().isEmpty && tag == null && language == null;
+  bool get isEmpty => query.trim().isEmpty && tags.isEmpty && language == null;
 
   /// Every word of the query has to appear in the title, the author (either
   /// as catalogued or as in the original) or the file name, in any order.
   /// Chinese has no spaces between words, so a Chinese query is matched as
   /// one piece.
   bool matches(LibraryBook book) {
-    if (tag != null && !book.tags.contains(tag)) return false;
+    if (!tags.every(book.tags.contains)) return false;
     if (language != null && book.languageName != language) return false;
     final words = query.toLowerCase().split(RegExp(r'\s+'))
       ..removeWhere((word) => word.isEmpty);

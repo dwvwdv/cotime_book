@@ -42,9 +42,11 @@ String folderPage(List<Map<String, Object?>> content) =>
 
 class FakeLibrary implements LibraryService {
   final List<Future<List<LibraryBook>> Function()> answers;
+  final List<Future<String> Function()> notices;
   int listCalls = 0;
+  int noticeCalls = 0;
 
-  FakeLibrary(this.answers);
+  FakeLibrary(this.answers, {this.notices = const []});
 
   @override
   Future<List<LibraryBook>> listBooks() => answers[listCalls++]();
@@ -54,6 +56,9 @@ class FakeLibrary implements LibraryService {
 
   @override
   String coverUrl(String path) => 'https://library.test/$path';
+
+  @override
+  Future<String> readNotice() => notices[noticeCalls++]();
 }
 
 void main() {
@@ -154,8 +159,19 @@ void main() {
 
     test('by tag and language together with the words', () {
       // A book is under every tag it carries.
-      expect(const LibraryFilter(tag: 'Classics').apply(books), [dream, alice]);
-      expect(const LibraryFilter(tag: 'Children').apply(books), [alice]);
+      expect(const LibraryFilter(tags: {'Classics'}).apply(books), [
+        dream,
+        alice,
+      ]);
+      expect(const LibraryFilter(tags: {'Children'}).apply(books), [alice]);
+      // Several tags narrow to the books that carry all of them.
+      expect(const LibraryFilter(tags: {'Classics', 'Children'}).apply(books), [
+        alice,
+      ]);
+      expect(
+        const LibraryFilter(tags: {'Classics', 'Science Fiction'}).apply(books),
+        isEmpty,
+      );
       expect(const LibraryFilter(language: 'English').apply(books), [
         alice,
         machine,
@@ -163,7 +179,7 @@ void main() {
       expect(
         const LibraryFilter(
           query: 'time',
-          tag: 'Children',
+          tags: {'Children'},
           language: 'English',
         ).apply(books),
         isEmpty,
@@ -175,6 +191,16 @@ void main() {
       // en and en-GB are one language to a reader.
       expect(libraryLanguages(books), ['Chinese (Traditional)', 'English']);
       expect(libraryTags(const [LibraryBook(path: 'x.epub')]), isEmpty);
+    });
+
+    test('badges a book with its language, briefly', () {
+      expect(alice.languageBadge, 'En');
+      expect(dream.languageBadge, 'Zh');
+      expect(
+        const LibraryBook(path: 'x.epub', language: 'pt_BR').languageBadge,
+        'Pt',
+      );
+      expect(const LibraryBook(path: 'x.epub').languageBadge, isNull);
     });
 
     test('names the language tags the catalog is likely to use', () {
@@ -309,6 +335,24 @@ void main() {
       expect(
         library.coverUrl('https://img.test/a.jpg'),
         'https://img.test/a.jpg',
+      );
+    });
+
+    test('reads the note on where the books come from', () async {
+      Uri? requested;
+      final library = service((request) async {
+        requested = request.url;
+        return http.Response.bytes(
+          utf8.encode('\uFEFF來源：Project Gutenberg\r\n公有領域\r\n'),
+          200,
+        );
+      });
+
+      expect(await library.readNotice(), '來源：Project Gutenberg\n公有領域');
+      expect(
+        requested.toString(),
+        'https://folder.test/books/'
+        '${Uri.encodeComponent(AppConstants.libraryNoticeFile)}',
       );
     });
 
@@ -477,15 +521,15 @@ void main() {
     ) async {
       await openBrowser(tester, FakeLibrary([() async => catalog]));
 
-      expect(find.text('TAG'), findsNothing);
+      expect(find.text('TAGS'), findsNothing);
       expect(choice('English'), findsNothing);
 
       await openFilters(tester);
-      expect(find.text('TAG'), findsOneWidget);
+      expect(find.text('TAGS'), findsOneWidget);
       expect(find.text('LANGUAGE'), findsOneWidget);
 
       await openFilters(tester);
-      expect(find.text('TAG'), findsNothing);
+      expect(find.text('TAGS'), findsNothing);
     });
 
     testWidgets('narrows by tag and by language', (tester) async {
@@ -509,6 +553,80 @@ void main() {
       await openFilters(tester);
       expect(shelved('紅樓夢'), findsNothing);
       expect(find.text('2 of 3 books'), findsOneWidget);
+    });
+
+    testWidgets('several tags can be chosen at once', (tester) async {
+      await openBrowser(
+        tester,
+        FakeLibrary([
+          () async => const [
+            LibraryBook(path: 'a.epub', title: 'Alpha', tags: ['冒險', '科幻']),
+            LibraryBook(path: 'b.epub', title: 'Beta', tags: ['冒險']),
+            LibraryBook(path: 'c.epub', title: 'Gamma', tags: ['科幻']),
+          ],
+        ]),
+      );
+      await openFilters(tester);
+
+      await tapChoice(tester, '冒險');
+      await tapChoice(tester, '科幻');
+      expect(shelved('Alpha'), findsOneWidget);
+      expect(shelved('Beta'), findsNothing);
+      expect(shelved('Gamma'), findsNothing);
+      expect(find.text('Books with all of them'), findsOneWidget);
+
+      // Tapping a chosen tag again lets go of only that one.
+      await tapChoice(tester, '冒險');
+      expect(shelved('Alpha'), findsOneWidget);
+      expect(shelved('Gamma'), findsOneWidget);
+      expect(shelved('Beta'), findsNothing);
+
+      await tapChoice(tester, '冒險');
+      await tapChoice(tester, 'All');
+      expect(find.text('3 books'), findsOneWidget);
+    });
+
+    testWidgets('each cover says what language the book is in', (tester) async {
+      await openBrowser(tester, FakeLibrary([() async => catalog]));
+
+      expect(find.text('Zh'), findsOneWidget);
+      expect(find.text('En'), findsNWidgets(2));
+    });
+
+    testWidgets('the help button shows where the books come from', (
+      tester,
+    ) async {
+      final library = FakeLibrary(
+        [() async => catalog],
+        notices: [
+          () async => throw Exception('offline'),
+          () async => '來源：https://www.gutenberg.org',
+        ],
+      );
+      await openBrowser(tester, library);
+      expect(library.noticeCalls, 0);
+
+      await tester.tap(find.byTooltip('About these books'));
+      await tester.pumpAndSettle();
+      expect(find.text('The note could not be loaded.'), findsOneWidget);
+
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const Key('library-notice')),
+          matching: find.text('Try Again'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('來源：https://www.gutenberg.org'), findsOneWidget);
+
+      // Closed and opened again, it is not fetched again.
+      await tester.tap(find.byTooltip('About these books'));
+      await tester.pump();
+      expect(find.byKey(const Key('library-notice')), findsNothing);
+      await tester.tap(find.byTooltip('About these books'));
+      await tester.pump();
+      expect(find.text('來源：https://www.gutenberg.org'), findsOneWidget);
+      expect(library.noticeCalls, 2);
     });
 
     testWidgets('a search with no result can be cleared in one tap', (

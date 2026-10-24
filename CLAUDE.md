@@ -159,6 +159,7 @@ supabase/
    `cotime_book.library_books`，以相對於資料夾的 `path` 對應；App 直接讀這張表、在裝置上和資料夾的
    檔案清單合併，沒有目錄列的書仍要列得出來。`rooms.current_book_library_path` 也是相對於資料夾的路徑。
    Storage bucket `cotime-book-library`、`library_catalog` view 與 `category` 欄位只留給 1.0.12 以前的 App。
+   圖書館的說明按鈕讀的是同一資料夾的 `書籍來源聲明.txt`（`AppConstants.libraryNoticeFile`）。
    瀏覽與搜尋在獨立的 `LibraryBrowser`（lobby 的「Library」按鈕），不要塞回「Share Book」
    （issue #AB）。
    TXT 只是匯入格式，而且**不在房間裡轉**：首頁左下角的「TXT to EPUB」工具

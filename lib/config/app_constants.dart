@@ -27,6 +27,10 @@ class AppConstants {
   static const String libraryUrl =
       'https://filedn.eu/lyWyjTiBuD9uWONu3Or0JNX/lazyrhythm/CotimeBook/eBook/';
 
+  // Where the library's books come from and their copyright status, shown by
+  // the library's help button. A plain UTF-8 text file in the library folder.
+  static const String libraryNoticeFile = '書籍來源聲明.txt';
+
   // Realtime
   static String roomChannelName(String roomCode) =>
       'cotime_book:room:$roomCode';
