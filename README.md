@@ -86,9 +86,9 @@ The help button next to the library's title shows `書籍來源聲明.txt`
 (`AppConstants.libraryNoticeFile`) from the same folder: a plain UTF-8 text
 file saying where the books come from. Edit it in the folder to change it.
 
-The browser's tag filter takes any number of tags and keeps the books that
-carry all of them; each cover shows the book's language in its corner
-(`En`, `Zh`).
+The browser's tag filter takes any number of tags and shows the books that
+carry any of them; a ribbon across each cover's top-left corner names the
+book's language (`English`, `Chinese`).
 
 `20261024054844_library_public_folder.sql` catalogues the books the folder
 started with. A book without a row is still listed, titled by its file name

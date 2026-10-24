@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/library_book.dart';
@@ -478,7 +480,7 @@ class _FilterPanel extends StatelessWidget {
             // a reader could as well expect a wider shelf.
             _FilterGroup(
               label: 'Tags',
-              hint: selectedTags.length > 1 ? 'Books with all of them' : null,
+              hint: selectedTags.length > 1 ? 'Books with any of them' : null,
               options: tags,
               isSelected: selectedTags.contains,
               onAll: onAllTags,
@@ -633,10 +635,8 @@ class _BookTile extends StatelessWidget {
               children: [
                 LibraryCover(url: coverUrl, title: book.title),
                 if (book.languageBadge case final badge?)
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    child: _LanguageBadge(
+                  Positioned.fill(
+                    child: _LanguageRibbon(
                       label: badge,
                       semanticsLabel: book.languageName ?? badge,
                     ),
@@ -750,30 +750,70 @@ class _PlainJacket extends StatelessWidget {
   }
 }
 
-/// The book's language on the corner of its cover, so a shelf of mixed
-/// languages reads at a glance. Ink reversed out of paper, not a tint: the
-/// panel is grayscale, and it has to stand out on any cover.
-class _LanguageBadge extends StatelessWidget {
+/// The book's language as a ribbon across the top-left corner of its cover,
+/// so a shelf of mixed languages reads at a glance. Ink reversed out of
+/// paper, not a tint: the panel is grayscale. A paper rule on each edge keeps
+/// it apart from a dark cover.
+class _LanguageRibbon extends StatelessWidget {
+  /// How far along each edge from the corner the ribbon's middle crosses.
+  static const reach = 48.0;
+  static const thickness = 18.0;
+
   final String label;
   final String semanticsLabel;
 
-  const _LanguageBadge({required this.label, required this.semanticsLabel});
+  const _LanguageRibbon({required this.label, required this.semanticsLabel});
 
   @override
   Widget build(BuildContext context) {
+    // The band is longer than the corner it crosses and clipped by the
+    // cover; the label is held to the band's shorter inner edge, so a long
+    // language name shrinks instead of running off the cover.
+    const length = reach * 2;
+    const innerEdge = reach * math.sqrt2 - thickness - 4;
     return Semantics(
       label: semanticsLabel,
       excludeSemantics: true,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        color: AppTheme.ink,
-        child: Text(
-          label,
-          style: const TextStyle(
-            fontSize: 12,
-            height: 1.2,
-            fontWeight: FontWeight.w700,
-            color: AppTheme.paper,
+      child: IgnorePointer(
+        child: ClipRect(
+          child: Stack(
+            children: [
+              Positioned(
+                left: reach / 2 - length / 2,
+                top: reach / 2 - thickness / 2,
+                width: length,
+                height: thickness,
+                child: Transform.rotate(
+                  angle: -math.pi / 4,
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: AppTheme.ink,
+                      border: Border.symmetric(
+                        horizontal: BorderSide(color: AppTheme.paper),
+                      ),
+                    ),
+                    alignment: Alignment.center,
+                    child: SizedBox(
+                      width: innerEdge,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            height: 1,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.3,
+                            color: AppTheme.paper,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

@@ -91,18 +91,14 @@ class LibraryBook {
     return title.isEmpty ? name : title;
   }
 
-  /// The language as the badge on the cover shows it ("En", "Zh"), or null
-  /// when uncatalogued. Only the primary subtag: the badge is a glance, and
-  /// the filter tells Traditional and Simplified Chinese apart.
+  /// The language as the ribbon on the cover names it ("English",
+  /// "Chinese"), or null when uncatalogued. Only the primary subtag: the
+  /// ribbon is a glance, and the filter tells Traditional and Simplified
+  /// Chinese apart.
   String? get languageBadge {
-    final primary = language
-        ?.trim()
-        .replaceAll('_', '-')
-        .split('-')
-        .first
-        .toLowerCase();
+    final primary = language?.trim().replaceAll('_', '-').split('-').first;
     if (primary == null || primary.isEmpty) return null;
-    return primary[0].toUpperCase() + primary.substring(1);
+    return describeLanguage(primary);
   }
 
   /// The language as a reader would name it, or null when uncatalogued.
@@ -185,8 +181,8 @@ const _languageNames = {
 class LibraryFilter {
   final String query;
 
-  /// A book has to carry every one of these: each tag picked narrows the
-  /// shelf further, as a filter does.
+  /// A book has to carry at least one of these: picking another tag adds
+  /// its books to the shelf.
   final Set<String> tags;
 
   /// Compared with [LibraryBook.languageName], not the raw tag.
@@ -201,7 +197,7 @@ class LibraryFilter {
   /// Chinese has no spaces between words, so a Chinese query is matched as
   /// one piece.
   bool matches(LibraryBook book) {
-    if (!tags.every(book.tags.contains)) return false;
+    if (tags.isNotEmpty && !tags.any(book.tags.contains)) return false;
     if (language != null && book.languageName != language) return false;
     final words = query.toLowerCase().split(RegExp(r'\s+'))
       ..removeWhere((word) => word.isEmpty);

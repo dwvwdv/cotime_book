@@ -164,13 +164,17 @@ void main() {
         alice,
       ]);
       expect(const LibraryFilter(tags: {'Children'}).apply(books), [alice]);
-      // Several tags narrow to the books that carry all of them.
-      expect(const LibraryFilter(tags: {'Classics', 'Children'}).apply(books), [
-        alice,
-      ]);
+      // Several tags show the books that carry any of them.
       expect(
-        const LibraryFilter(tags: {'Classics', 'Science Fiction'}).apply(books),
-        isEmpty,
+        const LibraryFilter(tags: {'Children', 'Science Fiction'}).apply(books),
+        [alice, machine],
+      );
+      expect(
+        const LibraryFilter(
+          tags: {'Classics', 'Science Fiction'},
+          language: 'English',
+        ).apply(books),
+        [alice, machine],
       );
       expect(const LibraryFilter(language: 'English').apply(books), [
         alice,
@@ -194,11 +198,13 @@ void main() {
     });
 
     test('badges a book with its language, briefly', () {
-      expect(alice.languageBadge, 'En');
-      expect(dream.languageBadge, 'Zh');
+      expect(alice.languageBadge, 'English');
+      expect(machine.languageBadge, 'English');
+      // Traditional or Simplified is for the filter; the ribbon is a glance.
+      expect(dream.languageBadge, 'Chinese');
       expect(
         const LibraryBook(path: 'x.epub', language: 'pt_BR').languageBadge,
-        'Pt',
+        'Portuguese',
       );
       expect(const LibraryBook(path: 'x.epub').languageBadge, isNull);
     });
@@ -569,11 +575,15 @@ void main() {
       await openFilters(tester);
 
       await tapChoice(tester, '冒險');
-      await tapChoice(tester, '科幻');
       expect(shelved('Alpha'), findsOneWidget);
-      expect(shelved('Beta'), findsNothing);
+      expect(shelved('Beta'), findsOneWidget);
       expect(shelved('Gamma'), findsNothing);
-      expect(find.text('Books with all of them'), findsOneWidget);
+
+      // Another tag adds its books.
+      await tapChoice(tester, '科幻');
+      expect(shelved('Gamma'), findsOneWidget);
+      expect(find.text('3 of 3 books'), findsOneWidget);
+      expect(find.text('Books with any of them'), findsOneWidget);
 
       // Tapping a chosen tag again lets go of only that one.
       await tapChoice(tester, '冒險');
@@ -581,7 +591,6 @@ void main() {
       expect(shelved('Gamma'), findsOneWidget);
       expect(shelved('Beta'), findsNothing);
 
-      await tapChoice(tester, '冒險');
       await tapChoice(tester, 'All');
       expect(find.text('3 books'), findsOneWidget);
     });
@@ -589,8 +598,8 @@ void main() {
     testWidgets('each cover says what language the book is in', (tester) async {
       await openBrowser(tester, FakeLibrary([() async => catalog]));
 
-      expect(find.text('Zh'), findsOneWidget);
-      expect(find.text('En'), findsNWidgets(2));
+      expect(find.text('Chinese'), findsOneWidget);
+      expect(find.text('English'), findsNWidgets(2));
     });
 
     testWidgets('the help button shows where the books come from', (
