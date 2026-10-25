@@ -10,6 +10,10 @@
 - 同一個 PR 只有一個版本條目（見 `version-update.md`）；review 修復追加在同一條目下。
 - 只動文件、`.claude/`、`.github/` 的 PR 不 bump 版號，不必新增條目。
 
+### v1.0.13+17 (2026-10-24)
+
+- ✨ 加入插頁式廣告（AdMob）：閱讀時每翻 20 頁、以及在「TXT to EPUB」按「Save EPUB」存檔前各播一則。翻頁的廣告只在頁面落定、沒有人在等這台裝置確認翻頁時才出現；播放期間這台裝置暫時不被詢問翻頁（和 App 在背景時一樣），其他人不必等它關掉廣告，關掉後會跟上房間的頁面；廣告沒載好或出錯時直接略過，不會讓存檔或翻頁卡住。目前用的是 Google 的測試廣告 ID，正式 ID 改 `lib/config/ad_config.dart` 與 `AndroidManifest.xml`。
+
 ### v1.0.12+16 (2026-10-24)
 
 - ✨ 公共圖書館改讀 pCloud 公開資料夾：維護者把 EPUB 丟進資料夾就上架，不再受 Supabase Storage 1GB 的限制。超過 40MB 的書仍不列出。需要先套 `20261024054844_library_public_folder.sql` 再發版；舊版 App 仍讀原本的 Storage bucket。
