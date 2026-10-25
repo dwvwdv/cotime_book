@@ -14,6 +14,7 @@
 
 - ⚡ 自己分享的書改成裝置對裝置直傳（WebRTC），房間的 Realtime 只送連線資訊，書不經過、也不存在伺服器上（#60，#35）。一本 40MB 的書以前要 1280 個 broadcast、兩分多鐘，現在直連通常幾秒到十幾秒；接不通時經 Cloudflare 的 TURN 中繼，再不行才退回原本的 broadcast。分享者不再先 push 整本書，舊版 App 仍照晚加入者的方式向持有者要。需要部署 `turn-credentials` Edge Function 並設好 Cloudflare TURN 的 secrets（見 README）；沒部署時只用 STUN，接不通的情況會多一些。
 - ⚡ 新增 `flutter_webrtc`，arm64 APK 會變大。
+- 🐛 實機測試時，收書端一開始直傳就閃退：libwebrtc 監聽網路變化需要 `ACCESS_NETWORK_STATE` 權限，少了它會在原生層直接 abort。已補上權限（一般權限，安裝時自動授予，不會跳出詢問）。
 
 ### v1.0.12+16 (2026-10-24)
 

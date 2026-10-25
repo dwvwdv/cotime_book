@@ -156,7 +156,9 @@ supabase/
    試一個、試過的不再試，連不上、`FileTransferService` 的 watchdog 判定停滯、或 hash 不符，就回到
    上面的 broadcast。有直傳時分享者**不再 push** 整本書，舊版 App 照晚加入者的方式來要。
    TURN 帳密由 Edge Function `turn-credentials` 發（Cloudflare 的 key 只在 function 的 secrets），
-   沒部署時只用 STUN。**不要把書或使用者識別放進 signaling 或 TURN 請求**（不帶 `customIdentifier`），
+   沒部署時只用 STUN。Android 的 manifest 必須有 `ACCESS_NETWORK_STATE`：libwebrtc 的 NetworkMonitor 在收集
+   候選位址時註冊網路回呼，沒有權限時丟出的 `SecurityException` 沒被接住，原生層會直接 abort 整個 App
+   （`android_build_config_test.dart` 擋著）。**不要把書或使用者識別放進 signaling 或 TURN 請求**（不帶 `customIdentifier`），
    也不要為傳書記錄誰傳了什麼——這是產品原則，不是疏漏。直傳的協定測試在
    `test/peer_book_link_test.dart`（記憶體裡的 wire），整合在 `file_transfer_service_test.dart` 的
    `direct transfer` 群組。
