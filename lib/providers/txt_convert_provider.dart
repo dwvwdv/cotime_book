@@ -350,6 +350,6 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
 final txtConvertProvider =
     StateNotifierProvider.autoDispose<TxtConvertNotifier, TxtConvertState>(
       (ref) => TxtConvertNotifier(
-        beforeSave: () => ref.read(interstitialAdsProvider).show(),
+        beforeSave: () => ref.read(txtSaveAdsProvider).show(),
       ),
     );

@@ -10,6 +10,11 @@
 - 同一個 PR 只有一個版本條目（見 `version-update.md`）；review 修復追加在同一條目下。
 - 只動文件、`.claude/`、`.github/` 的 PR 不 bump 版號，不必新增條目。
 
+### v1.0.14+18 (2026-10-25)
+
+- ✨ 插頁式廣告換成正式的 AdMob ID：翻頁與 TXT 轉檔存檔各用自己的廣告單元，AdMob 報表可以分開看兩個版位。只有 release build 播正式廣告，debug / profile build 仍是 Google 的測試廣告，避免開發時的點擊被算成無效流量（#58）。
+- ✨ 加入 AdMob 聚合的 Liftoff Monetize 競價轉接器（`gma_mediation_liftoffmonetize`），由 AdMob 後台的 Mediation Group 決定誰出價，App 端不需設定。轉接器用 Kotlin 2 編譯，Kotlin Gradle plugin 因此從 1.8.22 升到 2.1.20。
+
 ### v1.0.13+17 (2026-10-24)
 
 - ✨ 加入插頁式廣告（AdMob）：閱讀時每翻 20 頁、以及在「TXT to EPUB」按「Save EPUB」存檔前各播一則。翻頁的廣告只在頁面落定、沒有人在等這台裝置確認翻頁時才出現；播放期間這台裝置暫時不被詢問翻頁（和 App 在背景時一樣），其他人不必等它關掉廣告，關掉後會跟上房間的頁面；廣告沒載好或出錯時直接略過，不會讓存檔或翻頁卡住。目前用的是 Google 的測試廣告 ID，正式 ID 改 `lib/config/ad_config.dart` 與 `AndroidManifest.xml`。
