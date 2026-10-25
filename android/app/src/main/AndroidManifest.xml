@@ -33,6 +33,12 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- AdMob app ID. The ad units in lib/config/ad_config.dart belong to
+             this app: change them together. Without this entry the Mobile Ads
+             SDK stops the app at launch. -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-3815823795185340~3037635912" />
     </application>
     <queries>
         <intent>

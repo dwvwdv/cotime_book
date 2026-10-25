@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../config/app_constants.dart';
 import '../services/txt_book.dart';
+import 'ads_provider.dart';
 import 'book_provider.dart' show formatMegabytes, readPickedFile;
 
 /// Shows the reader the TXT files about to become a book; null backs out.
@@ -22,6 +23,12 @@ typedef BookExporter =
 
 /// Where a converted book is kept while it is read and saved.
 typedef ConvertedBooksDirectory = Future<Directory> Function();
+
+/// Runs before every save and resolves when the save may go on: the
+/// interstitial ad shown there.
+typedef BeforeSave = Future<void> Function();
+
+Future<void> _nothingBeforeSave() async {}
 
 Future<String?> exportWithSaveDialog(String fileName, Uint8List bytes) async {
   final path = await FilePicker.platform.saveFile(
@@ -96,6 +103,7 @@ class TxtConvertState {
 class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
   final BookExporter _export;
   final ConvertedBooksDirectory _directory;
+  final BeforeSave _beforeSave;
 
   /// Bumped by every conversion, save and dismissal, so a slow one cannot
   /// land on top of what the reader did since.
@@ -108,9 +116,11 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
   TxtConvertNotifier({
     BookExporter export = exportWithSaveDialog,
     ConvertedBooksDirectory directory = _temporaryConvertedBooks,
+    BeforeSave beforeSave = _nothingBeforeSave,
     Duration errorAutoClearDelay = defaultErrorAutoClearDelay,
   }) : _export = export,
        _directory = directory,
+       _beforeSave = beforeSave,
        _errorAutoClearDelay = errorAutoClearDelay,
        super(const TxtConvertState());
 
@@ -242,12 +252,18 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
   }
 
   /// Saves the converted book where the reader chooses, so it can be shared
-  /// in a room from there.
+  /// in a room from there. An ad comes first, every time.
   Future<void> saveBook() async {
     final book = state.book;
     if (book == null || state.isBusy) return;
     final generation = ++_generation;
     _setBusy('Saving...');
+    try {
+      await _beforeSave();
+    } catch (_) {
+      // An ad that goes wrong is no reason to keep the book unsaved.
+    }
+    if (!_isCurrent(generation)) return;
     try {
       final path = await _export(book.fileName, await book.file.readAsBytes());
       if (!_isCurrent(generation)) return;
@@ -333,5 +349,7 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
 /// by then has been saved or was not wanted.
 final txtConvertProvider =
     StateNotifierProvider.autoDispose<TxtConvertNotifier, TxtConvertState>(
-      (ref) => TxtConvertNotifier(),
+      (ref) => TxtConvertNotifier(
+        beforeSave: () => ref.read(txtSaveAdsProvider).show(),
+      ),
     );

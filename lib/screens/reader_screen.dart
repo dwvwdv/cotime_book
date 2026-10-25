@@ -9,12 +9,14 @@ import '../config/theme.dart';
 import '../models/page_sync_state.dart';
 import '../models/room_text_size.dart';
 import '../models/shared_page.dart';
+import '../providers/ads_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/book_provider.dart';
 import '../providers/page_sync_provider.dart';
 import '../providers/presence_provider.dart';
 import '../providers/reading_preferences_provider.dart';
 import '../providers/room_provider.dart';
+import '../services/interstitial_ads.dart';
 import '../services/layout_report_service.dart';
 import '../services/shared_page_renderer.dart';
 import '../widgets/layout_report_sheet.dart';
@@ -150,7 +152,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   static const _maxRecentMoves = 12;
   final Stopwatch _sinceOpened = Stopwatch()..start();
 
+  /// An interstitial every [PageTurnAdCounter.every] page moves, shown once
+  /// the page has settled and nobody is waiting on this reader. While it is
+  /// up, this reader is not ready: nobody waits for it to close the ad.
+  Timer? _pageTurnAdTimer;
+  bool _adShowing = false;
+  static const _pageTurnAdDelay = Duration(seconds: 1);
+
   PageSyncNotifier get _pageSync => ref.read(pageSyncProvider.notifier);
+  PageTurnAdCounter get _pageTurnAds => ref.read(pageTurnAdCounterProvider);
 
   @override
   void initState() {
@@ -287,6 +297,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _displayTimer?.cancel();
     _layoutRetryTimer?.cancel();
     _layoutCheckTimer?.cancel();
+    _pageTurnAdTimer?.cancel();
     _roomRecheckTimer?.cancel();
     unawaited(_roomSettingsSub?.cancel());
     _textSizeSaving.dispose();
@@ -311,6 +322,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// Can this reader start or carry out a turn right now?
   bool get _viewerReadyForTurns =>
       !_leaving &&
+      !_adShowing &&
       _viewerLoaded &&
       _lastLocalCfi != null &&
       !_isDisplaying &&
@@ -321,7 +333,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   void _publishReadiness() {
     if (!mounted) return;
     _pageSync.setViewerReady(_viewerReadyForTurns);
-    final isLoaded = !_leaving && _viewerLoaded && _lastLocalCfi != null;
+    // Under an ad this reader cannot answer, so the room is told not to ask
+    // it, as when the app is in the background. It follows the room's page
+    // once the ad is closed.
+    final isLoaded =
+        !_leaving && !_adShowing && _viewerLoaded && _lastLocalCfi != null;
     unawaited(
       ref
           .read(presenceProvider.notifier)
@@ -337,6 +353,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   void _handlePositionChanged(SharedPosition position) {
     if (!mounted || _leaving) return;
+    // Catching up while the book opens is not turning a page.
+    if (_viewerLoaded) _pageTurnAds.recordMove();
     // A position that voids our turn arrives after onTurnAbandoned, which
     // already cleared it. One that does not (a tie-break on the page the turn
     // started from) is overtaken by the turn landing: displaying it now would
@@ -427,6 +445,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     // layout lands.
     if (!_viewerLoaded) return;
     _checkLayoutSoon();
+    _showPageTurnAdSoon();
 
     final turn = _pendingTurn;
     if (turn != null) {
@@ -435,6 +454,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _pendingTurn = null;
       final position = _pageSync.completeTurn(turn.requestId, cfi);
       if (position != null) {
+        _pageTurnAds.recordMove();
         unawaited(
           ref.read(roomProvider.notifier).saveReadingPosition(position.cfi),
         );
@@ -463,6 +483,52 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
     if (_flushQueuedPosition()) return;
     _publishReadiness();
+  }
+
+  /// Whether one is due is decided when the timer fires: this relocation may
+  /// be the move that makes it due, counted further down [_onRelocated].
+  void _showPageTurnAdSoon() {
+    if (_adShowing) return;
+    _pageTurnAdTimer?.cancel();
+    _pageTurnAdTimer = Timer(
+      _pageTurnAdDelay,
+      () => unawaited(_showPageTurnAd()),
+    );
+  }
+
+  Future<void> _showPageTurnAd() async {
+    if (!mounted || _leaving || _adShowing) return;
+    final counter = _pageTurnAds;
+    if (!counter.isDue) return;
+    // Only between turns. Over a request someone else made, the ad would
+    // hold the whole room until it is closed; over this reader's own turn or
+    // a display, the page has not landed yet. Still due, it is tried again
+    // when the next page lands.
+    final syncState = ref.read(pageSyncProvider);
+    if (_pendingTurn != null ||
+        _isDisplaying ||
+        syncState.status != SyncStatus.idle ||
+        syncState.currentRequest != null) {
+      return;
+    }
+    final ads = ref.read(pageTurnAdsProvider);
+    if (!ads.isReady) {
+      // Checked first: going not-ready and back costs two Presence updates,
+      // which are rate limited, and must not be spent on every page while
+      // no ad loads.
+      ads.preload();
+      return;
+    }
+    setState(() => _adShowing = true);
+    _publishReadiness();
+    try {
+      if (await ads.show()) counter.adShown();
+    } finally {
+      if (mounted) {
+        setState(() => _adShowing = false);
+        _publishReadiness();
+      }
+    }
   }
 
   /// What moved the viewer is read before [_onRelocated] acts on it.

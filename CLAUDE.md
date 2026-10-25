@@ -192,6 +192,24 @@ supabase/
    - 不要動畫：不用 `CircularProgressIndicator`（改成「Loading...」之類的文字）、
      snackbar 用 `showPaperMessage()`、bottom sheet 用 `showPaperSheet()`。
    - 不要半透明與陰影；用 1.5px 的線分隔。
+   - 插頁式廣告（AdMob）是唯一的例外：閱讀時每翻 `AdConfig.pageTurnsPerAd`（20）頁、
+     以及 TXT 轉檔存檔前各播一則。翻頁的廣告只在頁面落定、`SyncStatus.idle` 時才顯示——
+     蓋在別人的翻頁請求上會讓全房等這則廣告；播放期間 reader 送出 `reader_ready: false`，
+     別人發起的翻頁不會詢問它，關掉後跟上房間的位置。只在 `isReady` 時才切換，
+     沒廣告時不要每頁花掉兩次 Presence 更新。廣告一律不能阻擋流程：沒載好就略過
+     （`InterstitialAds.show()` 立刻回 false）。廣告是半透明的 Activity，App 只進 `inactive`，
+     不會被當成離開房間（`appActivityFor`）。翻頁與存檔各用自己的 ad unit
+     （`AdConfig.pageTurnUnitId` / `txtSaveUnitId`），和 `AndroidManifest.xml` 的 App ID 屬於同一個
+     AdMob App，要一起改。只有 release build 要正式廣告，debug / profile 與 iOS 一律用 Google 的
+     測試 ID（`AdConfig.unitFor`）——開發時點到正式廣告會被 AdMob 算成無效流量。
+     **聚合（Mediation）**：Liftoff Monetize 以競價參與，由 AdMob 後台的 Mediation Group 決定誰得標；
+     App 端只裝 Google 官方的轉接器外掛 `gma_mediation_liftoffmonetize`，`MobileAds.initialize()`
+     會一併初始化它，沒有任何 Dart 呼叫。Liftoff 的 App ID / Placement ID 只填在 AdMob 後台，
+     不寫進 App；也不要照 Liftoff 後台的說明手動加 Vungle SDK 或在 Gradle 寫
+     `com.google.ads.mediation:vungle`（會與外掛帶進的版本衝突）。外掛版本綁死 `google_mobile_ads`
+     的主版號，兩者要一起升。外掛的 Kotlin 2 程式碼需要 Kotlin Gradle plugin 2.1 以上
+     （`android/settings.gradle`）。外掛的 Dart API（`setGDPRStatus` 等）不呼叫：之後導入 UMP，
+     Liftoff 會讀 IAB TCF 字串。
    - **viewer 周圍的 chrome 必須固定高度。** 任何改變 `EpubViewer` 尺寸的東西都會讓
      epub.js 重新分頁、改掉本機 CFI（見 issue #13）；
      而 viewer 的可用區域就是自己的 `page_fit`，它一變，全房都要重新排版（issue #20）。
