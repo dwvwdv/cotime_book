@@ -115,11 +115,32 @@ short-lived credentials from the `turn-credentials` Edge Function:
    supabase functions deploy turn-credentials
    ```
 
-3. Set a usage notification in Cloudflare. The first 1,000 GB a month are free.
+3. Set a budget alert in Cloudflare: **Manage Account** → **Billing** →
+   **Billable Usage** → **Create budget alert**. The first 1,000 GB a month are
+   free, so the spend stays at $0 until then; a threshold of $1 says "charges
+   have started". Cloudflare emails once, the day after the threshold is crossed,
+   and never pauses anything on its own.
 
 The function only answers signed-in users who are in a room, and tells Cloudflare
 nothing about who asked. Until it is deployed the app connects with STUN alone,
 and a transfer that cannot connect falls back to Realtime as before.
+
+#### Turning the relay off
+
+No app release is needed. Either way the function stops handing out credentials,
+and the app goes back to what it does without them: STUN alone, then Realtime.
+
+- **Remove the secret** (easiest to undo): Supabase dashboard → **Edge Functions**
+  → **Secrets** → delete `CLOUDFLARE_TURN_API_TOKEN`. The function answers
+  `503 not_configured`. Add the same token back to turn the relay on again.
+- **Delete the function**: Supabase dashboard → **Edge Functions** →
+  `turn-credentials` → delete. Turning it back on means deploying it again.
+
+Credentials already handed out keep working until they expire, and the app
+keeps them until shortly before that, so relayed traffic stops within an hour
+at most. Deleting the TURN key in Cloudflare (**Realtime** → **TURN Server**)
+stops new credentials at once; whether it also cuts the ones already issued is
+not documented.
 
 ### 2. Get Your Supabase Credentials
 
