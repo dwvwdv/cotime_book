@@ -30,6 +30,24 @@ void main() {
     expect(_sdkLevel('compileSdk'), greaterThanOrEqualTo(target));
   });
 
+  // Regression (GH-60): the receiving phone crashed the moment a direct
+  // transfer started. libwebrtc's NetworkMonitor calls
+  // ConnectivityManager.registerNetworkCallback without catching the
+  // SecurityException it throws when this permission is missing, and the
+  // native side turns any Java exception into abort().
+  test('the Android app may watch the network, as WebRTC needs', () {
+    final pubspec = File('pubspec.yaml').readAsStringSync();
+    expect(pubspec, contains('flutter_webrtc:'));
+    final manifest =
+        File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
+    expect(
+      manifest,
+      contains(
+        '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>',
+      ),
+    );
+  });
+
   // The Mobile Ads SDK stops the app at launch when the manifest has no
   // AdMob app ID.
   test('the manifest carries an AdMob app ID for the interstitial ads', () {

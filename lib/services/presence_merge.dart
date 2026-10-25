@@ -33,6 +33,16 @@ List<Map<String, dynamic>> mergePresenceUsers(
         .whereType<String>()
         .toSet()
         .toList(growable: false);
+    // Per connection like the hashes above: the device that holds the book
+    // has to be the one that can send it directly.
+    latest['direct_book_hashes'] = metas
+        .where(
+          (meta) => meta['has_book'] == true && meta['direct_transfer'] == true,
+        )
+        .map((meta) => meta['book_hash'])
+        .whereType<String>()
+        .toSet()
+        .toList(growable: false);
     latest['is_reading'] = metas.any((meta) => meta['is_reading'] == true);
     latest['reader_ready'] = metas.any((meta) => meta['reader_ready'] == true);
     // Every device this person reads on shows the same page, so the page has
@@ -72,6 +82,14 @@ List<Map<String, dynamic>> mergePresenceUsers(
 /// it, and has it ready to read.
 bool presenceHoldsBook(Map<String, dynamic> user, String bookHash) {
   final hashes = user['ready_book_hashes'];
+  return hashes is List && hashes.contains(bookHash);
+}
+
+/// Whether a merged Presence row has [bookHash] on a device that can send it
+/// over a direct connection (GH-60). Apps from before it never say so and
+/// are only asked over Realtime.
+bool presenceSendsBookDirectly(Map<String, dynamic> user, String bookHash) {
+  final hashes = user['direct_book_hashes'];
   return hashes is List && hashes.contains(bookHash);
 }
 

@@ -10,6 +10,12 @@
 - 同一個 PR 只有一個版本條目（見 `version-update.md`）；review 修復追加在同一條目下。
 - 只動文件、`.claude/`、`.github/` 的 PR 不 bump 版號，不必新增條目。
 
+### v1.0.15+19 (2026-10-25)
+
+- ⚡ 自己分享的書改成裝置對裝置直傳（WebRTC），房間的 Realtime 只送連線資訊，書不經過、也不存在伺服器上（#60，#35）。一本 40MB 的書以前要 1280 個 broadcast、兩分多鐘，現在直連通常幾秒到十幾秒；接不通時經 Cloudflare 的 TURN 中繼，再不行才退回原本的 broadcast。分享者不再先 push 整本書，舊版 App 仍照晚加入者的方式向持有者要。需要部署 `turn-credentials` Edge Function 並設好 Cloudflare TURN 的 secrets（見 README）；沒部署時只用 STUN，接不通的情況會多一些。
+- ⚡ 新增 `flutter_webrtc`，arm64 APK 會變大。
+- ⚡ Android 新增 `ACCESS_NETWORK_STATE` 權限：libwebrtc 開始直傳時要監聽網路變化，少了這個權限會在原生層直接閃退（實機測試時發現）。這是一般權限，安裝時自動授予，不會跳出詢問。
+
 ### v1.0.14+18 (2026-10-25)
 
 - ✨ 插頁式廣告換成正式的 AdMob ID：翻頁與 TXT 轉檔存檔各用自己的廣告單元，AdMob 報表可以分開看兩個版位。只有 release build 播正式廣告，debug / profile build 仍是 Google 的測試廣告，避免開發時的點擊被算成無效流量（#58）。

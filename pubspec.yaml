@@ -1,7 +1,7 @@
 name: cotime_book
 description: 頁間（CoTime Book）- 遠程同步看書工具
 publish_to: 'none'
-version: 1.0.14+18
+version: 1.0.15+19
 
 environment:
   sdk: ^3.8.0
@@ -25,6 +25,10 @@ dependencies:
 
   # EPUB Reading
   flutter_epub_viewer: ^1.2.5
+
+  # Direct book transfer (GH-60): a data channel between two devices, with
+  # the Realtime broadcast as the fallback. Native libwebrtc, not the WebView.
+  flutter_webrtc: ^1.6.2
 
   # File handling
   file_picker: ^8.1.0

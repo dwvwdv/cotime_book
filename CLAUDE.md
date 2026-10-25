@@ -150,6 +150,18 @@ supabase/
 6. **傳書是 receiver 驅動的。** `FileTransferService` 的初次分享只是快速路徑；
    收書端缺什麼就向 Presence 裡持有這本書的人要，停滯就輪替持有者再要。
    收書**沒有失敗終態**，也不能阻擋分享新書（見 issue #16）。
+   使用者自己的書優先走 WebRTC DataChannel 直傳（GH-60）：`SignalingBookPeerLink` 經 Realtime
+   只送一則 offer、一則 answer（候選位址先收齊，不 trickle），書本身裝置對裝置，接不通時經
+   Cloudflare 託管的 TURN 中繼。Presence 的 `direct_transfer` 標出能直傳的連線；持有者一次只直接
+   試一個、試過的不再試，連不上、`FileTransferService` 的 watchdog 判定停滯、或 hash 不符，就回到
+   上面的 broadcast。有直傳時分享者**不再 push** 整本書，舊版 App 照晚加入者的方式來要。
+   TURN 帳密由 Edge Function `turn-credentials` 發（Cloudflare 的 key 只在 function 的 secrets），
+   沒部署時只用 STUN。Android 的 manifest 必須有 `ACCESS_NETWORK_STATE`：libwebrtc 的 NetworkMonitor 在收集
+   候選位址時註冊網路回呼，沒有權限時丟出的 `SecurityException` 沒被接住，原生層會直接 abort 整個 App
+   （`android_build_config_test.dart` 擋著）。**不要把書或使用者識別放進 signaling 或 TURN 請求**（不帶 `customIdentifier`），
+   也不要為傳書記錄誰傳了什麼——這是產品原則，不是疏漏。直傳的協定測試在
+   `test/peer_book_link_test.dart`（記憶體裡的 wire），整合在 `file_transfer_service_test.dart` 的
+   `direct transfer` 群組。
    公共圖書館的書例外地先由收書端直接下載、以 hash 驗證，失敗或逾時才回到上面的 P2P 路徑
    （issue #M）。書放在 pCloud 的公開資料夾（`AppConstants.libraryUrl`），不放 Supabase Storage
    ——Storage 的 1GB 額度會卡住整座圖書館。`PublicFolderLibraryService` 解析資料夾頁面裡的

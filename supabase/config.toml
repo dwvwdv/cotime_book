@@ -11,3 +11,8 @@ major_version = 15
 
 [db.seed]
 enabled = false
+
+# Short-lived TURN credentials for direct book transfers (GH-60). Signed-in
+# users only; the function also checks that the caller is in a room.
+[functions.turn-credentials]
+verify_jwt = true

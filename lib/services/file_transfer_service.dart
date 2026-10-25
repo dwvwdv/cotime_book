@@ -58,6 +58,34 @@ abstract interface class BookBytesStore {
 /// Fetches the room's book from outside the room (the public library).
 typedef BookDownload = Future<Uint8List> Function();
 
+/// Moves a whole book device to device, outside Realtime (GH-60). The
+/// WebRTC one is [SignalingBookPeerLink]. Injectable for tests.
+abstract interface class BookPeerLink {
+  void initialize();
+
+  /// Fetches [bookHash] from one of [holderId]'s devices. [onProgress] gets
+  /// the bytes received so far and the book's size.
+  BookPeerFetch fetch({
+    required String bookHash,
+    required String holderId,
+    required void Function(int received, int total) onProgress,
+  });
+
+  /// Sends [bookHash], read with [read], to whoever fetches it. Null sends
+  /// nothing.
+  void serve(String? bookHash, Future<Uint8List?> Function() read);
+
+  Future<void> dispose();
+}
+
+/// A fetch under way. [bytes] fails once [cancel] is called.
+class BookPeerFetch {
+  BookPeerFetch(this.bytes, this.cancel);
+
+  final Future<Uint8List> bytes;
+  final void Function() cancel;
+}
+
 /// Moves the room's EPUB between devices over Realtime broadcast.
 ///
 /// Broadcast is fire-and-forget: packets are dropped under rate limits, and
@@ -79,6 +107,10 @@ typedef BookDownload = Future<Uint8List> Function();
 /// * A library book is downloaded straight from the library instead. The room is
 ///   only the fallback: if the download fails or takes too long, the receive
 ///   carries on as above.
+/// * With a [BookPeerLink], a holder whose app can send directly is asked for
+///   the whole book over a direct connection first (GH-60), one such holder
+///   at a time. The broadcast above is what is left when none of them gets it
+///   here, and what older apps in the room still use.
 class FileTransferService {
   static const chunkEvent = 'book_chunk';
   static const requestEvent = 'transfer_request';
@@ -90,13 +122,24 @@ class FileTransferService {
   /// The download keeps going after this; whichever finishes first wins.
   static const defaultDirectDownloadGrace = Duration(seconds: 60);
 
+  /// How long a direct fetch may take to deliver its first bytes: the
+  /// signals, the connection (relayed connections take longest) and the
+  /// holder reading the book.
+  static const defaultPeerConnectTimeout = Duration(seconds: 20);
+
+  /// How long a direct fetch may go without new bytes once they flow.
+  static const defaultPeerStallTimeout = Duration(seconds: 10);
+
   final BookTransferTransport _transport;
   final BookBytesStore _store;
   final String _currentUserId;
+  final BookPeerLink? _peerLink;
   final Duration _chunkDelay;
   final Duration _firstRequestDelay;
   final Duration _stallTimeout;
   final Duration _directDownloadGrace;
+  final Duration _peerConnectTimeout;
+  final Duration _peerStallTimeout;
 
   final _stateController = StreamController<TransferState>.broadcast();
   final List<StreamSubscription<Map<String, dynamic>>> _subscriptions = [];
@@ -116,6 +159,16 @@ class FileTransferService {
   bool _waitingForHolder = false;
   bool _downloading = false;
   Timer? _repairTimer;
+
+  // Direct fetch (GH-60). Holders already tried for this book are not asked
+  // directly again; the broadcast takes over from them.
+  BookPeerFetch? _peerFetch;
+  Timer? _peerWatchdog;
+  final Set<String> _peerTried = {};
+
+  /// Bumped when a direct fetch starts or ends, so the watchdog or progress
+  /// of a finished one cannot act on the next.
+  int _peerAttempt = 0;
 
   /// Bumped whenever the wanted book changes, so an assembly or a timer from
   /// the previous one cannot land on the new one.
@@ -138,17 +191,23 @@ class FileTransferService {
     required BookTransferTransport transport,
     required BookBytesStore store,
     required String currentUserId,
+    BookPeerLink? peerLink,
     Duration chunkDelay = AppConstants.chunkDelay,
     Duration firstRequestDelay = defaultFirstRequestDelay,
     Duration stallTimeout = defaultStallTimeout,
     Duration directDownloadGrace = defaultDirectDownloadGrace,
+    Duration peerConnectTimeout = defaultPeerConnectTimeout,
+    Duration peerStallTimeout = defaultPeerStallTimeout,
   }) : _transport = transport,
        _store = store,
        _currentUserId = currentUserId,
+       _peerLink = peerLink,
        _chunkDelay = chunkDelay,
        _firstRequestDelay = firstRequestDelay,
        _stallTimeout = stallTimeout,
-       _directDownloadGrace = directDownloadGrace;
+       _directDownloadGrace = directDownloadGrace,
+       _peerConnectTimeout = peerConnectTimeout,
+       _peerStallTimeout = peerStallTimeout;
 
   Stream<TransferState> get stateStream => _stateController.stream;
   TransferState get currentState => _state;
@@ -164,6 +223,7 @@ class FileTransferService {
       _transport.broadcastStream(requestEvent).listen(_onTransferRequest),
       _transport.presenceStream.listen(_onPresence),
     ]);
+    _peerLink?.initialize();
   }
 
   // ---------------------------------------------------------------------------
@@ -182,6 +242,7 @@ class FileTransferService {
       _batchSize = 0;
     }
     if (bytes != null) _heldBytes = bytes;
+    _peerLink?.serve(hash, () => _loadHeldBytes(hash));
     // Holding a book means it is the room's book now. A receive of anything
     // else must stop here: left running, it would finish later and replace
     // the book this device just shared.
@@ -194,6 +255,11 @@ class FileTransferService {
   /// Shares a book this device just added: hold it and push it to the room.
   /// Completes when the push has been handed to Realtime; receivers that miss
   /// part of it ask for the rest.
+  ///
+  /// With a [BookPeerLink] nothing is pushed: receivers fetch the book
+  /// directly, and those that cannot (older apps, failed connections) ask
+  /// for it over Realtime the same way a late joiner does. Pushing anyway
+  /// would spend the Realtime quota on 1280 broadcasts nobody needs (#35).
   Future<void> shareBook({
     required Uint8List fileBytes,
     required String bookHash,
@@ -211,6 +277,7 @@ class FileTransferService {
     }
 
     holdBook(hash, bytes: fileBytes);
+    if (_peerLink != null) return;
     _enqueue(List.generate(_chunkCount(fileBytes.length), (index) => index));
     await _sendDone?.future;
   }
@@ -255,8 +322,11 @@ class FileTransferService {
     _heldHash = null;
     _heldBytes = null;
     _sendQueue.clear();
+    _peerLink?.serve(null, _noBook);
     _updateState(const TransferState.idle());
   }
+
+  static Future<Uint8List?> _noBook() async => null;
 
   // ---------------------------------------------------------------------------
   // Receiving
@@ -410,7 +480,17 @@ class FileTransferService {
     }
     if (_disposed || generation != _receiveGeneration) return;
     _downloading = false;
-    // The room got there first and its copy is being saved.
+    await _keepWholeBook(hash, bytes, generation);
+  }
+
+  /// Saves a book that arrived in one piece (downloaded or fetched directly)
+  /// and already checked out.
+  Future<void> _keepWholeBook(
+    String hash,
+    Uint8List bytes,
+    int generation,
+  ) async {
+    // Another path got there first and its copy is being saved.
     if (_assembling) return;
     _assembling = true;
     try {
@@ -418,7 +498,7 @@ class FileTransferService {
     } catch (error) {
       if (_disposed || generation != _receiveGeneration) return;
       _assembling = false;
-      debugPrint('Saving the library download failed, asking the room: $error');
+      debugPrint('Saving the book failed, asking the room: $error');
       _scheduleRepair(Duration.zero);
       return;
     }
@@ -426,10 +506,114 @@ class FileTransferService {
     _completeReceive(hash, bytes);
   }
 
+  /// Starts fetching [hash] directly from the first of [holders] that can
+  /// send it that way and has not been tried yet. False when there is none.
+  bool _startPeerFetch(String hash, List<Map<String, dynamic>> holders) {
+    final link = _peerLink;
+    if (link == null) return false;
+    Map<String, dynamic>? holder;
+    for (final candidate in holders) {
+      if (presenceSendsBookDirectly(candidate, hash) &&
+          !_peerTried.contains(candidate['user_id'])) {
+        holder = candidate;
+        break;
+      }
+    }
+    if (holder == null) return false;
+    final holderId = holder['user_id'] as String;
+    _peerTried.add(holderId);
+
+    final generation = _receiveGeneration;
+    final attempt = ++_peerAttempt;
+    bool isCurrent() =>
+        !_disposed &&
+        generation == _receiveGeneration &&
+        attempt == _peerAttempt;
+
+    final fetch = link.fetch(
+      bookHash: hash,
+      holderId: holderId,
+      onProgress: (received, total) {
+        if (!isCurrent()) return;
+        _armPeerWatchdog(attempt, _peerStallTimeout);
+        // Broadcast chunks that are also arriving keep their own progress.
+        if (_receivedChunks.isNotEmpty) return;
+        _updateState(
+          TransferState(
+            status: TransferStatus.transferring,
+            bookHash: hash,
+            totalBytes: total,
+            transferredBytes: received,
+          ),
+        );
+      },
+    );
+    _peerFetch = fetch;
+    _armPeerWatchdog(attempt, _peerConnectTimeout);
+    if (_receivedChunks.isEmpty) {
+      _updateState(
+        TransferState(
+          status: TransferStatus.waiting,
+          bookHash: hash,
+          message: 'Getting the book from ${_nickname(holder)}...',
+        ),
+      );
+    }
+    unawaited(_awaitPeerFetch(hash, fetch, isCurrent, generation));
+    return true;
+  }
+
+  Future<void> _awaitPeerFetch(
+    String hash,
+    BookPeerFetch fetch,
+    bool Function() isCurrent,
+    int generation,
+  ) async {
+    final Uint8List bytes;
+    try {
+      bytes = await fetch.bytes;
+      if (bytes.isEmpty ||
+          bytes.length > AppConstants.maxFileSize ||
+          sha256.convert(bytes).toString() != hash) {
+        throw const FormatException('The direct copy is not the shared book');
+      }
+    } catch (error) {
+      if (!isCurrent()) return;
+      _endPeerFetch();
+      debugPrint('Direct book fetch failed, asking again: $error');
+      if (!_assembling) _scheduleRepair(Duration.zero);
+      return;
+    }
+    if (!isCurrent()) return;
+    _endPeerFetch();
+    await _keepWholeBook(hash, bytes, generation);
+  }
+
+  /// A direct fetch that delivers nothing for [timeout] is given up on, and
+  /// its failure sends the receive on to the next holder.
+  void _armPeerWatchdog(int attempt, Duration timeout) {
+    _peerWatchdog?.cancel();
+    _peerWatchdog = Timer(timeout, () {
+      if (attempt == _peerAttempt) _peerFetch?.cancel();
+    });
+  }
+
+  void _endPeerFetch({bool cancel = false}) {
+    _peerWatchdog?.cancel();
+    _peerWatchdog = null;
+    final fetch = _peerFetch;
+    _peerFetch = null;
+    ++_peerAttempt;
+    if (cancel) fetch?.cancel();
+  }
+
   void _completeReceive(String hash, Uint8List bytes) {
     _stopReceiving();
     _heldHash = hash;
     _heldBytes = bytes;
+    // Presence will say this device holds the book; whoever comes next may
+    // fetch it from here directly.
+    _peerLink?.serve(hash, () => _loadHeldBytes(hash));
     _updateState(
       TransferState(
         status: TransferStatus.completed,
@@ -471,6 +655,14 @@ class FileTransferService {
       return;
     }
     _waitingForHolder = false;
+
+    if (_peerFetch != null) {
+      // Its watchdog decides when a direct fetch has stalled; asking the
+      // room as well would have a holder broadcast the book it is sending.
+      _scheduleRepair(_stallTimeout);
+      return;
+    }
+    if (_startPeerFetch(wanted, holders)) return;
 
     // Rotate so one unresponsive holder cannot stall the transfer.
     final holder = holders[_requestAttempt % holders.length];
@@ -553,6 +745,8 @@ class FileTransferService {
     _waitingForHolder = false;
     _downloading = false;
     _requestAttempt = 0;
+    _endPeerFetch(cancel: true);
+    _peerTried.clear();
     _clearChunks();
   }
 
@@ -718,6 +912,7 @@ class FileTransferService {
     _stopReceiving();
     _disposed = true;
     _sendQueue.clear();
+    await _peerLink?.dispose();
     await Future.wait<void>([
       for (final subscription in _subscriptions) subscription.cancel(),
     ]);

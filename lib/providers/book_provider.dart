@@ -9,8 +9,12 @@ import '../models/library_book.dart';
 import '../services/epub_storage_service.dart';
 import '../models/transfer_state.dart';
 import '../services/file_transfer_service.dart';
+import '../services/ice_server_source.dart';
 import '../services/library_service.dart';
+import '../services/peer_book_link.dart';
 import '../services/realtime_service.dart';
+import '../services/supabase_service.dart';
+import '../services/webrtc_peer_wire.dart';
 import 'presence_provider.dart';
 import 'room_provider.dart';
 
@@ -20,6 +24,27 @@ final epubStorageProvider = Provider<EpubStorageService>((ref) {
 
 final libraryServiceProvider = Provider<LibraryService>((ref) {
   return PublicFolderLibraryService();
+});
+
+typedef BookPeerLinkFactory =
+    BookPeerLink Function(BookTransferTransport transport, String userId);
+
+/// How a room session sends and fetches books directly (GH-60); null keeps
+/// transfers on Realtime alone.
+final bookPeerLinkFactoryProvider = Provider<BookPeerLinkFactory?>((ref) {
+  if (!AppConstants.directBookTransfer) return null;
+  // One for the app: the TURN credentials outlive any one room.
+  final iceServers = IceServerSource(() async {
+    final response = await SupabaseService.client.functions.invoke(
+      AppConstants.turnCredentialsFunction,
+    );
+    return response.data;
+  });
+  return (transport, userId) => SignalingBookPeerLink(
+    transport: transport,
+    currentUserId: userId,
+    createWire: () => WebRtcPeerWire.create(iceServers),
+  );
 });
 
 /// Only EPUB books are shared; see [BookNotifier.pickAndShareBook].
@@ -180,10 +205,14 @@ class BookNotifier extends StateNotifier<BookState> {
     _transferRealtimeService = realtimeService;
     _transferUserId = currentUserId;
     _transferRoomCode = roomCode;
+    final transport = RealtimeBookTransferTransport(realtimeService);
     _transferService = FileTransferService(
-      transport: RealtimeBookTransferTransport(realtimeService),
+      transport: transport,
       store: _storageService,
       currentUserId: currentUserId,
+      peerLink: ref
+          .read(bookPeerLinkFactoryProvider)
+          ?.call(transport, currentUserId),
     );
     _transferService!.initialize();
     final loadedBookHash = _loadedBookHash;
@@ -401,7 +430,8 @@ class BookNotifier extends StateNotifier<BookState> {
     // A library book is downloaded by each receiver; pushing 40MB through
     // Realtime as well would only race those downloads.
     if (libraryPath != null) return;
-    // Push to everyone now; anyone who misses part of it asks for the rest.
+    // Push to everyone now (or, sending directly, only hold it: see
+    // shareBook); anyone who misses part of it asks for the rest.
     await _transferService?.shareBook(fileBytes: bytes, bookHash: hash);
   }
 
