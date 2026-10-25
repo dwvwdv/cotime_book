@@ -13,6 +13,7 @@
 ### v1.0.14+18 (2026-10-25)
 
 - ✨ 插頁式廣告換成正式的 AdMob ID：翻頁與 TXT 轉檔存檔各用自己的廣告單元，AdMob 報表可以分開看兩個版位。只有 release build 播正式廣告，debug / profile build 仍是 Google 的測試廣告，避免開發時的點擊被算成無效流量（#58）。
+- ✨ 加入 AdMob 聚合的 Liftoff Monetize 競價轉接器（`gma_mediation_liftoffmonetize`），由 AdMob 後台的 Mediation Group 決定誰出價，App 端不需設定。轉接器用 Kotlin 2 編譯，Kotlin Gradle plugin 因此從 1.8.22 升到 2.1.20。
 
 ### v1.0.13+17 (2026-10-24)
 

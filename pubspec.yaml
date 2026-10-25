@@ -38,6 +38,10 @@ dependencies:
   # Interstitial ads. Stays on 6.x: 7.0 needs Flutter 3.35, newer than CI's
   # Flutter 3.32.4.
   google_mobile_ads: ">=6.0.0 <7.0.0"
+  # AdMob mediation: the Liftoff Monetize bidding adapter (Google's plugin,
+  # with its Android adapter and Vungle SDK). No Dart calls needed; the
+  # Mediation Group in AdMob decides who bids. 1.4.2 needs google_mobile_ads 7.
+  gma_mediation_liftoffmonetize: ">=1.4.1 <1.4.2"
 
   # UI
   gap: ^3.0.1

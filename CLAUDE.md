@@ -190,6 +190,14 @@ supabase/
      （`AdConfig.pageTurnUnitId` / `txtSaveUnitId`），和 `AndroidManifest.xml` 的 App ID 屬於同一個
      AdMob App，要一起改。只有 release build 要正式廣告，debug / profile 與 iOS 一律用 Google 的
      測試 ID（`AdConfig.unitFor`）——開發時點到正式廣告會被 AdMob 算成無效流量。
+     **聚合（Mediation）**：Liftoff Monetize 以競價參與，由 AdMob 後台的 Mediation Group 決定誰得標；
+     App 端只裝 Google 官方的轉接器外掛 `gma_mediation_liftoffmonetize`，`MobileAds.initialize()`
+     會一併初始化它，沒有任何 Dart 呼叫。Liftoff 的 App ID / Placement ID 只填在 AdMob 後台，
+     不寫進 App；也不要照 Liftoff 後台的說明手動加 Vungle SDK 或在 Gradle 寫
+     `com.google.ads.mediation:vungle`（會與外掛帶進的版本衝突）。外掛版本綁死 `google_mobile_ads`
+     的主版號，兩者要一起升。外掛的 Kotlin 2 程式碼需要 Kotlin Gradle plugin 2.1 以上
+     （`android/settings.gradle`）。外掛的 Dart API（`setGDPRStatus` 等）不呼叫：之後導入 UMP，
+     Liftoff 會讀 IAB TCF 字串。
    - **viewer 周圍的 chrome 必須固定高度。** 任何改變 `EpubViewer` 尺寸的東西都會讓
      epub.js 重新分頁、改掉本機 CFI（見 issue #13）；
      而 viewer 的可用區域就是自己的 `page_fit`，它一變，全房都要重新排版（issue #20）。

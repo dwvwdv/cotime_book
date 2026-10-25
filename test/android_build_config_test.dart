@@ -44,6 +44,21 @@ void main() {
     );
   });
 
+  // The Liftoff Monetize adapter is Kotlin 2 and brings kotlin-stdlib 2.1,
+  // whose metadata a 1.x compiler cannot read: the release build fails in
+  // :gma_mediation_liftoffmonetize:compileReleaseKotlin.
+  test('the Kotlin Gradle plugin can compile the mediation adapter', () {
+    final settings = File('android/settings.gradle').readAsStringSync();
+    final match = RegExp(
+      r'id "org\.jetbrains\.kotlin\.android" version "(\d+)\.(\d+)',
+    ).firstMatch(settings);
+    expect(match, isNotNull);
+    final major = int.parse(match!.group(1)!);
+    final minor = int.parse(match.group(2)!);
+    expect(major > 2 || (major == 2 && minor >= 1), isTrue,
+        reason: 'Kotlin ${match.group(1)}.${match.group(2)} is below 2.1');
+  });
+
   // The Chinese name is the official one; other devices keep the English.
   test('the launcher shows 頁間 on Chinese devices', () {
     final manifest =
