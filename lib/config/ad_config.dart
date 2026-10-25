@@ -1,16 +1,36 @@
+import 'package:flutter/foundation.dart';
+
 /// Interstitial ads: where they come from and how often the reader sees one.
 ///
-/// The IDs below are Google's sample IDs, which always serve test ads. Before
-/// a release with real ads, replace both the ad unit IDs here and the AdMob
-/// app ID in `android/app/src/main/AndroidManifest.xml`
-/// (`com.google.android.gms.ads.APPLICATION_ID`): an app ID and ad units from
-/// different AdMob apps serve nothing.
+/// The ad units and the AdMob app ID in
+/// `android/app/src/main/AndroidManifest.xml`
+/// (`com.google.android.gms.ads.APPLICATION_ID`) belong to the same AdMob app;
+/// ad units from another app serve nothing, so change them together.
 class AdConfig {
   AdConfig._();
 
-  static const androidInterstitialUnitId =
-      'ca-app-pub-3940256099942544/1033173712';
-  static const iosInterstitialUnitId = 'ca-app-pub-3940256099942544/4411468910';
+  /// Every [pageTurnsPerAd] pages in a room.
+  static const pageTurnUnitId = 'ca-app-pub-3815823795185340/4634708480';
+
+  /// Before a book made with TXT to EPUB is saved.
+  static const txtSaveUnitId = 'ca-app-pub-3815823795185340/6282832075';
+
+  /// Google's sample interstitial units, which always serve test ads. Debug
+  /// and profile builds use them: real ads tapped while developing count as
+  /// invalid traffic against the AdMob account.
+  static const androidTestUnitId = 'ca-app-pub-3940256099942544/1033173712';
+  static const iosTestUnitId = 'ca-app-pub-3940256099942544/4411468910';
+
+  /// The unit a build on this platform asks for in place of [unitId]. There
+  /// is no iOS app in AdMob yet, so iOS always gets test ads.
+  static String unitFor(
+    String unitId, {
+    required bool isIOS,
+    bool isRelease = kReleaseMode,
+  }) {
+    if (isIOS) return iosTestUnitId;
+    return isRelease ? unitId : androidTestUnitId;
+  }
 
   /// The room's page moves this device sees between two interstitials.
   static const pageTurnsPerAd = 20;

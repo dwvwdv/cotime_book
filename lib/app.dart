@@ -24,8 +24,9 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Loads the first ad now, so the first one due is usually ready.
-    ref.read(interstitialAdsProvider);
+    // Loads the first ads now, so the first one due is usually ready.
+    ref.read(pageTurnAdsProvider);
+    ref.read(txtSaveAdsProvider);
     _initAuth();
   }
 

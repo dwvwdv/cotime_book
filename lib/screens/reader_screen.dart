@@ -511,7 +511,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         syncState.currentRequest != null) {
       return;
     }
-    final ads = ref.read(interstitialAdsProvider);
+    final ads = ref.read(pageTurnAdsProvider);
     if (!ads.isReady) {
       // Checked first: going not-ready and back costs two Presence updates,
       // which are rate limited, and must not be spent on every page while

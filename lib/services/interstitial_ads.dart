@@ -51,22 +51,29 @@ class AdMobInterstitialAds implements InterstitialAds {
 
   AdMobInterstitialAds({required this.adUnitId});
 
-  factory AdMobInterstitialAds.forPlatform() => AdMobInterstitialAds(
-    adUnitId: Platform.isIOS
-        ? AdConfig.iosInterstitialUnitId
-        : AdConfig.androidInterstitialUnitId,
-  );
+  /// [unitId] as this build asks for it (see [AdConfig.unitFor]).
+  factory AdMobInterstitialAds.forPlatform(String unitId) =>
+      AdMobInterstitialAds(
+        adUnitId: AdConfig.unitFor(unitId, isIOS: Platform.isIOS),
+      );
+
+  /// Shared by every placement: the SDK is initialized once.
+  static Future<bool>? _sdkReady;
+
+  static Future<bool> _initializeSdk() async {
+    try {
+      await MobileAds.instance.initialize();
+      return true;
+    } catch (error) {
+      debugPrint('Mobile Ads unavailable: $error');
+      return false;
+    }
+  }
 
   /// Initializes the SDK and loads the first ad, so the first one due is
   /// usually ready.
   Future<void> start() async {
-    try {
-      await MobileAds.instance.initialize();
-    } catch (error) {
-      debugPrint('Mobile Ads unavailable: $error');
-      return;
-    }
-    preload();
+    if (await (_sdkReady ??= _initializeSdk())) preload();
   }
 
   bool get _isStale {

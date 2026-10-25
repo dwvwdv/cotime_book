@@ -186,8 +186,10 @@ supabase/
      別人發起的翻頁不會詢問它，關掉後跟上房間的位置。只在 `isReady` 時才切換，
      沒廣告時不要每頁花掉兩次 Presence 更新。廣告一律不能阻擋流程：沒載好就略過
      （`InterstitialAds.show()` 立刻回 false）。廣告是半透明的 Activity，App 只進 `inactive`，
-     不會被當成離開房間（`appActivityFor`）。廣告 ID 目前是 Google 的測試 ID，換正式 ID 時
-     `lib/config/ad_config.dart` 的 ad unit 與 `AndroidManifest.xml` 的 App ID 要一起改。
+     不會被當成離開房間（`appActivityFor`）。翻頁與存檔各用自己的 ad unit
+     （`AdConfig.pageTurnUnitId` / `txtSaveUnitId`），和 `AndroidManifest.xml` 的 App ID 屬於同一個
+     AdMob App，要一起改。只有 release build 要正式廣告，debug / profile 與 iOS 一律用 Google 的
+     測試 ID（`AdConfig.unitFor`）——開發時點到正式廣告會被 AdMob 算成無效流量。
    - **viewer 周圍的 chrome 必須固定高度。** 任何改變 `EpubViewer` 尺寸的東西都會讓
      epub.js 重新分頁、改掉本機 CFI（見 issue #13）；
      而 viewer 的可用區域就是自己的 `page_fit`，它一變，全房都要重新排版（issue #20）。
