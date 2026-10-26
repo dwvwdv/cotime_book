@@ -1,5 +1,6 @@
 import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/services/file_transfer_service.dart';
+import 'package:cotime_book/services/page_sync_service.dart';
 import 'package:cotime_book/services/peer_book_link.dart';
 import 'package:cotime_book/services/realtime_service.dart';
 import 'package:fake_async/fake_async.dart';
@@ -404,13 +405,26 @@ void main() {
   });
 
   test('room event registry includes lifecycle and commit events', () {
+    // Every event the page sync protocol listens to. Regression: the ad
+    // break announcement was not registered, so no reader ever heard another
+    // one's ad start (GH-63).
     expect(
       RealtimeService.roomEvents,
       containsAll([
-        'page_turn_request',
-        'page_turn_vote',
-        'page_turn_commit',
-        'page_turn_cancel',
+        PageSyncService.requestEvent,
+        PageSyncService.voteEvent,
+        PageSyncService.commitEvent,
+        PageSyncService.cancelEvent,
+        PageSyncService.positionQueryEvent,
+        PageSyncService.positionEvent,
+        PageSyncService.readerLeftEvent,
+        PageSyncService.membershipEvent,
+        PageSyncService.adBreakEvent,
+      ]),
+    );
+    expect(
+      RealtimeService.roomEvents,
+      containsAll([
         'book_chunk',
         'transfer_request',
         'membership_changed',

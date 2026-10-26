@@ -185,6 +185,8 @@ class RealtimeService {
     'page_position_query',
     'page_position',
     'reader_left',
+    // PageSyncService.adBreakEvent (GH-63).
+    'ad_break',
     'book_shared',
     'book_chunk',
     'transfer_request',
