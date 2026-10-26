@@ -239,6 +239,31 @@ function turn(tab, direction) {
   );
 }
 
+/// What is wrong with a run of "section:page/pages" page numbers read on
+/// every page from the first to the last, or null when nothing is.
+function pageNumbersProblem(numbers) {
+  let previous = null;
+  for (let i = 0; i < numbers.length; i++) {
+    const match = /^(\d+):(\d+)\/(\d+)$/.exec(numbers[i]);
+    if (!match) return `no page number on page ${i}`;
+    const [section, page, pages] = match.slice(1).map(Number);
+    if (page < 1 || page > pages) return `page ${i} is ${numbers[i]}`;
+    if (previous === null || section !== previous.section) {
+      if (page !== 1) return `page ${i} opens a chapter as ${numbers[i]}`;
+      if (previous && previous.page !== previous.pages) {
+        return `page ${i - 1} leaves its chapter as ${numbers[i - 1]}`;
+      }
+    } else if (page !== previous.page + 1 || pages !== previous.pages) {
+      return `page ${i} follows ${numbers[i - 1]} as ${numbers[i]}`;
+    }
+    previous = { section, page, pages };
+  }
+  if (previous && previous.page !== previous.pages) {
+    return `the book ends on ${numbers[numbers.length - 1]}`;
+  }
+  return null;
+}
+
 /// Every page from the first to the last and back: where each starts, which
 /// show nothing at all, and which only a picture.
 async function pageStarts(browser, device, shared, turns) {
@@ -249,6 +274,7 @@ async function pageStarts(browser, device, shared, turns) {
   const pictures = [];
   const ends = new Set();
   const back = [];
+  const numbers = [];
   for (const direction of ['next', 'prev']) {
     const seen = direction === 'next' ? starts : back;
     for (let i = 0; i < turns; i++) {
@@ -264,13 +290,17 @@ async function pageStarts(browser, device, shared, turns) {
       if (shows === '') blank.push(`${direction} ${i}`);
       if (shows === 'picture' && direction === 'next') pictures.push(i);
       if (direction === 'next') (await tab.evaluate(endsShown)).forEach((id) => ends.add(id));
+      if (shared && direction === 'next') {
+        const info = await tab.evaluate(() => cotimeSharedPage.pageInfo());
+        numbers.push(info ? `${info.section}:${info.page}/${info.pages}` : 'none');
+      }
       if (!shared && (direction === 'next' ? here.atEnd : here.atStart)) break;
       if (!(await turn(tab, direction))) break;
     }
   }
   back.reverse();
   await context.close();
-  return { starts, blank, pictures, ends, back, scale };
+  return { starts, blank, pictures, ends, back, scale, numbers };
 }
 
 /// Whether a frame that no longer matches the book's layout is noticed and
@@ -357,6 +387,16 @@ async function missedCommits(browser, device, starts) {
           console.log(`chapter ends: ${phone.ends.size}/${ends} shown`);
           if (phone.ends.size !== ends) failed = true;
         }
+        // The page numbers the reader shows: the same on both screens, and
+        // counting each chapter's pages one by one from 1 to its last — a
+        // skipped blank page counted, or a page turned to and not counted,
+        // would show as a jump or a repeat.
+        const sameNumbers = phone.numbers.length === tablet.numbers.length &&
+          phone.numbers.every((n, i) => n === tablet.numbers[i]);
+        const counting = pageNumbersProblem(phone.numbers);
+        console.log(`page numbers: ${sameNumbers ? 'the same on both' : 'different'}, ` +
+          `${counting || 'counted one by one'}`);
+        if (!sameNumbers || counting) failed = true;
         const named = new Set(a).size;
         console.log(`page names  : ${named}/${a.length} distinct`);
         if (named !== a.length) failed = true;

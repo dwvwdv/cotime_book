@@ -6,6 +6,7 @@ import 'package:flutter_epub_viewer/flutter_epub_viewer.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../config/theme.dart';
+import '../models/page_info.dart';
 import '../models/page_sync_state.dart';
 import '../models/room_text_size.dart';
 import '../models/shared_page.dart';
@@ -20,6 +21,7 @@ import '../services/layout_report_service.dart';
 import '../services/shared_page_renderer.dart';
 import '../widgets/ad_break_cover.dart';
 import '../widgets/layout_report_sheet.dart';
+import '../widgets/page_counter.dart';
 import '../widgets/page_turn_input.dart';
 import '../widgets/paper.dart';
 import '../widgets/reader_members_sheet.dart';
@@ -106,6 +108,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   /// seen, by which time the re-layout has usually fixed it.
   int _layoutRepairsTotal = 0;
   List<String> _lastLayoutProblems = const [];
+
+  /// The page counter in the bottom bar. Read from the viewer once the page
+  /// has settled; null until then.
+  PageInfo? _pageInfo;
 
   /// Loaded *and* on the room's page. Until the book is laid out like
   /// everyone else's, a CFI from this viewer would mean a different page.
@@ -601,6 +607,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _layoutRepairs = 0;
       _layoutRepairsTotal = 0;
       _lastLayoutProblems = const [];
+      _pageInfo = null;
       _lastLocalCfi = null;
       _displaysInFlight = 0;
       _displayingCfi = null;
@@ -660,6 +667,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _layoutCheckTimer?.cancel();
     _layoutCheckTimer = Timer(_layoutCheckDelay, () {
       unawaited(_checkLayout());
+      unawaited(_refreshPageInfo());
     });
   }
 
@@ -687,6 +695,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _layoutRepairsTotal++;
     _layoutOwed = true;
     _scheduleLayoutSync();
+  }
+
+  Future<void> _refreshPageInfo() async {
+    final generation = _layoutGeneration;
+    final cfi = _lastLocalCfi;
+    final info = await SharedPageRenderer.pageInfo(_epubController);
+    // A newer layout or move since: its own settle reads it again.
+    if (!mounted ||
+        _leaving ||
+        info == null ||
+        generation != _layoutGeneration ||
+        cfi != _lastLocalCfi ||
+        info == _pageInfo) {
+      return;
+    }
+    setState(() => _pageInfo = info);
   }
 
   /// A new layout moves every page break, so it waits for a moment when
@@ -845,6 +869,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                   paper: prefs.backgroundColor,
                   onConfirm: () => unawaited(_pageSync.confirmPageTurn()),
                   onDecline: () => unawaited(_pageSync.declinePageTurn()),
+                  onShowMembers: _showMembersDrawer,
                 ),
 
                 // EPUB reader with gesture overlay
@@ -1044,12 +1069,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 : null,
             tooltip: 'Reading settings',
           ),
-          IconButton(
-            style: iconStyle,
-            icon: const Icon(Icons.people_outline),
-            onPressed: _showMembersDrawer,
-            tooltip: 'Room members',
-          ),
+          PageCounter(info: _pageInfo, ink: ink),
         ],
       ),
     );

@@ -105,6 +105,9 @@ supabase/
      裁切溢出的容器在分欄排版裡不能拆頁，calibre 的 GitBook 轉檔把整章包在 `overflow: hidden` 裡，
      整章被擠成一頁、其餘被裁掉、翻一頁就跳章（GH-49）。`check.js` 會確認每章最後一段都有某一頁顯示出來。沒有字的頁同理：空白頁在翻頁時
      直接跳過，只有圖的頁以圖的 element CFI 命名（issue #22）。
+     底部列的頁數（`PageCounter`）來自 `shared_page.js` 的 `pageInfo()`：章內第幾頁／共幾頁
+     與全書百分比。它用和跳過空白頁同一套「這頁有沒有東西」的判斷，不算空白頁——否則翻頁會
+     跳號。`check.js` 確認兩台裝置的頁數一致、每章從 1 數到最後一頁。
      改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，先在本機跑
      `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致（本機約 5 分鐘）。
      CI 的 `shared-page-check.yml` 也會在這些來源變動時跑它；但 `check.js` 把 `displaySettings`
