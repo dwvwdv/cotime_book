@@ -1082,6 +1082,53 @@ void main() {
       await flush();
       expect(alice.service.currentState.adBreak, isFalse);
       expect(bob.service.currentState.adBreak, isFalse);
+      // Told, so the reader stops answering for an ad that may still be up,
+      // and does not show one later outside any break.
+      expect(alice.service.isHoldingForAd, isFalse);
+      expect(alice.holdsExpired, 1);
+    });
+
+    test('a closed ad is not an expired hold', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', adBreakEvery: 1, showsAd: true);
+      room.join('bob', 'Bob', adBreakEvery: 1);
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, alice, 1);
+      expect(alice.service.isHoldingForAd, isTrue);
+
+      alice.service.endAdBreak();
+      expect(alice.service.isHoldingForAd, isFalse);
+      expect(alice.holdsExpired, 0);
+    });
+
+    test('catching up on a page from an announcement starts no break', () async {
+      // Regression: a reader back after missing the commit reached the break
+      // page late, showed an ad, and covered the page everyone else had been
+      // reading since their own break ended.
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        adBreakEvery: 2,
+        positionAnnounceInterval: const Duration(milliseconds: 20),
+      );
+      final bob = room.join('bob', 'Bob', adBreakEvery: 2, showsAd: true);
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, alice, 1);
+
+      room.dropEvents.add(PageSyncService.commitEvent);
+      await turnPages(room, alice, 1);
+      expect(alice.service.position.seq, 2);
+      expect(bob.service.position.seq, 1);
+      room.dropEvents.clear();
+
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await flush();
+      expect(bob.service.position, alice.service.position);
+      expect(bob.adBreaks, isEmpty);
+      expect(alice.service.currentState.adBreak, isFalse);
     });
 
     test('leaving the book under an ad releases the room', () async {
@@ -1269,6 +1316,7 @@ class FakeRoom {
       reader.adBreaks.add(position);
       return showsAd;
     };
+    service.onAdHoldExpired = () => reader.holdsExpired++;
     service.setViewerReady(viewerReady && isReading);
     readers[userId] = reader;
     service.initialize();
@@ -1379,6 +1427,7 @@ class FakeReader {
 
   /// Ad breaks this reader reached, whether or not it had an ad to show.
   final List<SharedPosition> adBreaks = [];
+  int holdsExpired = 0;
 
   FakeReader(this.userId, this.nickname, this.service, this.transport);
 }

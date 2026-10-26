@@ -230,6 +230,12 @@ class PageSyncService {
   /// holds the room until it calls [endAdBreak].
   bool Function(SharedPosition position)? onAdBreak;
 
+  /// This reader's ad held the room for [defaultAdBreakLimit] and the room
+  /// went on without it. An ad still on screen is now in the way of nobody:
+  /// the reader should stop being asked to confirm, as when the app is in
+  /// the background, and not show one that has not come up yet.
+  void Function()? onAdHoldExpired;
+
   PageSyncService({
     required PageSyncTransport transport,
     required String currentUserId,
@@ -275,6 +281,9 @@ class PageSyncService {
 
   Stream<PageSyncState> get stateStream => _stateController.stream;
   PageSyncState get currentState => _state;
+
+  /// This reader's own ad is coming up or on screen, and holds the room.
+  bool get isHoldingForAd => _holdingForAd;
   SharedPosition get position => _position;
 
   void initialize() {
@@ -675,7 +684,10 @@ class PageSyncService {
     }
     if (requestId is String) _rememberFinished(requestId);
 
-    _adoptRemotePosition(SharedPosition(epoch: epoch, seq: seq, cfi: cfi));
+    _adoptRemotePosition(
+      SharedPosition(epoch: epoch, seq: seq, cfi: cfi),
+      committed: true,
+    );
   }
 
   void _onCancel(Map<String, dynamic> payload) {
@@ -801,7 +813,16 @@ class PageSyncService {
   }
 
   /// Moves to [candidate] if it is newer than what this reader holds.
-  bool _adoptRemotePosition(SharedPosition candidate) {
+  ///
+  /// Only a [committed] page — the commit of a turn, as it happens — can
+  /// start an ad break. A page caught up on afterwards (an announcement, a
+  /// request from it, a reconnect) is one the room may have finished its
+  /// break on long ago: an ad there would cover the page everyone else is
+  /// reading.
+  bool _adoptRemotePosition(
+    SharedPosition candidate, {
+    bool committed = false,
+  }) {
     if (!candidate.isNewerThan(_position)) return false;
     _position = candidate;
 
@@ -819,7 +840,7 @@ class PageSyncService {
     }
 
     onPositionChanged?.call(candidate);
-    _reachedPage(candidate);
+    if (committed) _reachedPage(candidate);
     return true;
   }
 
@@ -841,7 +862,11 @@ class PageSyncService {
     if (_disposed) return;
     if (showsAd && !_holdingForAd) {
       _holdingForAd = true;
-      _adHoldLimitTimer = Timer(_adBreakLimit, endAdBreak);
+      _adHoldLimitTimer = Timer(_adBreakLimit, () {
+        if (!_holdingForAd) return;
+        endAdBreak();
+        onAdHoldExpired?.call();
+      });
       _adHoldAnnounceTimer = Timer.periodic(_nudgeInterval, (_) {
         unawaited(_announceAdBreak(active: true));
       });
@@ -1386,6 +1411,7 @@ class PageSyncService {
     onPositionChanged = null;
     onTurnAbandoned = null;
     onAdBreak = null;
+    onAdHoldExpired = null;
     await _stateController.close();
   }
 }

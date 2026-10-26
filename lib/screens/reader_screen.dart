@@ -204,6 +204,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     pageSync.onPositionChanged = _handlePositionChanged;
     pageSync.onTurnAbandoned = _handleTurnAbandoned;
     pageSync.onAdBreak = _handleAdBreak;
+    pageSync.onAdHoldExpired = _handleAdHoldExpired;
     await pageSync.initialize(
       realtimeService: ref.read(realtimeServiceProvider),
       currentUserId: authState.userId!,
@@ -340,10 +341,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   void _publishReadiness() {
     if (!mounted) return;
     _pageSync.setViewerReady(_viewerReadyForTurns);
-    // Still asked under an ad: the sync service answers for it that the ad
-    // break is not over, so a reader on an app that knows nothing of ad
-    // breaks cannot turn the room on without it.
-    final isLoaded = !_leaving && _viewerLoaded && _lastLocalCfi != null;
+    // Still asked under an ad while it holds the room: the sync service
+    // answers for it that the ad break is not over, so a reader on an app
+    // that knows nothing of ad breaks cannot turn the room on without it.
+    // An ad left up past the hold is in nobody's way any more: like an app
+    // in the background, it is not asked, and the request it could not
+    // answer under the ad does not hold the room.
+    final isLoaded =
+        !_leaving &&
+        _viewerLoaded &&
+        _lastLocalCfi != null &&
+        (!_adShowing || _pageSync.isHoldingForAd);
     unawaited(
       ref
           .read(presenceProvider.notifier)
@@ -506,6 +514,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     return true;
   }
 
+  /// The room went on without this reader's ad (see
+  /// [PageSyncService.onAdHoldExpired]).
+  void _handleAdHoldExpired() {
+    if (!mounted) return;
+    // One that has not come up yet would come up in the middle of reading,
+    // for this reader alone.
+    _adBreakPending = false;
+    _pageTurnAdTimer?.cancel();
+    _publishReadiness();
+  }
+
   /// Restarted by every relocation, so the ad comes up after the last one.
   void _showPageTurnAdSoon() {
     if (_adShowing || !_adBreakPending) return;
@@ -529,6 +548,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       return;
     }
     _adBreakPending = false;
+    // The hold ran out before the page settled: the break is over.
+    if (!_pageSync.isHoldingForAd) return;
     setState(() => _adShowing = true);
     _publishReadiness();
     try {

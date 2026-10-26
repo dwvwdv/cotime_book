@@ -124,6 +124,7 @@ supabase/
      `roomProtocolVersion` +1；舊版跟不上時，`minCompatibleRoomProtocol` 也要拉到新版本。
      **共享頁面的分頁點改變時也算**（`SharedPageStyle` 的規則、`shared_page.js` 的頁首或空白頁判斷）：
      commit 帶的是本機分頁下的頁名，分頁不同的舊版會顯示到別頁。版本 2 就是為了 GH-49 / GH-52 的分頁改變。
+     版本 3 是全房廣告時段（GH-63）：舊版跟得上（自己計數播廣告、廣告時段發起的翻頁被拒），所以 `minCompatibleRoomProtocol` 仍是 2。
      只新增可被忽略的欄位不用改。版號只能往上加。舊版（v1.0.5 以前）不送這兩個欄位，算成 0，
      與目前的版本相容。只提示、不把對方排除在共識之外。
 

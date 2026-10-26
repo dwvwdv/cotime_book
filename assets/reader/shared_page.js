@@ -653,11 +653,17 @@
       var inView = pagesInView(manager)[0];
       var doc = inView && inView.view.document;
       if (!doc || !doc.body) return null;
+      if (!doc.cotimeRecountsOnLoad) {
+        // A picture that finishes loading reflows the section and can move
+        // its page breaks without changing how many there are.
+        doc.addEventListener('load', function () { countedKey = null; }, true);
+        doc.cotimeRecountsOnLoad = true;
+      }
       var delta = layout.delta;
       var count = Math.max(1, Math.round(inView.view.width() / delta));
-      // The counts change with the layout. layOut() drops them too; the key
-      // also catches a section that reflowed on its own (a picture that
-      // finished loading).
+      // The counts change with the layout. layOut() and a picture loading
+      // drop them; the key also catches a section that reflowed otherwise
+      // into a different number of pages.
       var key = [inView.view.section.index, applies,
         appliedPage && appliedPage.fontSize, delta, layout.width, count]
         .join(':');

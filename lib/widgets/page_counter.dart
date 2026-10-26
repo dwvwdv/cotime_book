@@ -5,9 +5,10 @@ import '../models/page_info.dart';
 /// The page in its chapter, and how far into the book: "3 / 12" over "45%".
 ///
 /// One width whatever it says, so the buttons beside it never move as the
-/// numbers grow.
+/// numbers grow. No wider than the members button it replaced: the bottom
+/// bar has to fit a 320dp screen. Long numbers shrink to fit instead.
 class PageCounter extends StatelessWidget {
-  static const double width = 72;
+  static const double width = 52;
 
   final PageInfo? info;
   final Color ink;
@@ -42,7 +43,13 @@ class PageCounter extends StatelessWidget {
                     ),
                   ),
                   if (progress != null)
-                    Text(progress, style: TextStyle(color: ink, fontSize: 13)),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        progress,
+                        style: TextStyle(color: ink, fontSize: 13),
+                      ),
+                    ),
                 ],
               ),
             ),

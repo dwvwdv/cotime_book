@@ -61,7 +61,13 @@ class AppConstants {
   /// 2: chapters in a clipping wrapper are laid out across pages (GH-49) and
   /// lines too long for the page wrap (GH-52). An app on 1 squeezes such a
   /// chapter into one page and turns straight to the next chapter.
-  static const int roomProtocolVersion = 2;
+  ///
+  /// 3: ad breaks are the room's (GH-63): an `ad_break` broadcast, an
+  /// `ad_break` refusal of a turn, and a reader under its ad still
+  /// `reader_ready`. An app on 2 still reads along — it shows its own ads on
+  /// its own count and is refused a turn during a break — so 2 stays
+  /// compatible.
+  static const int roomProtocolVersion = 3;
 
   /// The oldest [roomProtocolVersion] this app still reads together with,
   /// also sent in Presence. Members below it are told to update; an app whose
