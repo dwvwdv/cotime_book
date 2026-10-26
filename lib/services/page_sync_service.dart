@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:uuid/uuid.dart';
 
+import '../config/ad_config.dart';
 import '../models/page_sync_state.dart';
 import 'presence_merge.dart';
 import 'realtime_service.dart';
@@ -91,6 +92,13 @@ class RealtimePageSyncTransport implements PageSyncTransport {
 ///   for [defaultReconnectGrace] nobody turns and the bar says who it is
 ///   waiting for. Leaving on purpose (to the lobby, or the room) is
 ///   announced and never holds anyone up.
+/// * **Ad breaks are the room's, not each device's.** Every
+///   [AdConfig.pageTurnsPerAd]th shared page is an ad break for everyone on
+///   it, so the ads come up together. A reader whose ad is up holds the room
+///   (announced over Broadcast, with the same nudge and liveness as a
+///   request), and until every ad is closed nobody turns and the new page
+///   stays covered — also for a reader whose ad never loaded, who would
+///   otherwise read on while the others watch theirs (GH-63).
 class PageSyncService {
   static const requestEvent = 'page_turn_request';
   static const voteEvent = 'page_turn_vote';
@@ -100,6 +108,7 @@ class PageSyncService {
   static const positionEvent = 'page_position';
   static const readerLeftEvent = 'reader_left';
   static const membershipEvent = 'membership_changed';
+  static const adBreakEvent = 'ad_break';
 
   static const defaultPositionAnnounceInterval = Duration(seconds: 20);
   static const defaultReconnectGrace = Duration(minutes: 1);
@@ -124,6 +133,17 @@ class PageSyncService {
   /// everyone waits this long to find out.
   static const defaultTurnTimeout = Duration(seconds: 4);
 
+  /// How long a reader that reached an ad break without an ad of its own
+  /// keeps the page covered to hear whether anyone else has one. The others
+  /// learn of the page from the commit, so theirs is announced a round trip
+  /// after this reader got there.
+  static const defaultAdBreakSettle = Duration(seconds: 2);
+
+  /// The longest this reader holds the room for its own ad. An ad is closed
+  /// in well under this; it only stops a show that never reports back from
+  /// holding everyone forever.
+  static const defaultAdBreakLimit = Duration(minutes: 2);
+
   static const _maxRememberedRequestIds = 200;
 
   final PageSyncTransport _transport;
@@ -139,6 +159,9 @@ class PageSyncService {
   final Duration _positionAnnounceInterval;
   final Duration _reconnectGrace;
   final DateTime Function() _clock;
+  final int _adBreakEvery;
+  final Duration _adBreakSettle;
+  final Duration _adBreakLimit;
 
   /// Other readers last seen in the reader: user id → nickname.
   final Map<String, String> _knownReaders = {};
@@ -151,6 +174,25 @@ class PageSyncService {
   Timer? _awayTimer;
   Timer? _announceTimer;
   bool _wasSelfPresent = false;
+
+  /// The last ad break this reader reached. A page gets one break, however
+  /// many times its position arrives.
+  int _adBreakEpoch = -1;
+  int _adBreakSeq = -1;
+
+  /// Until when the page stays covered while this reader listens for the
+  /// others' ads.
+  DateTime? _adBreakSettleUntil;
+
+  /// This reader's own ad is coming up or on screen.
+  bool _holdingForAd = false;
+  Timer? _adHoldLimitTimer;
+  Timer? _adHoldAnnounceTimer;
+  Timer? _adBreakTimer;
+
+  /// Other readers whose ad is up: user id → who, and when it was last
+  /// announced.
+  final Map<String, _AdHold> _othersInAd = {};
 
   final _stateController = StreamController<PageSyncState>.broadcast();
   final List<StreamSubscription<Map<String, dynamic>>> _subscriptions = [];
@@ -184,6 +226,10 @@ class PageSyncService {
   /// go back to [position].
   void Function(String requestId)? onTurnAbandoned;
 
+  /// This reader reached an ad break. Returns whether it shows an ad, and so
+  /// holds the room until it calls [endAdBreak].
+  bool Function(SharedPosition position)? onAdBreak;
+
   PageSyncService({
     required PageSyncTransport transport,
     required String currentUserId,
@@ -199,6 +245,9 @@ class PageSyncService {
     Duration positionAnnounceInterval = defaultPositionAnnounceInterval,
     Duration reconnectGrace = defaultReconnectGrace,
     DateTime Function()? clock,
+    int adBreakEvery = AdConfig.pageTurnsPerAd,
+    Duration adBreakSettle = defaultAdBreakSettle,
+    Duration adBreakLimit = defaultAdBreakLimit,
   }) : _transport = transport,
        _currentUserId = currentUserId,
        _currentNickname = currentNickname,
@@ -212,9 +261,17 @@ class PageSyncService {
        _mintEpoch = mintEpoch ?? _wallClockEpoch,
        _positionAnnounceInterval = positionAnnounceInterval,
        _reconnectGrace = reconnectGrace,
-       _clock = clock ?? DateTime.now;
+       _clock = clock ?? DateTime.now,
+       _adBreakEvery = adBreakEvery,
+       _adBreakSettle = adBreakSettle,
+       _adBreakLimit = adBreakLimit;
 
   static int _wallClockEpoch() => DateTime.now().millisecondsSinceEpoch;
+
+  /// Whether [position] is a page the room stops on for ads, every [every]
+  /// pages. Counted on the shared seq, so every reader stops on the same one.
+  static bool isAdBreakPage(SharedPosition position, {required int every}) =>
+      every > 0 && position.seq > 0 && position.seq % every == 0;
 
   Stream<PageSyncState> get stateStream => _stateController.stream;
   PageSyncState get currentState => _state;
@@ -233,6 +290,7 @@ class PageSyncService {
       _transport.broadcastStream(positionEvent).listen(_onPosition),
       _transport.broadcastStream(readerLeftEvent).listen(_onReaderLeft),
       _transport.broadcastStream(membershipEvent).listen(_onMembership),
+      _transport.broadcastStream(adBreakEvent).listen(_onAdBreak),
       _transport.presenceStream.listen(_onPresence),
     ]);
 
@@ -282,6 +340,15 @@ class PageSyncService {
     if (away.isNotEmpty) {
       // Turning now would leave them on another page when they come back.
       _setError('Waiting for ${_joinNames(away)} to reconnect');
+      return false;
+    }
+    if (_isInAdBreak()) {
+      final inAd = _adNames();
+      _setError(
+        inAd.isEmpty
+            ? 'Waiting for the ad break to finish'
+            : 'Waiting for ${inAd.join(', ')} to finish an ad',
+      );
       return false;
     }
 
@@ -407,7 +474,16 @@ class PageSyncService {
     _position = next;
     _finishRequest(request);
     unawaited(_broadcastCommit(request, next));
+    _reachedPage(next);
     return next;
+  }
+
+  /// This reader's ad is closed (or never came up): it stops holding the room.
+  void endAdBreak() {
+    if (_disposed || !_holdingForAd) return;
+    _stopAdHold();
+    unawaited(_announceAdBreak(active: false));
+    _refreshAdBreak();
   }
 
   /// Requester only: the viewer could not move (first or last page, or the
@@ -430,6 +506,10 @@ class PageSyncService {
   /// reader to "reconnect" either.
   Future<void> leave() async {
     if (_disposed) return;
+    if (_holdingForAd) {
+      _stopAdHold();
+      await _announceAdBreak(active: false);
+    }
     final request = _state.currentRequest;
     if (request != null) {
       _finishRequest(request);
@@ -502,6 +582,13 @@ class PageSyncService {
     }
     // Not asked: this reader joined after the request and follows the commit.
     if (!incoming.requiredUserIds.contains(_currentUserId)) return;
+    if (_isInAdBreak()) {
+      // Nobody gets the next page while an ad is up — the requester's app may
+      // be one that knows nothing of ad breaks.
+      _rememberFinished(incoming.requestId);
+      unawaited(_sendVoteQuietly(incoming, accept: false, reason: 'ad_break'));
+      return;
+    }
 
     if (current == null) {
       _adoptIncoming(incoming);
@@ -731,7 +818,130 @@ class PageSyncService {
     }
 
     onPositionChanged?.call(candidate);
+    _reachedPage(candidate);
     return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ad breaks
+
+  void _reachedPage(SharedPosition position) {
+    if (_disposed || !isAdBreakPage(position, every: _adBreakEvery)) return;
+    // The same page again (a tie-break between two commits for it) is not
+    // another break.
+    if (position.epoch == _adBreakEpoch && position.seq == _adBreakSeq) return;
+    _adBreakEpoch = position.epoch;
+    _adBreakSeq = position.seq;
+    // Reading alone there is nobody to hear from.
+    _adBreakSettleUntil = _knownReaders.isEmpty
+        ? null
+        : _clock().add(_adBreakSettle);
+    final showsAd = onAdBreak?.call(position) ?? false;
+    if (_disposed) return;
+    if (showsAd && !_holdingForAd) {
+      _holdingForAd = true;
+      _adHoldLimitTimer = Timer(_adBreakLimit, endAdBreak);
+      _adHoldAnnounceTimer = Timer.periodic(_nudgeInterval, (_) {
+        unawaited(_announceAdBreak(active: true));
+      });
+      unawaited(_announceAdBreak(active: true));
+    }
+    _refreshAdBreak();
+  }
+
+  void _stopAdHold() {
+    _holdingForAd = false;
+    _adHoldLimitTimer?.cancel();
+    _adHoldLimitTimer = null;
+    _adHoldAnnounceTimer?.cancel();
+    _adHoldAnnounceTimer = null;
+  }
+
+  Future<void> _announceAdBreak({required bool active}) async {
+    if (_disposed) return;
+    try {
+      await _transport.broadcast(
+        event: adBreakEvent,
+        payload: {
+          'user_id': _currentUserId,
+          'nickname': _currentNickname,
+          'active': active,
+          'epoch': _adBreakEpoch,
+          'seq': _adBreakSeq,
+        },
+      );
+    } catch (_) {
+      // A hold is announced again every nudge, and expires where it is not;
+      // a lost end lets the others go once it expires.
+    }
+  }
+
+  void _onAdBreak(Map<String, dynamic> payload) {
+    final userId = payload['user_id'];
+    final active = payload['active'];
+    if (_disposed ||
+        userId is! String ||
+        userId == _currentUserId ||
+        active is! bool) {
+      return;
+    }
+    if (active && !_hasDeparted(userId)) {
+      final nickname = payload['nickname'];
+      _othersInAd[userId] = _AdHold(
+        nickname is String && nickname.trim().isNotEmpty
+            ? nickname.trim()
+            : _knownReaders[userId] ?? 'A reader',
+        _clock(),
+      );
+    } else {
+      _othersInAd.remove(userId);
+    }
+    _refreshAdBreak();
+  }
+
+  /// Other readers whose ad is up, by name. A hold that stopped being
+  /// announced — its reader dropped off, or the end was lost — has expired.
+  List<String> _adNames() {
+    final now = _clock();
+    _othersInAd.removeWhere(
+      (_, hold) => now.difference(hold.lastHeard) >= _followerLiveness,
+    );
+    return [for (final hold in _othersInAd.values) hold.nickname]..sort();
+  }
+
+  bool _isInAdBreak() {
+    if (_holdingForAd || _adNames().isNotEmpty) return true;
+    final settleUntil = _adBreakSettleUntil;
+    if (settleUntil == null) return false;
+    if (_clock().isBefore(settleUntil)) return true;
+    _adBreakSettleUntil = null;
+    return false;
+  }
+
+  /// Publishes the ad break as it stands, and wakes up when it next changes
+  /// on its own: the settle runs out, or a hold expires.
+  void _refreshAdBreak() {
+    if (_disposed) return;
+    _adBreakTimer?.cancel();
+    _adBreakTimer = null;
+    final names = _adNames();
+    final inBreak = _isInAdBreak();
+    final now = _clock();
+    final deadlines = [
+      if (_adBreakSettleUntil != null) _adBreakSettleUntil!,
+      for (final hold in _othersInAd.values)
+        hold.lastHeard.add(_followerLiveness),
+    ];
+    if (deadlines.isNotEmpty) {
+      final next = deadlines.reduce((a, b) => a.isBefore(b) ? a : b);
+      _adBreakTimer = Timer(
+        next.difference(now) + const Duration(milliseconds: 1),
+        _refreshAdBreak,
+      );
+    }
+    if (inBreak != _state.adBreak || !_listEquals(names, _state.readersInAd)) {
+      _updateState(_state);
+    }
   }
 
   /// Ends [request] locally, optionally leaving a message on the bar.
@@ -935,6 +1145,7 @@ class PageSyncService {
     _departedAt[userId] = _clock();
     _knownReaders.remove(userId);
     if (_awaySince.remove(userId) != null) _refreshAway();
+    if (_othersInAd.remove(userId) != null) _refreshAdBreak();
   }
 
   bool _hasDeparted(String userId) {
@@ -962,6 +1173,8 @@ class PageSyncService {
       } else {
         // In the lobby, or the app went to the background: stepped away.
         _knownReaders.remove(userId);
+        // Not looking at an ad in the room either.
+        _othersInAd.remove(userId);
       }
       _awaySince.remove(userId);
     }
@@ -971,6 +1184,7 @@ class PageSyncService {
       }
     }
     _refreshAway();
+    _refreshAdBreak();
   }
 
   /// Readers still inside their reconnect grace, oldest first.
@@ -1125,7 +1339,11 @@ class PageSyncService {
 
   void _updateState(PageSyncState newState) {
     if (_disposed) return;
-    newState = newState.withReadersReconnecting(_awayNames());
+    newState = newState.withRoomHolds(
+      reconnecting: _awayNames(),
+      inAd: _adNames(),
+      adBreak: _isInAdBreak(),
+    );
     _state = newState;
     if (!_stateController.isClosed) {
       _stateController.add(newState);
@@ -1154,6 +1372,8 @@ class PageSyncService {
     _errorAutoClearTimer = null;
     _awayTimer?.cancel();
     _announceTimer?.cancel();
+    _stopAdHold();
+    _adBreakTimer?.cancel();
     for (final subscription in _subscriptions) {
       await subscription.cancel();
     }
@@ -1161,6 +1381,7 @@ class PageSyncService {
     onExecuteTurn = null;
     onPositionChanged = null;
     onTurnAbandoned = null;
+    onAdBreak = null;
     await _stateController.close();
   }
 }
@@ -1178,6 +1399,7 @@ String describeCancelReason(String reason) {
         'The page did not move — this may be the start or end of the book',
     'requester_busy': 'Page turn cancelled: the page was still loading',
     'reader_disconnected': 'Page turn paused: a reader is reconnecting',
+    'ad_break': 'Page turn paused: the ad break is not over yet',
   };
 
   final known = messages[reason];
@@ -1191,4 +1413,11 @@ String describeCancelReason(String reason) {
         : '$nickname asked to wait on this page';
   }
   return 'Page turn cancelled';
+}
+
+class _AdHold {
+  final String nickname;
+  final DateTime lastHeard;
+
+  const _AdHold(this.nickname, this.lastHeard);
 }

@@ -114,6 +114,15 @@ void main() {
         'Reader user-c with a long name',
         'Reader user-d with a long name',
       ]),
+      const PageSyncState.idle().withRoomHolds(
+        reconnecting: [],
+        inAd: [
+          'Reader user-b with a long name',
+          'Reader user-c with a long name',
+          'Reader user-d with a long name',
+        ],
+        adBreak: true,
+      ),
       const PageSyncState.error(
         'Waiting for Reader user-b with a long name, Reader user-c with a '
         'long name and Reader user-d with a long name to become ready',
@@ -158,6 +167,24 @@ void main() {
 
     expect(find.text('Waiting for Bob to reconnect...'), findsOneWidget);
     expect(find.text('1 readers ready'), findsNothing);
+  });
+
+  testWidgets('an ad break names who the room is waiting for', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SyncStatusBar(
+          syncState: const PageSyncState.idle().withRoomHolds(
+            reconnecting: [],
+            inAd: ['Alice'],
+            adBreak: true,
+          ),
+          onlineUsers: [readyUser('user-a')],
+        ),
+      ),
+    ));
+
+    expect(find.text('Ad break: waiting for Alice...'), findsOneWidget);
+    expect(find.text('Synced'), findsNothing);
   });
 
   testWidgets('a request waiting on this reader can be answered from the bar',

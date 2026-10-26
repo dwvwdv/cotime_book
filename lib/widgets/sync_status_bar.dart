@@ -123,6 +123,27 @@ class SyncStatusBar extends StatelessWidget {
         ),
       );
     }
+    if (syncState.adBreak) {
+      final inAd = syncState.readersInAd;
+      return _frame(
+        child: Row(
+          children: [
+            Icon(Icons.hourglass_top, size: 20, color: ink),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                inAd.isEmpty
+                    ? 'Ad break...'
+                    : 'Ad break: waiting for ${inAd.join(', ')}...',
+                style: _text(bold: true),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     final readyReaderCount = onlineUsers
         .where(
           (user) =>

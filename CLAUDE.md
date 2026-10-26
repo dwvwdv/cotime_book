@@ -192,11 +192,17 @@ supabase/
    - 不要動畫：不用 `CircularProgressIndicator`（改成「Loading...」之類的文字）、
      snackbar 用 `showPaperMessage()`、bottom sheet 用 `showPaperSheet()`。
    - 不要半透明與陰影；用 1.5px 的線分隔。
-   - 插頁式廣告（AdMob）是唯一的例外：閱讀時每翻 `AdConfig.pageTurnsPerAd`（20）頁、
-     以及 TXT 轉檔存檔前各播一則。翻頁的廣告只在頁面落定、`SyncStatus.idle` 時才顯示——
-     蓋在別人的翻頁請求上會讓全房等這則廣告；播放期間 reader 送出 `reader_ready: false`，
-     別人發起的翻頁不會詢問它，關掉後跟上房間的位置。只在 `isReady` 時才切換，
-     沒廣告時不要每頁花掉兩次 Presence 更新。廣告一律不能阻擋流程：沒載好就略過
+   - 插頁式廣告（AdMob）是唯一的例外：閱讀時每 `AdConfig.pageTurnsPerAd`（20）頁、
+     以及 TXT 轉檔存檔前各播一則。**翻頁廣告是全房的「廣告時段」，不是各裝置自己數**（GH-63）：
+     共享位置的 `seq` 是 20 的倍數那一頁（`PageSyncService.isAdBreakPage`）大家同時進入。
+     不要改回每台裝置自己計數——起算點、廣告有沒有載好都不同，會變成 A 播了 B 沒播。
+     廣告載好的人經 broadcast `ad_break` 佔住房間（每個 nudge 重送、liveness 過期，不放 Presence），
+     佔住期間它的 `PageSyncService` 自動以 `ad_break` 拒絕任何翻頁請求——所以播廣告時仍是
+     `reader_ready: true`，舊版 App 發起的翻頁也會被擋下。到了廣告頁，每個 reader 都用
+     `AdBreakCover` 蓋住新的一頁、不能翻頁，直到全房沒有人在看廣告；廣告沒載好（擋廣告的 DNS）
+     的人一樣要等，不能趁別人看廣告先讀下一頁。沒廣告的人會先蓋住 `defaultAdBreakSettle`（2 秒）
+     等別人的宣告到達，一個人讀時不等。自己的佔住最長 `defaultAdBreakLimit`，宣告遺失時別人在
+     liveness 後放行——任何新的佔住都要有這樣的出口。廣告本身不能阻擋流程：沒載好就不佔住
      （`InterstitialAds.show()` 立刻回 false）。廣告是半透明的 Activity，App 只進 `inactive`，
      不會被當成離開房間（`appActivityFor`）。翻頁與存檔各用自己的 ad unit
      （`AdConfig.pageTurnUnitId` / `txtSaveUnitId`），和 `AndroidManifest.xml` 的 App ID 屬於同一個

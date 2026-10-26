@@ -22,7 +22,3 @@ final pageTurnAdsProvider = Provider<InterstitialAds>(
 final txtSaveAdsProvider = Provider<InterstitialAds>(
   (ref) => _interstitialAds(AdConfig.txtSaveUnitId),
 );
-
-final pageTurnAdCounterProvider = Provider<PageTurnAdCounter>(
-  (ref) => PageTurnAdCounter(),
-);

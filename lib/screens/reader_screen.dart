@@ -16,9 +16,9 @@ import '../providers/page_sync_provider.dart';
 import '../providers/presence_provider.dart';
 import '../providers/reading_preferences_provider.dart';
 import '../providers/room_provider.dart';
-import '../services/interstitial_ads.dart';
 import '../services/layout_report_service.dart';
 import '../services/shared_page_renderer.dart';
+import '../widgets/ad_break_cover.dart';
 import '../widgets/layout_report_sheet.dart';
 import '../widgets/page_turn_input.dart';
 import '../widgets/paper.dart';
@@ -152,15 +152,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   static const _maxRecentMoves = 12;
   final Stopwatch _sinceOpened = Stopwatch()..start();
 
-  /// An interstitial every [PageTurnAdCounter.every] page moves, shown once
-  /// the page has settled and nobody is waiting on this reader. While it is
-  /// up, this reader is not ready: nobody waits for it to close the ad.
+  /// The room reached an ad break and this reader's ad is still to come up.
+  /// It is shown once the page has settled; until it is closed this reader
+  /// holds the room (see [PageSyncService.onAdBreak]).
+  bool _adBreakPending = false;
   Timer? _pageTurnAdTimer;
   bool _adShowing = false;
   static const _pageTurnAdDelay = Duration(seconds: 1);
 
   PageSyncNotifier get _pageSync => ref.read(pageSyncProvider.notifier);
-  PageTurnAdCounter get _pageTurnAds => ref.read(pageTurnAdCounterProvider);
 
   @override
   void initState() {
@@ -197,6 +197,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     pageSync.onExecuteTurn = _handleExecuteTurn;
     pageSync.onPositionChanged = _handlePositionChanged;
     pageSync.onTurnAbandoned = _handleTurnAbandoned;
+    pageSync.onAdBreak = _handleAdBreak;
     await pageSync.initialize(
       realtimeService: ref.read(realtimeServiceProvider),
       currentUserId: authState.userId!,
@@ -333,11 +334,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   void _publishReadiness() {
     if (!mounted) return;
     _pageSync.setViewerReady(_viewerReadyForTurns);
-    // Under an ad this reader cannot answer, so the room is told not to ask
-    // it, as when the app is in the background. It follows the room's page
-    // once the ad is closed.
-    final isLoaded =
-        !_leaving && !_adShowing && _viewerLoaded && _lastLocalCfi != null;
+    // Still asked under an ad: the sync service answers for it that the ad
+    // break is not over, so a reader on an app that knows nothing of ad
+    // breaks cannot turn the room on without it.
+    final isLoaded = !_leaving && _viewerLoaded && _lastLocalCfi != null;
     unawaited(
       ref
           .read(presenceProvider.notifier)
@@ -353,8 +353,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   void _handlePositionChanged(SharedPosition position) {
     if (!mounted || _leaving) return;
-    // Catching up while the book opens is not turning a page.
-    if (_viewerLoaded) _pageTurnAds.recordMove();
     // A position that voids our turn arrives after onTurnAbandoned, which
     // already cleared it. One that does not (a tie-break on the page the turn
     // started from) is overtaken by the turn landing: displaying it now would
@@ -454,7 +452,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       _pendingTurn = null;
       final position = _pageSync.completeTurn(turn.requestId, cfi);
       if (position != null) {
-        _pageTurnAds.recordMove();
         unawaited(
           ref.read(roomProvider.notifier).saveReadingPosition(position.cfi),
         );
@@ -485,10 +482,27 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _publishReadiness();
   }
 
-  /// Whether one is due is decided when the timer fires: this relocation may
-  /// be the move that makes it due, counted further down [_onRelocated].
+  /// The room reached an ad break. Returns whether this reader shows an ad:
+  /// one that is not loaded (or blocked) is not waited for, and this reader
+  /// waits on the others' instead.
+  bool _handleAdBreak(SharedPosition position) {
+    // Catching up while the book opens is not reaching the page.
+    if (!mounted || _leaving || !_viewerLoaded) return false;
+    final ads = ref.read(pageTurnAdsProvider);
+    if (!ads.isReady) {
+      ads.preload();
+      return false;
+    }
+    _adBreakPending = true;
+    // Not only on a relocation: the page may already be on screen, and then
+    // nothing relocates.
+    _showPageTurnAdSoon();
+    return true;
+  }
+
+  /// Restarted by every relocation, so the ad comes up after the last one.
   void _showPageTurnAdSoon() {
-    if (_adShowing) return;
+    if (_adShowing || !_adBreakPending) return;
     _pageTurnAdTimer?.cancel();
     _pageTurnAdTimer = Timer(
       _pageTurnAdDelay,
@@ -497,36 +511,31 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   Future<void> _showPageTurnAd() async {
-    if (!mounted || _leaving || _adShowing) return;
-    final counter = _pageTurnAds;
-    if (!counter.isDue) return;
-    // Only between turns. Over a request someone else made, the ad would
-    // hold the whole room until it is closed; over this reader's own turn or
-    // a display, the page has not landed yet. Still due, it is tried again
-    // when the next page lands.
+    if (!mounted || _leaving || _adShowing || !_adBreakPending) return;
+    // Not over a page that is still moving. The room does not turn during
+    // the break, so this settles: try again shortly.
     final syncState = ref.read(pageSyncProvider);
     if (_pendingTurn != null ||
         _isDisplaying ||
         syncState.status != SyncStatus.idle ||
         syncState.currentRequest != null) {
+      _showPageTurnAdSoon();
       return;
     }
-    final ads = ref.read(pageTurnAdsProvider);
-    if (!ads.isReady) {
-      // Checked first: going not-ready and back costs two Presence updates,
-      // which are rate limited, and must not be spent on every page while
-      // no ad loads.
-      ads.preload();
-      return;
-    }
+    _adBreakPending = false;
     setState(() => _adShowing = true);
     _publishReadiness();
     try {
-      if (await ads.show()) counter.adShown();
+      // False when the ad went stale or failed to show: the break ends for
+      // this reader all the same.
+      await ref.read(pageTurnAdsProvider).show();
     } finally {
+      // Gone from the screen, the reader has left the book, and leaving
+      // ended the hold.
       if (mounted) {
         setState(() => _adShowing = false);
         _publishReadiness();
+        _pageSync.endAdBreak();
       }
     }
   }
@@ -848,7 +857,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                         prefs,
                         textSize,
                       );
-                      return _buildViewer(bookState, prefs);
+                      return _buildViewer(bookState, prefs, syncState);
                     },
                   ),
                 ),
@@ -863,7 +872,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
-  Widget _buildViewer(BookState bookState, ReadingPreferences prefs) {
+  Widget _buildViewer(
+    BookState bookState,
+    ReadingPreferences prefs,
+    PageSyncState syncState,
+  ) {
     return Stack(
       children: [
         // Layer 1: EPUB viewer
@@ -907,6 +920,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               ),
             ),
           ),
+
+        // Layer 3: the page the room just reached stays covered until every
+        // reader's ad is closed. Over the viewer, never beside it: its size
+        // must not change (issue #13).
+        if (syncState.adBreak)
+          Positioned.fill(
+            child: AdBreakCover(
+              readersInAd: syncState.readersInAd,
+              ink: prefs.textColor,
+              paper: prefs.backgroundColor,
+            ),
+          ),
       ],
     );
   }
@@ -915,6 +940,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   bool _canRequestTurn(PageSyncState syncState) =>
       syncState.status == SyncStatus.idle &&
       syncState.currentRequest == null &&
+      !syncState.adBreak &&
       _viewerReadyForTurns;
 
   /// One entry point for taps, swipes and keys.

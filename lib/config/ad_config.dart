@@ -32,7 +32,9 @@ class AdConfig {
     return isRelease ? unitId : androidTestUnitId;
   }
 
-  /// The room's page moves this device sees between two interstitials.
+  /// Shared pages between two ad breaks. Counted on the room's shared
+  /// position, so every reader's ad comes up on the same page (see
+  /// `PageSyncService.isAdBreakPage`).
   static const pageTurnsPerAd = 20;
 
   /// A loaded interstitial is only good for an hour; one kept longer is
