@@ -949,6 +949,71 @@ void main() {
       expect(alice.service.position.seq, 2);
     });
 
+    test('a request whose answer was lost is turned down again when it is '
+        'repeated', () async {
+      // Bob never hears of Alice's ad, and her first "no" is lost: his
+      // repeat must still get one, not wait out the whole request timeout.
+      final room = FakeRoom();
+      room.join('alice', 'Alice', adBreakEvery: 2, showsAd: true);
+      final bob = room.join(
+        'bob',
+        'Bob',
+        adBreakEvery: 2,
+        nudgeInterval: const Duration(milliseconds: 20),
+      );
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, bob, 1);
+      room.dropEvents.add(PageSyncService.adBreakEvent);
+      await turnPages(room, bob, 1);
+
+      room.dropEvents.add(PageSyncService.voteEvent);
+      await bob.service.requestPageTurn(direction: PageTurnDirection.next);
+      await flush();
+      expect(bob.service.currentState.status, SyncStatus.requesting);
+
+      room.dropEvents.remove(PageSyncService.voteEvent);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await flush();
+      expect(bob.service.currentState.status, SyncStatus.idle);
+      expect(
+        bob.service.currentState.errorMessage,
+        describeCancelReason('ad_break'),
+      );
+    });
+
+    test(
+      'an ad outlasting the settle does not keep waking the reader',
+      () async {
+        // Regression: the settle deadline, once past, stayed among the
+        // wake-ups while an ad was up, and the timer fired back to back.
+        var clockReads = 0;
+        DateTime countingClock() {
+          clockReads++;
+          return DateTime.now();
+        }
+
+        final room = FakeRoom();
+        room.join('alice', 'Alice', adBreakEvery: 1, showsAd: true);
+        final bob = room.join(
+          'bob',
+          'Bob',
+          adBreakEvery: 1,
+          adBreakSettle: const Duration(milliseconds: 10),
+          clock: countingClock,
+        );
+        addTearDown(room.dispose);
+        await flush();
+        await turnPages(room, bob, 1);
+        expect(bob.service.currentState.readersInAd, ['Alice']);
+
+        clockReads = 0;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(clockReads, lessThan(50));
+        expect(bob.service.currentState.adBreak, isTrue);
+      },
+    );
+
     test('a hold that stops being announced expires', () async {
       // The end of Alice's ad was lost: Bob lets go once he stops hearing it.
       final room = FakeRoom();
@@ -1153,6 +1218,7 @@ class FakeRoom {
     bool showsAd = false,
     Duration adBreakSettle = Duration.zero,
     Duration adBreakLimit = const Duration(minutes: 5),
+    DateTime Function()? clock,
   }) {
     if (trackPresence) {
       _presence[userId] = {
@@ -1180,6 +1246,7 @@ class FakeRoom {
       adBreakEvery: adBreakEvery,
       adBreakSettle: adBreakSettle,
       adBreakLimit: adBreakLimit,
+      clock: clock,
     );
     final reader = FakeReader(userId, nickname, service, transport);
     var localPage = 0;

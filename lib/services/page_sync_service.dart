@@ -584,8 +584,9 @@ class PageSyncService {
     if (!incoming.requiredUserIds.contains(_currentUserId)) return;
     if (_isInAdBreak()) {
       // Nobody gets the next page while an ad is up — the requester's app may
-      // be one that knows nothing of ad breaks.
-      _rememberFinished(incoming.requestId);
+      // be one that knows nothing of ad breaks. Not remembered as finished:
+      // if this answer is lost, the requester's next nudge gets another, and
+      // once the break is over it is answered like any other request.
       unawaited(_sendVoteQuietly(incoming, accept: false, reason: 'ad_break'));
       return;
     }
@@ -910,12 +911,15 @@ class PageSyncService {
   }
 
   bool _isInAdBreak() {
-    if (_holdingForAd || _adNames().isNotEmpty) return true;
+    // Cleared whatever else holds the break: a settle left past its time
+    // would stay among the wake-ups of [_refreshAdBreak], already due.
     final settleUntil = _adBreakSettleUntil;
-    if (settleUntil == null) return false;
-    if (_clock().isBefore(settleUntil)) return true;
-    _adBreakSettleUntil = null;
-    return false;
+    if (settleUntil != null && !_clock().isBefore(settleUntil)) {
+      _adBreakSettleUntil = null;
+    }
+    return _holdingForAd ||
+        _adNames().isNotEmpty ||
+        _adBreakSettleUntil != null;
   }
 
   /// Publishes the ad break as it stands, and wakes up when it next changes
