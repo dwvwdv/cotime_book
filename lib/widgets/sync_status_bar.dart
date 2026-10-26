@@ -21,6 +21,11 @@ class SyncStatusBar extends StatelessWidget {
   final VoidCallback? onConfirm;
   final VoidCallback? onDecline;
 
+  /// Opens the room's member list. The whole bar is the button, except
+  /// while it asks this reader to answer a request and holds buttons of its
+  /// own.
+  final VoidCallback? onShowMembers;
+
   /// Foreground and background, so the bar follows the reading theme (an
   /// inverted night page should not sit under a white bar).
   final Color ink;
@@ -33,16 +38,30 @@ class SyncStatusBar extends StatelessWidget {
     this.isConnected = true,
     this.onConfirm,
     this.onDecline,
+    this.onShowMembers,
     this.ink = AppTheme.ink,
     this.paper = AppTheme.paper,
   });
 
   @override
   Widget build(BuildContext context) {
+    final onShowMembers = this.onShowMembers;
+    final content = _buildContent();
     return SizedBox(
       height: height,
       width: double.infinity,
-      child: _buildContent(),
+      child: onShowMembers == null || syncState.status == SyncStatus.confirming
+          ? content
+          : Semantics(
+              button: true,
+              label: 'Room members',
+              // No ripple: e-ink.
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onShowMembers,
+                child: content,
+              ),
+            ),
     );
   }
 
@@ -114,6 +133,27 @@ class SyncStatusBar extends StatelessWidget {
             Expanded(
               child: Text(
                 'Waiting for ${reconnecting.join(', ')} to reconnect...',
+                style: _text(bold: true),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    if (syncState.adBreak) {
+      final inAd = syncState.readersInAd;
+      return _frame(
+        child: Row(
+          children: [
+            Icon(Icons.hourglass_top, size: 20, color: ink),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                inAd.isEmpty
+                    ? 'Ad break...'
+                    : 'Ad break: waiting for ${inAd.join(', ')}...',
                 style: _text(bold: true),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,

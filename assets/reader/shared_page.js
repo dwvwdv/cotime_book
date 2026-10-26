@@ -251,6 +251,46 @@
     });
   }
 
+  // Which of a section's [count] pages show something, by the same test as
+  // showsSomething(), in one pass over the section instead of one per page:
+  // a long chapter has thousands of text nodes, and an e-ink reader feels
+  // every pass.
+  function pagesShown(doc, count, delta, width) {
+    var shown = [];
+    for (var p = 0; p < count; p++) shown.push(false);
+    function mark(rect, lineStartsHere) {
+      if (rect.width <= 0 || rect.height <= 0) return;
+      var first = Math.max(0, Math.floor(rect.left / delta) - 1);
+      var last = Math.min(count - 1, Math.floor(rect.right / delta) + 1);
+      for (var i = first; i <= last; i++) {
+        var start = i * delta;
+        var end = start + width;
+        if (rect.right > start + 1 && rect.left < end - 1 &&
+            (!lineStartsHere || rect.left >= start - 1)) {
+          shown[i] = true;
+        }
+      }
+    }
+    var pictures = doc.body.querySelectorAll(PICTURES);
+    for (var i = 0; i < pictures.length; i++) {
+      mark(pictures[i].getBoundingClientRect(), false);
+    }
+    var walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    var range = doc.createRange();
+    var node;
+    while ((node = walker.nextNode())) {
+      if (!/\S/.test(node.data)) continue;
+      range.selectNodeContents(node);
+      var lines = range.getClientRects();
+      for (var j = 0; j < lines.length; j++) mark(lines[j], true);
+    }
+    return shown;
+  }
+
+  // The last section counted by pageInfo(), and on what layout.
+  var countedKey = null;
+  var counted = null;
+
   // "section:page/pages" for each view in sight, for the diagnostics.
   function pageNumber(manager) {
     var delta = manager.layout && manager.layout.delta;
@@ -492,6 +532,8 @@
 
   // Lays the book out on [page] even when epub.js thinks it already is.
   async function layOut(page) {
+    // Every page break may move: a new text size, a new frame, a repair.
+    countedKey = null;
     var manager = rendition.manager;
     if (manager) manager._stageSize = undefined;
     // Numbers, not "100vw": a window resize (keyboard, rotation) must not
@@ -596,6 +638,59 @@
     verify: function () {
       if (typeof rendition === 'undefined' || !rendition) return [];
       return layoutProblems(appliedPage);
+    },
+
+    // Where the page in view is: its number in its chapter and the chapter's
+    // page count, both without the blank pages that turns skip (issue #22),
+    // and how far into the book it is (null until epub.js has worked out
+    // the book's locations). The page is shared, so every reader in the room
+    // gets the same numbers.
+    pageInfo: function () {
+      var manager = typeof rendition !== 'undefined' && rendition &&
+        rendition.manager;
+      var layout = manager && manager.layout;
+      if (!layout || !layout.delta) return null;
+      var inView = pagesInView(manager)[0];
+      var doc = inView && inView.view.document;
+      if (!doc || !doc.body) return null;
+      if (!doc.cotimeRecountsOnLoad) {
+        // A picture that finishes loading reflows the section and can move
+        // its page breaks without changing how many there are.
+        doc.addEventListener('load', function () { countedKey = null; }, true);
+        doc.cotimeRecountsOnLoad = true;
+      }
+      var delta = layout.delta;
+      var count = Math.max(1, Math.round(inView.view.width() / delta));
+      // The counts change with the layout. layOut() and a picture loading
+      // drop them; the key also catches a section that reflowed otherwise
+      // into a different number of pages.
+      var key = [inView.view.section.index, applies,
+        appliedPage && appliedPage.fontSize, delta, layout.width, count]
+        .join(':');
+      if (key !== countedKey) {
+        counted = pagesShown(doc, count, delta, layout.width);
+        countedKey = key;
+      }
+      var here = Math.round(inView.start / delta);
+      var page = 0;
+      var pages = 0;
+      for (var i = 0; i < counted.length; i++) {
+        if (!counted[i]) continue;
+        pages++;
+        if (i <= here) page = pages;
+      }
+      var percent = null;
+      var location = rendition.location;
+      if (typeof book !== 'undefined' && book && book.locations &&
+          book.locations.length() > 0 && location && location.start) {
+        percent = book.locations.percentageFromCfi(location.start.cfi);
+      }
+      return {
+        section: inView.view.section.index,
+        page: Math.max(page, 1),
+        pages: Math.max(pages, 1),
+        percent: percent,
+      };
     },
 
     // Everything that decides what is on screen, for a reader to copy into

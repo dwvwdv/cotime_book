@@ -102,7 +102,7 @@ function rulesFor(device) {
   return { ...rules, 'body, body *': text };
 }
 
-async function openBook(browser, device, shared) {
+async function openBook(browser, device, shared, fontSize = page.fontSize) {
   const context = await browser.newContext({
     viewport: device.viewport,
     deviceScaleFactor: device.deviceScaleFactor,
@@ -140,6 +140,7 @@ async function openBook(browser, device, shared) {
       },
       {
         ...page,
+        fontSize,
         left: Math.floor((device.viewport.width - page.width) / 2),
         top: Math.floor((device.viewport.height - page.height) / 2),
         scale: scaleFor(device.viewport),
@@ -239,6 +240,31 @@ function turn(tab, direction) {
   );
 }
 
+/// What is wrong with a run of "section:page/pages" page numbers read on
+/// every page from the first to the last, or null when nothing is.
+function pageNumbersProblem(numbers) {
+  let previous = null;
+  for (let i = 0; i < numbers.length; i++) {
+    const match = /^(\d+):(\d+)\/(\d+)$/.exec(numbers[i]);
+    if (!match) return `no page number on page ${i}`;
+    const [section, page, pages] = match.slice(1).map(Number);
+    if (page < 1 || page > pages) return `page ${i} is ${numbers[i]}`;
+    if (previous === null || section !== previous.section) {
+      if (page !== 1) return `page ${i} opens a chapter as ${numbers[i]}`;
+      if (previous && previous.page !== previous.pages) {
+        return `page ${i - 1} leaves its chapter as ${numbers[i - 1]}`;
+      }
+    } else if (page !== previous.page + 1 || pages !== previous.pages) {
+      return `page ${i} follows ${numbers[i - 1]} as ${numbers[i]}`;
+    }
+    previous = { section, page, pages };
+  }
+  if (previous && previous.page !== previous.pages) {
+    return `the book ends on ${numbers[numbers.length - 1]}`;
+  }
+  return null;
+}
+
 /// Every page from the first to the last and back: where each starts, which
 /// show nothing at all, and which only a picture.
 async function pageStarts(browser, device, shared, turns) {
@@ -249,6 +275,7 @@ async function pageStarts(browser, device, shared, turns) {
   const pictures = [];
   const ends = new Set();
   const back = [];
+  const numbers = [];
   for (const direction of ['next', 'prev']) {
     const seen = direction === 'next' ? starts : back;
     for (let i = 0; i < turns; i++) {
@@ -264,13 +291,17 @@ async function pageStarts(browser, device, shared, turns) {
       if (shows === '') blank.push(`${direction} ${i}`);
       if (shows === 'picture' && direction === 'next') pictures.push(i);
       if (direction === 'next') (await tab.evaluate(endsShown)).forEach((id) => ends.add(id));
+      if (shared && direction === 'next') {
+        const info = await tab.evaluate(() => cotimeSharedPage.pageInfo());
+        numbers.push(info ? `${info.section}:${info.page}/${info.pages}` : 'none');
+      }
       if (!shared && (direction === 'next' ? here.atEnd : here.atStart)) break;
       if (!(await turn(tab, direction))) break;
     }
   }
   back.reverse();
   await context.close();
-  return { starts, blank, pictures, ends, back, scale };
+  return { starts, blank, pictures, ends, back, scale, numbers };
 }
 
 /// Whether a frame that no longer matches the book's layout is noticed and
@@ -288,6 +319,37 @@ async function repairsLayout(browser, device) {
   });
   await context.close();
   return result;
+}
+
+/// The page counter after the room's text size changes: the chapter's page
+/// count has to be worked out again, not kept from the old size. Compared
+/// with a reader who opened the book at the new size.
+async function recountsOnNewSize(browser, device, turns) {
+  const larger = Math.round(page.fontSize * 1.5);
+  const { context, tab } = await openBook(browser, device, true);
+  // Into the body of the book, past a cover or a title page.
+  for (let i = 0; i < turns; i++) await turn(tab, 'next');
+  await tab.waitForTimeout(60);
+  const before = await tab.evaluate(() => cotimeSharedPage.pageInfo());
+  const cfi = await tab.evaluate(() => rendition.location.start.cfi);
+  const after = await tab.evaluate(async ({ size, cfi }) => {
+    await cotimeSharedPage.apply({ ...window.sharedPage, fontSize: size });
+    // epub.js shows the page again by itself after the resize; a display()
+    // straight after lands on the wrong page here (GH-65). The
+    // app displays the room's page a platform round trip later.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    await rendition.display(cfi);
+    return cotimeSharedPage.pageInfo();
+  }, { size: larger, cfi });
+  await context.close();
+
+  const fresh = await openBook(browser, device, true, larger);
+  const opened = await fresh.tab.evaluate(async (cfi) => {
+    await rendition.display(cfi);
+    return cotimeSharedPage.pageInfo();
+  }, cfi);
+  await fresh.context.close();
+  return { before, after, opened };
 }
 
 /// How many of [starts] a follower on [device] does not land on.
@@ -357,6 +419,16 @@ async function missedCommits(browser, device, starts) {
           console.log(`chapter ends: ${phone.ends.size}/${ends} shown`);
           if (phone.ends.size !== ends) failed = true;
         }
+        // The page numbers the reader shows: the same on both screens, and
+        // counting each chapter's pages one by one from 1 to its last — a
+        // skipped blank page counted, or a page turned to and not counted,
+        // would show as a jump or a repeat.
+        const sameNumbers = phone.numbers.length === tablet.numbers.length &&
+          phone.numbers.every((n, i) => n === tablet.numbers[i]);
+        const counting = pageNumbersProblem(phone.numbers);
+        console.log(`page numbers: ${sameNumbers ? 'the same on both' : 'different'}, ` +
+          `${counting || 'counted one by one'}`);
+        if (!sameNumbers || counting) failed = true;
         const named = new Set(a).size;
         console.log(`page names  : ${named}/${a.length} distinct`);
         if (named !== a.length) failed = true;
@@ -380,6 +452,15 @@ async function missedCommits(browser, device, starts) {
         console.log(`frame check : ${repair.broken.join(', ') || 'nothing found'} ` +
           `-> ${repair.after.join(', ') || 'laid out again'}`);
         if (!repaired) failed = true;
+        const resized = await recountsOnNewSize(browser, devices.phone, 3);
+        const numbered = (info) => (info ? `${info.page}/${info.pages}` : 'none');
+        const recounted = resized.before && resized.after && resized.opened &&
+          resized.after.section === resized.opened.section &&
+          resized.after.page === resized.opened.page &&
+          resized.after.pages === resized.opened.pages;
+        console.log(`text size   : ${numbered(resized.before)} -> ` +
+          `${numbered(resized.after)}, opened at that size ${numbered(resized.opened)}`);
+        if (!recounted) failed = true;
         const { missed, of } = await missedCommits(browser, devices.tablet, a);
         console.log(`follower    : landed on ${of - missed}/${of} reported pages`);
         if (missed > 0) failed = true;

@@ -105,6 +105,11 @@ supabase/
      裁切溢出的容器在分欄排版裡不能拆頁，calibre 的 GitBook 轉檔把整章包在 `overflow: hidden` 裡，
      整章被擠成一頁、其餘被裁掉、翻一頁就跳章（GH-49）。`check.js` 會確認每章最後一段都有某一頁顯示出來。沒有字的頁同理：空白頁在翻頁時
      直接跳過，只有圖的頁以圖的 element CFI 命名（issue #22）。
+     底部列的頁數（`PageCounter`）來自 `shared_page.js` 的 `pageInfo()`：章內第幾頁／共幾頁
+     與全書百分比。它用和跳過空白頁同一套「這頁有沒有東西」的判斷，不算空白頁——否則翻頁會
+     跳號。每章的計數會快取，`layOut()` 一律清掉快取（字級、頁框、修復都會移動分頁點）——新增
+     排版路徑時別繞過它。`check.js` 確認兩台裝置的頁數一致、每章從 1 數到最後一頁，以及換字級後
+     的頁數等於直接用新字級開書的頁數。
      改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，先在本機跑
      `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致（本機約 5 分鐘）。
      CI 的 `shared-page-check.yml` 也會在這些來源變動時跑它；但 `check.js` 把 `displaySettings`
@@ -119,6 +124,7 @@ supabase/
      `roomProtocolVersion` +1；舊版跟不上時，`minCompatibleRoomProtocol` 也要拉到新版本。
      **共享頁面的分頁點改變時也算**（`SharedPageStyle` 的規則、`shared_page.js` 的頁首或空白頁判斷）：
      commit 帶的是本機分頁下的頁名，分頁不同的舊版會顯示到別頁。版本 2 就是為了 GH-49 / GH-52 的分頁改變。
+     版本 3 是全房廣告時段（GH-63）：舊版跟得上（自己計數播廣告、廣告時段發起的翻頁被拒），所以 `minCompatibleRoomProtocol` 仍是 2。
      只新增可被忽略的欄位不用改。版號只能往上加。舊版（v1.0.5 以前）不送這兩個欄位，算成 0，
      與目前的版本相容。只提示、不把對方排除在共識之外。
 
@@ -192,11 +198,17 @@ supabase/
    - 不要動畫：不用 `CircularProgressIndicator`（改成「Loading...」之類的文字）、
      snackbar 用 `showPaperMessage()`、bottom sheet 用 `showPaperSheet()`。
    - 不要半透明與陰影；用 1.5px 的線分隔。
-   - 插頁式廣告（AdMob）是唯一的例外：閱讀時每翻 `AdConfig.pageTurnsPerAd`（20）頁、
-     以及 TXT 轉檔存檔前各播一則。翻頁的廣告只在頁面落定、`SyncStatus.idle` 時才顯示——
-     蓋在別人的翻頁請求上會讓全房等這則廣告；播放期間 reader 送出 `reader_ready: false`，
-     別人發起的翻頁不會詢問它，關掉後跟上房間的位置。只在 `isReady` 時才切換，
-     沒廣告時不要每頁花掉兩次 Presence 更新。廣告一律不能阻擋流程：沒載好就略過
+   - 插頁式廣告（AdMob）是唯一的例外：閱讀時每 `AdConfig.pageTurnsPerAd`（20）頁、
+     以及 TXT 轉檔存檔前各播一則。**翻頁廣告是全房的「廣告時段」，不是各裝置自己數**（GH-63）：
+     共享位置的 `seq` 是 20 的倍數那一頁（`PageSyncService.isAdBreakPage`）大家同時進入。
+     不要改回每台裝置自己計數——起算點、廣告有沒有載好都不同，會變成 A 播了 B 沒播。
+     廣告載好的人經 broadcast `ad_break` 佔住房間（每個 nudge 重送、liveness 過期，不放 Presence），
+     佔住期間它的 `PageSyncService` 自動以 `ad_break` 拒絕任何翻頁請求——所以播廣告時仍是
+     `reader_ready: true`，舊版 App 發起的翻頁也會被擋下。到了廣告頁，每個 reader 都用
+     `AdBreakCover` 蓋住新的一頁、不能翻頁，直到全房沒有人在看廣告；廣告沒載好（擋廣告的 DNS）
+     的人一樣要等，不能趁別人看廣告先讀下一頁。沒廣告的人會先蓋住 `defaultAdBreakSettle`（2 秒）
+     等別人的宣告到達，一個人讀時不等。自己的佔住最長 `defaultAdBreakLimit`，宣告遺失時別人在
+     liveness 後放行——任何新的佔住都要有這樣的出口。廣告本身不能阻擋流程：沒載好就不佔住
      （`InterstitialAds.show()` 立刻回 false）。廣告是半透明的 Activity，App 只進 `inactive`，
      不會被當成離開房間（`appActivityFor`）。翻頁與存檔各用自己的 ad unit
      （`AdConfig.pageTurnUnitId` / `txtSaveUnitId`），和 `AndroidManifest.xml` 的 App ID 屬於同一個

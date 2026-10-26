@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import 'package:flutter_epub_viewer/flutter_epub_viewer.dart';
 
+import '../models/page_info.dart';
 import '../models/shared_page.dart';
 import 'shared_page_style.dart';
 
@@ -95,6 +96,26 @@ class SharedPageRenderer {
         ),
       );
       return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Which page of its chapter is in view, and how far into the book. Null
+  /// when the viewer could not be asked.
+  static Future<PageInfo?> pageInfo(EpubController controller) async {
+    final webView = controller.webViewController;
+    if (webView == null) return null;
+    try {
+      return PageInfo.fromWire(
+        _decode(
+          await webView.evaluateJavascript(
+            source:
+                'JSON.stringify(window.cotimeSharedPage ? '
+                'window.cotimeSharedPage.pageInfo() : null)',
+          ),
+        ),
+      );
     } catch (_) {
       return null;
     }

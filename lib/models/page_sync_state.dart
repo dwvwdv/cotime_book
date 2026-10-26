@@ -270,31 +270,61 @@ class PageSyncState {
   /// Nobody can turn while this is not empty.
   final List<String> readersReconnecting;
 
+  /// Other readers whose ad is on screen. Nobody can turn while this is not
+  /// empty.
+  final List<String> readersInAd;
+
+  /// The room is in an ad break: the page it just reached stays covered, and
+  /// nobody turns, until every reader's ad is closed.
+  final bool adBreak;
+
   const PageSyncState({
     this.status = SyncStatus.idle,
     this.currentRequest,
     this.errorMessage,
     this.readersReconnecting = const [],
+    this.readersInAd = const [],
+    this.adBreak = false,
   });
 
   const PageSyncState.idle()
     : status = SyncStatus.idle,
       currentRequest = null,
       errorMessage = null,
-      readersReconnecting = const [];
+      readersReconnecting = const [],
+      readersInAd = const [],
+      adBreak = false;
 
   const PageSyncState.error(String message)
     : status = SyncStatus.idle,
       currentRequest = null,
       errorMessage = message,
-      readersReconnecting = const [];
+      readersReconnecting = const [],
+      readersInAd = const [],
+      adBreak = false;
 
   PageSyncState withReadersReconnecting(List<String> names) {
+    return withRoomHolds(
+      reconnecting: names,
+      inAd: readersInAd,
+      adBreak: adBreak,
+    );
+  }
+
+  /// Who and what the room is waiting on, kept by the sync service whatever
+  /// the turn in progress is doing.
+  PageSyncState withRoomHolds({
+    required List<String> reconnecting,
+    required List<String> inAd,
+    required bool adBreak,
+  }) {
     return PageSyncState(
       status: status,
       currentRequest: currentRequest,
       errorMessage: errorMessage,
-      readersReconnecting: List.unmodifiable(names),
+      readersReconnecting: List.unmodifiable(reconnecting),
+      readersInAd: List.unmodifiable(inAd),
+      adBreak: adBreak,
     );
   }
 
@@ -314,6 +344,8 @@ class PageSyncState {
           : currentRequest ?? this.currentRequest,
       errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
       readersReconnecting: readersReconnecting,
+      readersInAd: readersInAd,
+      adBreak: adBreak,
     );
   }
 }

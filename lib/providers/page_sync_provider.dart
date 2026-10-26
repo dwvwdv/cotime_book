@@ -20,10 +20,14 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
   void Function(PageTurnCommand command)? onExecuteTurn;
   void Function(SharedPosition position)? onPositionChanged;
   void Function(String requestId)? onTurnAbandoned;
+  bool Function(SharedPosition position)? onAdBreak;
+  void Function()? onAdHoldExpired;
 
   PageSyncNotifier() : super(const PageSyncState.idle());
 
   SharedPosition? get position => _service?.position;
+
+  bool get isHoldingForAd => _service?.isHoldingForAd ?? false;
 
   Future<void> initialize({
     required RealtimeService realtimeService,
@@ -46,6 +50,8 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     service.onExecuteTurn = (command) => onExecuteTurn?.call(command);
     service.onPositionChanged = (position) => onPositionChanged?.call(position);
     service.onTurnAbandoned = (requestId) => onTurnAbandoned?.call(requestId);
+    service.onAdBreak = (position) => onAdBreak?.call(position) ?? false;
+    service.onAdHoldExpired = () => onAdHoldExpired?.call();
 
     _subscription = service.stateStream.listen((syncState) {
       if (mounted && identical(_service, service)) state = syncState;
@@ -74,6 +80,8 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
   void abandonTurn(String requestId, {String reason = 'turn_failed'}) =>
       _service?.abandonTurn(requestId, reason: reason);
 
+  void endAdBreak() => _service?.endAdBreak();
+
   Future<void> stop({bool clearCallbacks = true}) async {
     _lifecycleGeneration++;
     try {
@@ -95,6 +103,8 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
       onExecuteTurn = null;
       onPositionChanged = null;
       onTurnAbandoned = null;
+      onAdBreak = null;
+      onAdHoldExpired = null;
     }
     if (mounted) state = const PageSyncState.idle();
   }
@@ -109,6 +119,8 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     onExecuteTurn = null;
     onPositionChanged = null;
     onTurnAbandoned = null;
+    onAdBreak = null;
+    onAdHoldExpired = null;
     super.dispose();
   }
 }

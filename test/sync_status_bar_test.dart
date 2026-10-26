@@ -114,6 +114,15 @@ void main() {
         'Reader user-c with a long name',
         'Reader user-d with a long name',
       ]),
+      const PageSyncState.idle().withRoomHolds(
+        reconnecting: [],
+        inAd: [
+          'Reader user-b with a long name',
+          'Reader user-c with a long name',
+          'Reader user-d with a long name',
+        ],
+        adBreak: true,
+      ),
       const PageSyncState.error(
         'Waiting for Reader user-b with a long name, Reader user-c with a '
         'long name and Reader user-d with a long name to become ready',
@@ -158,6 +167,75 @@ void main() {
 
     expect(find.text('Waiting for Bob to reconnect...'), findsOneWidget);
     expect(find.text('1 readers ready'), findsNothing);
+  });
+
+  testWidgets('an ad break names who the room is waiting for', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SyncStatusBar(
+          syncState: const PageSyncState.idle().withRoomHolds(
+            reconnecting: [],
+            inAd: ['Alice'],
+            adBreak: true,
+          ),
+          onlineUsers: [readyUser('user-a')],
+        ),
+      ),
+    ));
+
+    expect(find.text('Ad break: waiting for Alice...'), findsOneWidget);
+    expect(find.text('Synced'), findsNothing);
+  });
+
+  testWidgets('the bar opens the member list', (tester) async {
+    var opened = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SyncStatusBar(
+          syncState: const PageSyncState.idle(),
+          onlineUsers: [readyUser('user-a')],
+          onShowMembers: () => opened++,
+        ),
+      ),
+    ));
+
+    await tester.tap(find.byIcon(Icons.people_outline));
+    expect(opened, 1);
+    await tester.tap(find.text('1 readers ready'));
+    expect(opened, 2);
+  });
+
+  testWidgets('a request waiting on this reader is answered, not taken for '
+      'the member list', (tester) async {
+    var opened = 0;
+    var confirmed = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SyncStatusBar(
+          syncState: PageSyncState(
+            status: SyncStatus.confirming,
+            currentRequest: PageTurnRequest(
+              requestId: 'request-1',
+              requestedByUserId: 'user-a',
+              requestedByNickname: 'Alice',
+              direction: PageTurnDirection.next,
+              fromSeq: 0,
+              requestedAt: DateTime.utc(2026),
+              confirmedUserIds: const {'user-a'},
+              requiredUserIds: const {'user-a', 'user-b'},
+            ),
+          ),
+          onlineUsers: [readyUser('user-a'), readyUser('user-b')],
+          onConfirm: () => confirmed++,
+          onShowMembers: () => opened++,
+        ),
+      ),
+    ));
+
+    await tester.tap(find.text('Alice wants to go to next page'));
+    await tester.tap(find.text('Turn'));
+    expect(confirmed, 1);
+    expect(opened, 0);
   });
 
   testWidgets('a request waiting on this reader can be answered from the bar',

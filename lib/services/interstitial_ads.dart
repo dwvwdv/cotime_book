@@ -168,25 +168,3 @@ class AdMobInterstitialAds implements InterstitialAds {
     _loadedAt = null;
   }
 }
-
-/// Counts the room's page moves this device sees, for an ad every
-/// [AdConfig.pageTurnsPerAd] of them.
-///
-/// Kept for the whole app, not per room or per visit to the reader, so
-/// leaving and coming back does not start the count over.
-class PageTurnAdCounter {
-  final int every;
-  int _moves = 0;
-
-  PageTurnAdCounter({this.every = AdConfig.pageTurnsPerAd});
-
-  int get moves => _moves;
-
-  /// Once due, an ad stays due until one is actually shown: one that was not
-  /// ready is tried again on a later page.
-  bool get isDue => _moves >= every;
-
-  void recordMove() => _moves++;
-
-  void adShown() => _moves = 0;
-}

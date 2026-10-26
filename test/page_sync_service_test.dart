@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cotime_book/config/ad_config.dart';
 import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/models/page_sync_state.dart';
 import 'package:cotime_book/services/page_sync_service.dart';
@@ -774,6 +775,421 @@ void main() {
     });
   });
 
+  group('ad breaks', () {
+    /// Turns [pages] pages, each asked by [requester] and agreed to by
+    /// everyone else in [room].
+    Future<void> turnPages(
+      FakeRoom room,
+      FakeReader requester,
+      int pages,
+    ) async {
+      for (var i = 0; i < pages; i++) {
+        expect(
+          await requester.service.requestPageTurn(
+            direction: PageTurnDirection.next,
+          ),
+          isTrue,
+          reason: requester.service.currentState.errorMessage,
+        );
+        await flush();
+        for (final reader in room.readers.values) {
+          if (reader != requester &&
+              reader.service.currentState.status == SyncStatus.confirming) {
+            await reader.service.confirmPageTurn();
+          }
+        }
+        await flush();
+      }
+    }
+
+    test('every reader reaches the ad break on the same shared page', () async {
+      // Regression: each device counted the moves it had seen since the app
+      // started, so a reader who opened the book later, or whose ad had not
+      // loaded once, got theirs on another page — or not at all while the
+      // others watched one.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', adBreakEvery: 3, showsAd: true);
+      final bob = room.join('bob', 'Bob', adBreakEvery: 3, showsAd: true);
+      addTearDown(room.dispose);
+      await flush();
+
+      await turnPages(room, alice, 2);
+      expect(alice.adBreaks, isEmpty);
+      expect(bob.adBreaks, isEmpty);
+
+      // Carol opens the book two pages in.
+      final carol = room.join('carol', 'Carol', adBreakEvery: 3, showsAd: true);
+      await flush();
+      await turnPages(room, bob, 1);
+
+      expect(alice.service.position.seq, 3);
+      for (final reader in [alice, bob, carol]) {
+        expect(reader.adBreaks.map((position) => position.seq), [
+          3,
+        ], reason: reader.nickname);
+      }
+    });
+
+    test('nobody turns until every ad is closed, a reader whose ad never '
+        'loaded included', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', adBreakEvery: 2, showsAd: true);
+      // An ad blocker: no ad ever loads.
+      final bob = room.join('bob', 'Bob', adBreakEvery: 2);
+      addTearDown(room.dispose);
+      await flush();
+
+      await turnPages(room, bob, 2);
+      expect(bob.adBreaks.single.seq, 2);
+
+      // Bob's new page stays covered while Alice watches her ad.
+      expect(bob.service.currentState.adBreak, isTrue);
+      expect(bob.service.currentState.readersInAd, ['Alice']);
+      expect(
+        await bob.service.requestPageTurn(direction: PageTurnDirection.next),
+        isFalse,
+      );
+      expect(
+        bob.service.currentState.errorMessage,
+        'Waiting for Alice to finish an ad',
+      );
+      expect(alice.service.currentState.adBreak, isTrue);
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isFalse,
+      );
+      await flush();
+      expect(alice.service.position.seq, 2);
+
+      alice.service.endAdBreak();
+      await flush();
+      expect(alice.service.currentState.adBreak, isFalse);
+      expect(bob.service.currentState.adBreak, isFalse);
+      expect(bob.service.currentState.readersInAd, isEmpty);
+
+      await turnPages(room, bob, 1);
+      expect(alice.service.position.seq, 3);
+      expect(bob.service.position.seq, 3);
+    });
+
+    test('a reader under an ad turns down a request that reached it', () async {
+      // Bob never heard that Alice's ad is up (or runs an app that knows
+      // nothing of ad breaks): Alice's app answers for her.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', adBreakEvery: 2, showsAd: true);
+      final bob = room.join('bob', 'Bob', adBreakEvery: 2);
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, bob, 1);
+      room.dropEvents.add(PageSyncService.adBreakEvent);
+      await turnPages(room, bob, 1);
+      expect(bob.service.currentState.adBreak, isFalse);
+      expect(alice.service.currentState.adBreak, isTrue);
+
+      expect(
+        await bob.service.requestPageTurn(direction: PageTurnDirection.next),
+        isTrue,
+      );
+      await flush();
+
+      expect(alice.service.currentState.status, SyncStatus.idle);
+      expect(bob.service.currentState.status, SyncStatus.idle);
+      expect(
+        bob.service.currentState.errorMessage,
+        describeCancelReason('ad_break'),
+      );
+      expect(alice.service.position.seq, 2);
+      expect(bob.service.position.seq, 2);
+    });
+
+    test('a reader without an ad keeps the page covered for a moment to hear '
+        'about the others\' ads', () async {
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        adBreakEvery: 1,
+        adBreakSettle: const Duration(milliseconds: 40),
+      );
+      room.join(
+        'bob',
+        'Bob',
+        adBreakEvery: 1,
+        adBreakSettle: const Duration(milliseconds: 40),
+      );
+      addTearDown(room.dispose);
+      await flush();
+
+      await turnPages(room, alice, 1);
+      // Nobody has an ad, but Alice cannot know that yet.
+      expect(alice.service.currentState.adBreak, isTrue);
+      expect(alice.service.currentState.readersInAd, isEmpty);
+
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await flush();
+      expect(alice.service.currentState.adBreak, isFalse);
+      await turnPages(room, alice, 1);
+      expect(alice.service.position.seq, 2);
+    });
+
+    test('a reader reading alone without an ad is not held up', () async {
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        adBreakEvery: 1,
+        adBreakSettle: const Duration(minutes: 5),
+      );
+      addTearDown(room.dispose);
+      await flush();
+
+      await turnPages(room, alice, 2);
+      expect(alice.adBreaks.length, 2);
+      expect(alice.service.currentState.adBreak, isFalse);
+      expect(alice.service.position.seq, 2);
+    });
+
+    test('a request whose answer was lost is turned down again when it is '
+        'repeated', () async {
+      // Bob never hears of Alice's ad, and her first "no" is lost: his
+      // repeat must still get one, not wait out the whole request timeout.
+      final room = FakeRoom();
+      room.join('alice', 'Alice', adBreakEvery: 2, showsAd: true);
+      final bob = room.join(
+        'bob',
+        'Bob',
+        adBreakEvery: 2,
+        nudgeInterval: const Duration(milliseconds: 20),
+      );
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, bob, 1);
+      room.dropEvents.add(PageSyncService.adBreakEvent);
+      await turnPages(room, bob, 1);
+
+      room.dropEvents.add(PageSyncService.voteEvent);
+      await bob.service.requestPageTurn(direction: PageTurnDirection.next);
+      await flush();
+      expect(bob.service.currentState.status, SyncStatus.requesting);
+
+      room.dropEvents.remove(PageSyncService.voteEvent);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await flush();
+      expect(bob.service.currentState.status, SyncStatus.idle);
+      expect(
+        bob.service.currentState.errorMessage,
+        describeCancelReason('ad_break'),
+      );
+    });
+
+    test(
+      'an ad outlasting the settle does not keep waking the reader',
+      () async {
+        // Regression: the settle deadline, once past, stayed among the
+        // wake-ups while an ad was up, and the timer fired back to back.
+        var clockReads = 0;
+        DateTime countingClock() {
+          clockReads++;
+          return DateTime.now();
+        }
+
+        final room = FakeRoom();
+        room.join('alice', 'Alice', adBreakEvery: 1, showsAd: true);
+        final bob = room.join(
+          'bob',
+          'Bob',
+          adBreakEvery: 1,
+          adBreakSettle: const Duration(milliseconds: 10),
+          clock: countingClock,
+        );
+        addTearDown(room.dispose);
+        await flush();
+        await turnPages(room, bob, 1);
+        expect(bob.service.currentState.readersInAd, ['Alice']);
+
+        clockReads = 0;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(clockReads, lessThan(50));
+        expect(bob.service.currentState.adBreak, isTrue);
+      },
+    );
+
+    test('a hold that stops being announced expires', () async {
+      // The end of Alice's ad was lost: Bob lets go once he stops hearing it.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', adBreakEvery: 1, showsAd: true);
+      final bob = room.join(
+        'bob',
+        'Bob',
+        adBreakEvery: 1,
+        followerLiveness: const Duration(milliseconds: 40),
+      );
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, bob, 1);
+      expect(bob.service.currentState.readersInAd, ['Alice']);
+
+      room.dropEvents.add(PageSyncService.adBreakEvent);
+      alice.service.endAdBreak();
+      await flush();
+      expect(bob.service.currentState.readersInAd, ['Alice']);
+
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await flush();
+      expect(bob.service.currentState.adBreak, isFalse);
+    });
+
+    test('a hold is announced again while the ad is up', () async {
+      final room = FakeRoom();
+      room.join(
+        'alice',
+        'Alice',
+        adBreakEvery: 1,
+        showsAd: true,
+        nudgeInterval: const Duration(milliseconds: 20),
+      );
+      final bob = room.join(
+        'bob',
+        'Bob',
+        adBreakEvery: 1,
+        followerLiveness: const Duration(milliseconds: 50),
+      );
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, bob, 1);
+
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      await flush();
+      expect(bob.service.currentState.readersInAd, ['Alice']);
+    });
+
+    test('an ad that never reports back stops holding the room', () async {
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        adBreakEvery: 1,
+        showsAd: true,
+        adBreakLimit: const Duration(milliseconds: 40),
+      );
+      final bob = room.join('bob', 'Bob', adBreakEvery: 1);
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, bob, 1);
+      expect(bob.service.currentState.adBreak, isTrue);
+
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await flush();
+      expect(alice.service.currentState.adBreak, isFalse);
+      expect(bob.service.currentState.adBreak, isFalse);
+      // Told, so the reader stops answering for an ad that may still be up,
+      // and does not show one later outside any break.
+      expect(alice.service.isHoldingForAd, isFalse);
+      expect(alice.holdsExpired, 1);
+    });
+
+    test('a closed ad is not an expired hold', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', adBreakEvery: 1, showsAd: true);
+      room.join('bob', 'Bob', adBreakEvery: 1);
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, alice, 1);
+      expect(alice.service.isHoldingForAd, isTrue);
+
+      alice.service.endAdBreak();
+      expect(alice.service.isHoldingForAd, isFalse);
+      expect(alice.holdsExpired, 0);
+    });
+
+    test('catching up on a page from an announcement starts no break', () async {
+      // Regression: a reader back after missing the commit reached the break
+      // page late, showed an ad, and covered the page everyone else had been
+      // reading since their own break ended.
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        adBreakEvery: 2,
+        positionAnnounceInterval: const Duration(milliseconds: 20),
+      );
+      final bob = room.join('bob', 'Bob', adBreakEvery: 2, showsAd: true);
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, alice, 1);
+
+      room.dropEvents.add(PageSyncService.commitEvent);
+      await turnPages(room, alice, 1);
+      expect(alice.service.position.seq, 2);
+      expect(bob.service.position.seq, 1);
+      room.dropEvents.clear();
+
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await flush();
+      expect(bob.service.position, alice.service.position);
+      expect(bob.adBreaks, isEmpty);
+      expect(alice.service.currentState.adBreak, isFalse);
+    });
+
+    test('leaving the book under an ad releases the room', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', adBreakEvery: 1, showsAd: true);
+      final bob = room.join('bob', 'Bob', adBreakEvery: 1);
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, bob, 1);
+      expect(bob.service.currentState.adBreak, isTrue);
+
+      await alice.service.leave();
+      room.leave('alice');
+      await flush();
+      expect(bob.service.currentState.adBreak, isFalse);
+      await turnPages(room, bob, 1);
+      expect(bob.service.position.seq, 2);
+    });
+
+    test('the same page arriving twice is one ad break', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', adBreakEvery: 2);
+      addTearDown(room.dispose);
+      await flush();
+      await turnPages(room, alice, 2);
+      final page = alice.service.position;
+
+      // A second commit for the same page, from a race between two quorums.
+      room.inject(PageSyncService.commitEvent, {
+        'request_id': 'other',
+        'user_id': 'zed',
+        'epoch': page.epoch,
+        'seq': page.seq,
+        'cfi': '${page.cfi}~',
+      });
+      await flush();
+      expect(alice.service.position.cfi, '${page.cfi}~');
+      expect(alice.adBreaks.length, 1);
+    });
+
+    test('ad breaks fall on every twentieth shared page', () {
+      bool isBreak(int seq) => PageSyncService.isAdBreakPage(
+        SharedPosition(epoch: 1, seq: seq, cfi: 'c'),
+        every: AdConfig.pageTurnsPerAd,
+      );
+      expect(AdConfig.pageTurnsPerAd, 20);
+      expect(isBreak(0), isFalse);
+      expect(isBreak(19), isFalse);
+      expect(isBreak(20), isTrue);
+      expect(isBreak(21), isFalse);
+      expect(isBreak(40), isTrue);
+      expect(
+        PageSyncService.isAdBreakPage(
+          const SharedPosition(seq: 20, cfi: 'c'),
+          every: 0,
+        ),
+        isFalse,
+      );
+    });
+  });
+
   test('cancel reasons are never shown as protocol codes', () {
     for (final reason in [
       'timeout',
@@ -783,6 +1199,7 @@ void main() {
       'turn_failed',
       'requester_busy',
       'reader_disconnected',
+      'ad_break',
       'declined_by_Bob',
       'something_new',
     ]) {
@@ -844,6 +1261,11 @@ class FakeRoom {
     Duration positionAnnounceInterval = const Duration(minutes: 5),
     Duration reconnectGrace = const Duration(minutes: 1),
     int Function()? mintEpoch,
+    int adBreakEvery = 0,
+    bool showsAd = false,
+    Duration adBreakSettle = Duration.zero,
+    Duration adBreakLimit = const Duration(minutes: 5),
+    DateTime Function()? clock,
   }) {
     if (trackPresence) {
       _presence[userId] = {
@@ -868,6 +1290,10 @@ class FakeRoom {
       mintEpoch: mintEpoch ?? () => 1,
       positionAnnounceInterval: positionAnnounceInterval,
       reconnectGrace: reconnectGrace,
+      adBreakEvery: adBreakEvery,
+      adBreakSettle: adBreakSettle,
+      adBreakLimit: adBreakLimit,
+      clock: clock,
     );
     final reader = FakeReader(userId, nickname, service, transport);
     var localPage = 0;
@@ -886,6 +1312,11 @@ class FakeRoom {
     };
     service.onPositionChanged = reader.displayed.add;
     service.onTurnAbandoned = reader.abandoned.add;
+    service.onAdBreak = (position) {
+      reader.adBreaks.add(position);
+      return showsAd;
+    };
+    service.onAdHoldExpired = () => reader.holdsExpired++;
     service.setViewerReady(viewerReady && isReading);
     readers[userId] = reader;
     service.initialize();
@@ -993,6 +1424,10 @@ class FakeReader {
   final FakeTransport transport;
   final List<SharedPosition> displayed = [];
   final List<String> abandoned = [];
+
+  /// Ad breaks this reader reached, whether or not it had an ad to show.
+  final List<SharedPosition> adBreaks = [];
+  int holdsExpired = 0;
 
   FakeReader(this.userId, this.nickname, this.service, this.transport);
 }
