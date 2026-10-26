@@ -532,6 +532,8 @@
 
   // Lays the book out on [page] even when epub.js thinks it already is.
   async function layOut(page) {
+    // Every page break may move: a new text size, a new frame, a repair.
+    countedKey = null;
     var manager = rendition.manager;
     if (manager) manager._stageSize = undefined;
     // Numbers, not "100vw": a window resize (keyboard, rotation) must not
@@ -653,8 +655,12 @@
       if (!doc || !doc.body) return null;
       var delta = layout.delta;
       var count = Math.max(1, Math.round(inView.view.width() / delta));
-      var key = [inView.view.section.index, applies, delta, layout.width,
-        count].join(':');
+      // The counts change with the layout. layOut() drops them too; the key
+      // also catches a section that reflowed on its own (a picture that
+      // finished loading).
+      var key = [inView.view.section.index, applies,
+        appliedPage && appliedPage.fontSize, delta, layout.width, count]
+        .join(':');
       if (key !== countedKey) {
         counted = pagesShown(doc, count, delta, layout.width);
         countedKey = key;

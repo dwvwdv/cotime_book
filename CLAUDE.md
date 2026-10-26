@@ -107,7 +107,9 @@ supabase/
      直接跳過，只有圖的頁以圖的 element CFI 命名（issue #22）。
      底部列的頁數（`PageCounter`）來自 `shared_page.js` 的 `pageInfo()`：章內第幾頁／共幾頁
      與全書百分比。它用和跳過空白頁同一套「這頁有沒有東西」的判斷，不算空白頁——否則翻頁會
-     跳號。`check.js` 確認兩台裝置的頁數一致、每章從 1 數到最後一頁。
+     跳號。每章的計數會快取，`layOut()` 一律清掉快取（字級、頁框、修復都會移動分頁點）——新增
+     排版路徑時別繞過它。`check.js` 確認兩台裝置的頁數一致、每章從 1 數到最後一頁，以及換字級後
+     的頁數等於直接用新字級開書的頁數。
      改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，先在本機跑
      `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致（本機約 5 分鐘）。
      CI 的 `shared-page-check.yml` 也會在這些來源變動時跑它；但 `check.js` 把 `displaySettings`

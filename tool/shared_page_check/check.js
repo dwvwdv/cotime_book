@@ -102,7 +102,7 @@ function rulesFor(device) {
   return { ...rules, 'body, body *': text };
 }
 
-async function openBook(browser, device, shared) {
+async function openBook(browser, device, shared, fontSize = page.fontSize) {
   const context = await browser.newContext({
     viewport: device.viewport,
     deviceScaleFactor: device.deviceScaleFactor,
@@ -140,6 +140,7 @@ async function openBook(browser, device, shared) {
       },
       {
         ...page,
+        fontSize,
         left: Math.floor((device.viewport.width - page.width) / 2),
         top: Math.floor((device.viewport.height - page.height) / 2),
         scale: scaleFor(device.viewport),
@@ -320,6 +321,37 @@ async function repairsLayout(browser, device) {
   return result;
 }
 
+/// The page counter after the room's text size changes: the chapter's page
+/// count has to be worked out again, not kept from the old size. Compared
+/// with a reader who opened the book at the new size.
+async function recountsOnNewSize(browser, device, turns) {
+  const larger = Math.round(page.fontSize * 1.5);
+  const { context, tab } = await openBook(browser, device, true);
+  // Into the body of the book, past a cover or a title page.
+  for (let i = 0; i < turns; i++) await turn(tab, 'next');
+  await tab.waitForTimeout(60);
+  const before = await tab.evaluate(() => cotimeSharedPage.pageInfo());
+  const cfi = await tab.evaluate(() => rendition.location.start.cfi);
+  const after = await tab.evaluate(async ({ size, cfi }) => {
+    await cotimeSharedPage.apply({ ...window.sharedPage, fontSize: size });
+    // epub.js shows the page again by itself after the resize; a display()
+    // straight after lands on the wrong page here (GH-65). The
+    // app displays the room's page a platform round trip later.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    await rendition.display(cfi);
+    return cotimeSharedPage.pageInfo();
+  }, { size: larger, cfi });
+  await context.close();
+
+  const fresh = await openBook(browser, device, true, larger);
+  const opened = await fresh.tab.evaluate(async (cfi) => {
+    await rendition.display(cfi);
+    return cotimeSharedPage.pageInfo();
+  }, cfi);
+  await fresh.context.close();
+  return { before, after, opened };
+}
+
 /// How many of [starts] a follower on [device] does not land on.
 async function missedCommits(browser, device, starts) {
   const { context, tab } = await openBook(browser, device, true);
@@ -420,6 +452,15 @@ async function missedCommits(browser, device, starts) {
         console.log(`frame check : ${repair.broken.join(', ') || 'nothing found'} ` +
           `-> ${repair.after.join(', ') || 'laid out again'}`);
         if (!repaired) failed = true;
+        const resized = await recountsOnNewSize(browser, devices.phone, 3);
+        const numbered = (info) => (info ? `${info.page}/${info.pages}` : 'none');
+        const recounted = resized.before && resized.after && resized.opened &&
+          resized.after.section === resized.opened.section &&
+          resized.after.page === resized.opened.page &&
+          resized.after.pages === resized.opened.pages;
+        console.log(`text size   : ${numbered(resized.before)} -> ` +
+          `${numbered(resized.after)}, opened at that size ${numbered(resized.opened)}`);
+        if (!recounted) failed = true;
         const { missed, of } = await missedCommits(browser, devices.tablet, a);
         console.log(`follower    : landed on ${of - missed}/${of} reported pages`);
         if (missed > 0) failed = true;
