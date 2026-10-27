@@ -31,20 +31,22 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
     _initAuth();
     final updates = ref.read(appUpdateServiceProvider);
     if (updates != null) {
-      unawaited(updates.checkOnStart());
-      AppRouter.router.routerDelegate.addListener(_onMaybeIdle);
+      _stopUpdateChecks = startUpdateChecks(AppRouter.router, updates);
     }
   }
+
+  VoidCallback? _stopUpdateChecks;
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    AppRouter.router.routerDelegate.removeListener(_onMaybeIdle);
+    _stopUpdateChecks?.call();
     super.dispose();
   }
 
   // An update held back by a room runs once the app is back Home with no
-  // room; leaving clears the room and goes Home in either order.
+  // room; leaving clears the room and goes Home in either order (the router
+  // side is in startUpdateChecks).
   void _onMaybeIdle() {
     final updates = ref.read(appUpdateServiceProvider);
     if (updates != null) unawaited(updates.onIdle());
