@@ -14,6 +14,8 @@
 // viewport settings of Android's WebView, where a page scale without a width
 // used to put the book on a 980px layout viewport (GH-48). A layout the
 // frame no longer matches must be found and laid out again (GH-49).
+// A reading theme's colours must win over a book's own white page and black
+// text, and must not move a page break.
 //
 //   flutter pub get
 //   node tool/shared_page_check/check.js        (from the repo root)
@@ -54,6 +56,15 @@ execFileSync('flutter', ['test', 'tool/shared_page_check/make_txt_book_test.dart
 });
 
 const rules = JSON.parse(fs.readFileSync(path.join(work, 'rules.json'), 'utf8'));
+// ReadingPreferences' text colour and colour rules for each reading theme.
+const themes = JSON.parse(fs.readFileSync(path.join(work, 'themes.json'), 'utf8'));
+// A book that colours itself, as Project Gutenberg's stylesheet does with
+// `body.tei.tei-text { color: black; background-color: white }`: more
+// specific than the viewer's own `body { color }`, so it kept Sepia's and
+// Night's pages white.
+const bookColours =
+  'html body { color: black; background-color: white }' +
+  'html body p, html body div { color: #000; background-color: #fff }';
 // `pictures`: the book has a picture-only page, which must be found.
 const books = {
   'mixed EPUB': {
@@ -102,7 +113,8 @@ function rulesFor(device) {
   return { ...rules, 'body, body *': text };
 }
 
-async function openBook(browser, device, shared, fontSize = page.fontSize) {
+async function openBook(browser, device, shared, fontSize = page.fontSize,
+  { theme = themes.day, bookCss = '' } = {}) {
   const context = await browser.newContext({
     viewport: device.viewport,
     deviceScaleFactor: device.deviceScaleFactor,
@@ -117,19 +129,22 @@ async function openBook(browser, device, shared, fontSize = page.fontSize) {
   });
   await tab.goto('file://' + viewerPage());
   await tab.evaluate(
-    ({ book, sysFont, fontSize }) => {
+    ({ book, sysFont, fontSize, theme, bookCss }) => {
       // The arguments ReaderScreen's display settings produce.
       loadBook(book, '', null, 'continuous', 'paginated', 'none', false, false,
-        'ltr', false, 'null', '#000000', String(fontSize), true, false, null);
+        'ltr', false, 'null', theme.ink, String(fontSize), true, false, theme.rules);
       rendition.hooks.content.register((contents) => {
         const style = contents.document.createElement('style');
-        style.textContent = `html{font-family:${sysFont}}`;
+        style.textContent = `html{font-family:${sysFont}}${bookCss}`;
         contents.document.head.prepend(style);
       });
     },
-    { book, sysFont: device.sysFont, fontSize: device.loadFontSize },
+    { book, sysFont: device.sysFont, fontSize: device.loadFontSize, theme, bookCss },
   );
   await tab.waitForFunction(() => rendition.location && rendition.location.start);
+  // ReadingPreferences.applyTheme(), once the chapters are loaded: loadBook()
+  // itself drops the rules it was given.
+  await tab.evaluate((theme) => updateTheme('', theme.ink, theme.rules), theme);
   if (shared) {
     await tab.addScriptTag({ path: script });
     await tab.evaluate(
@@ -222,6 +237,29 @@ function endsShown() {
     }
   }
   return seen;
+}
+
+/// Where the page in view is not in the theme's colours: a box with a
+/// background of its own, which hides the colour the app paints behind the
+/// WebView, or text not in [ink].
+function colourProblems(ink) {
+  const hex = parseInt(ink.slice(1), 16);
+  const inkRgb = `rgb(${hex >> 16}, ${(hex >> 8) & 255}, ${hex & 255})`;
+  const problems = [];
+  for (const iframe of document.querySelectorAll('#viewer iframe')) {
+    const doc = iframe.contentDocument;
+    if (!doc || !doc.body) continue;
+    for (const el of [doc.documentElement, doc.body, ...doc.body.querySelectorAll('*')]) {
+      const style = getComputedStyle(el);
+      const name = el.id ? `${el.localName}#${el.id}` : el.localName;
+      if (style.backgroundColor !== 'rgba(0, 0, 0, 0)') {
+        problems.push(`${name} background ${style.backgroundColor}`);
+      }
+      const hasText = [...el.childNodes].some((n) => n.nodeType === 3 && n.data.trim());
+      if (hasText && style.color !== inkRgb) problems.push(`${name} text ${style.color}`);
+    }
+  }
+  return problems;
 }
 
 /// Turns one page; resolves once the viewer has reported where it is.
@@ -352,6 +390,29 @@ async function recountsOnNewSize(browser, device, turns) {
   return { before, after, opened };
 }
 
+/// Every page in the Night theme of a book that colours itself white and
+/// black: the problems colourProblems() finds, and where each page starts,
+/// which must be where it starts in Paper — colours never move a line.
+async function themedPages(browser, device, turns) {
+  const theme = themes.night;
+  const { context, tab } = await openBook(browser, device, true, page.fontSize,
+    { theme, bookCss: bookColours });
+  const starts = [];
+  const problems = [];
+  for (let i = 0; i < turns; i++) {
+    await tab.waitForTimeout(60);
+    const cfi = await tab.evaluate(() => rendition.location.start.cfi);
+    if (starts.length > 0 && cfi === starts[starts.length - 1]) break;
+    starts.push(cfi);
+    for (const problem of await tab.evaluate(colourProblems, theme.ink)) {
+      problems.push(`page ${i}: ${problem}`);
+    }
+    if (!(await turn(tab, 'next'))) break;
+  }
+  await context.close();
+  return { starts, problems };
+}
+
 /// How many of [starts] a follower on [device] does not land on.
 async function missedCommits(browser, device, starts) {
   const { context, tab } = await openBook(browser, device, true);
@@ -461,6 +522,13 @@ async function missedCommits(browser, device, starts) {
         console.log(`text size   : ${numbered(resized.before)} -> ` +
           `${numbered(resized.after)}, opened at that size ${numbered(resized.opened)}`);
         if (!recounted) failed = true;
+        const night = await themedPages(browser, devices.phone, turns);
+        const unmoved = night.starts.length === a.length &&
+          night.starts.every((cfi, i) => cfi === a[i]);
+        console.log(`night theme : ${night.problems.length} colour problems, ` +
+          `${unmoved ? 'the same pages' : 'different pages'}`);
+        if (night.problems.length > 0) console.log(`  first: ${night.problems[0]}`);
+        if (night.problems.length > 0 || !unmoved) failed = true;
         const { missed, of } = await missedCommits(browser, devices.tablet, a);
         console.log(`follower    : landed on ${of - missed}/${of} reported pages`);
         if (missed > 0) failed = true;
