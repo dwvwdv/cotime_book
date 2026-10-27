@@ -1,7 +1,7 @@
 name: cotime_book
 description: 頁間（CoTime Book）- 遠程同步看書工具
 publish_to: 'none'
-version: 1.0.18+22
+version: 1.0.20+24
 
 environment:
   sdk: ^3.8.0

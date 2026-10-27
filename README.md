@@ -99,6 +99,20 @@ nothing.
 The Storage bucket `cotime-book-library`, its `library_catalog` view and the
 `category` column are what apps before 1.0.12 read; current apps do not use them.
 
+### Announcements
+
+The home screen's **News** button lists the rows of `cotime_book.announcements`
+(**Table Editor**), newest first. Add a row to post release notes; no app
+release is needed.
+
+| Column | Example | Notes |
+|--------|---------|-------|
+| `title` | `v1.0.18 更新說明` | Required |
+| `content` | `新功能\n- 首頁新增 News` | Plain text; line breaks are kept |
+| `published_at` | `2026-10-27 09:00+08` | Defaults to now. A future time keeps the row hidden until then |
+
+App users can only read rows whose `published_at` has passed.
+
 ### Direct book transfer (TURN)
 
 Books a member shares from their device go device to device over WebRTC; the

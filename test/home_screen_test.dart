@@ -1,4 +1,5 @@
 import 'package:cotime_book/models/recent_room.dart';
+import 'package:cotime_book/providers/announcement_provider.dart';
 import 'package:cotime_book/providers/auth_provider.dart';
 import 'package:cotime_book/providers/local_store_provider.dart';
 import 'package:cotime_book/providers/room_provider.dart';
@@ -13,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'announcement_test.dart' show FakeAnnouncements, announcement;
 import 'room_provider_test.dart' show FakeRoomService, testRoom;
 
 class _SignedInAuth extends AuthNotifier {
@@ -24,6 +26,7 @@ class _SignedInAuth extends AuthNotifier {
 void main() {
   late LocalStore store;
   late FakeRoomService rooms;
+  late FakeAnnouncements announcements;
   late ProviderContainer container;
   late List<String> visitedLobbies;
 
@@ -31,6 +34,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     store = LocalStore(await SharedPreferences.getInstance());
     rooms = FakeRoomService();
+    announcements = FakeAnnouncements();
     visitedLobbies = [];
   });
 
@@ -40,6 +44,7 @@ void main() {
         localStoreProvider.overrideWithValue(store),
         roomServiceProvider.overrideWithValue(rooms),
         authProvider.overrideWith((ref) => _SignedInAuth(store)),
+        announcementServiceProvider.overrideWithValue(announcements),
       ],
     );
     addTearDown(container.dispose);
@@ -86,6 +91,24 @@ void main() {
     expect(find.bySemanticsLabel('頁間'), findsOneWidget);
     expect(find.text('CoTime Book'), findsOneWidget);
     semantics.dispose();
+  });
+
+  testWidgets('News on the home screen opens the announcements', (
+    tester,
+  ) async {
+    announcements.results.add([
+      announcement('v1.0.18', content: 'News on the home screen'),
+    ]);
+    await pumpHome(tester);
+    // Nothing is fetched until it is opened.
+    expect(announcements.calls, 0);
+
+    await tester.tap(find.text('News'));
+    await tester.pumpAndSettle();
+
+    expect(announcements.calls, 1);
+    expect(find.text('v1.0.18'), findsOneWidget);
+    expect(find.text('News on the home screen'), findsOneWidget);
   });
 
   testWidgets('the nickname from last time is already filled in', (
