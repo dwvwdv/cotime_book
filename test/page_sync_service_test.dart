@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:cotime_book/config/ad_config.dart';
 import 'package:cotime_book/config/app_constants.dart';
+import 'package:cotime_book/models/page_info.dart';
 import 'package:cotime_book/models/page_sync_state.dart';
 import 'package:cotime_book/services/page_sync_service.dart';
+import 'package:cotime_book/services/presence_merge.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -775,6 +777,362 @@ void main() {
     });
   });
 
+  group('jumping to a page', () {
+    const label = PageInfo(page: 5, pages: 12, progress: 0.45);
+
+    test('the room goes to the page picked once everyone agrees', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob', layout: 'tablet');
+      addTearDown(room.dispose);
+      await flush();
+
+      expect(
+        await alice.service.requestJump(
+          targetCfi: 'epubcfi(/6/14!/4/2/1:0)',
+          label: label,
+        ),
+        isTrue,
+      );
+      await flush();
+
+      // Nobody moves on a request: Bob is asked, and told where to.
+      expect(bob.displayed, isEmpty);
+      final asked = bob.service.currentState;
+      expect(asked.status, SyncStatus.confirming);
+      expect(asked.currentRequest!.isJump, isTrue);
+      expect(asked.currentRequest!.targetCfi, 'epubcfi(/6/14!/4/2/1:0)');
+      expect(asked.currentRequest!.targetLabel, label);
+
+      await bob.service.confirmPageTurn();
+      await flush();
+
+      const landed = SharedPosition(
+        epoch: 1,
+        seq: 1,
+        cfi: 'epubcfi(/6/14!/4/2/1:0)',
+      );
+      expect(alice.service.position, landed);
+      expect(bob.service.position, landed);
+      expect(bob.displayed, [landed]);
+      expect(alice.service.currentState.status, SyncStatus.idle);
+      expect(bob.service.currentState.status, SyncStatus.idle);
+    });
+
+    test('a reader reading alone jumps without asking anyone', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      addTearDown(room.dispose);
+      await flush();
+
+      expect(await alice.service.requestJump(targetCfi: 'cfi-far'), isTrue);
+      await flush();
+
+      expect(alice.service.position.cfi, 'cfi-far');
+      expect(alice.service.position.seq, 1);
+    });
+
+    test('a jump is not put to a reader whose app cannot answer it', () async {
+      // An app on version 3 drops a jump without a word: the room would
+      // wait out the whole timeout for it.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      room.join('bob', 'Bob');
+      room.setProtocol('bob', 3, oldest: 2);
+      addTearDown(room.dispose);
+      await flush();
+
+      expect(await alice.service.requestJump(targetCfi: 'cfi-far'), isFalse);
+      expect(
+        alice.service.currentState.errorMessage,
+        'Bob needs to update the app to jump to a page',
+      );
+      expect(
+        room.sent.where((e) => e.event == PageSyncService.requestEvent),
+        isEmpty,
+      );
+
+      // Turning a page together still works with them.
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isTrue,
+      );
+    });
+
+    test('a reader in the lobby on an old app does not stop a jump', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      room.join('bob', 'Bob', isReading: false);
+      room.setProtocol('bob', 3, oldest: 2);
+      addTearDown(room.dispose);
+      await flush();
+
+      expect(await alice.service.requestJump(targetCfi: 'cfi-far'), isTrue);
+      await flush();
+      expect(alice.service.position.cfi, 'cfi-far');
+    });
+
+    test('two jumps to different pages are not taken as one', () async {
+      // Pressing "next" together is the same wish; picking two different
+      // pages is not, and the loser of the tie-break is asked like anyone.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      await Future.wait([
+        alice.service.requestJump(targetCfi: 'cfi-alice'),
+        bob.service.requestJump(targetCfi: 'cfi-bob'),
+      ]);
+      await flush();
+
+      final states = [alice.service.currentState, bob.service.currentState];
+      expect(states.map((state) => state.status).toSet(), {
+        SyncStatus.requesting,
+        SyncStatus.confirming,
+      });
+      expect(alice.service.position.seq, 0);
+      final asked = states.firstWhere(
+        (state) => state.status == SyncStatus.confirming,
+      );
+      final requester = states.firstWhere(
+        (state) => state.status == SyncStatus.requesting,
+      );
+      expect(
+        asked.currentRequest!.requestId,
+        requester.currentRequest!.requestId,
+      );
+    });
+
+    test('two jumps to the same page turn exactly once', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      await Future.wait([
+        alice.service.requestJump(targetCfi: 'cfi-same'),
+        bob.service.requestJump(targetCfi: 'cfi-same'),
+      ]);
+      await flush();
+
+      expect(alice.service.position.seq, 1);
+      expect(bob.service.position, alice.service.position);
+      expect(alice.service.position.cfi, 'cfi-same');
+    });
+
+    test('a jump the viewer cannot show releases everyone', () async {
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', canTurn: false);
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      await alice.service.requestJump(targetCfi: 'cfi-far');
+      await flush();
+      await bob.service.confirmPageTurn();
+      await flush();
+
+      expect(alice.service.position.seq, 0);
+      expect(
+        alice.service.currentState.errorMessage,
+        'Could not go to that page — try again',
+      );
+      expect(bob.service.currentState.currentRequest, isNull);
+    });
+
+    test('a jump gets longer to land than a turn', () async {
+      // The page may be in a chapter the viewer has not loaded yet.
+      final room = FakeRoom();
+      final alice = room.join(
+        'alice',
+        'Alice',
+        neverRelocates: true,
+        turnTimeout: const Duration(milliseconds: 20),
+        jumpTimeout: const Duration(milliseconds: 120),
+      );
+      addTearDown(room.dispose);
+      await flush();
+
+      await alice.service.requestJump(targetCfi: 'cfi-far');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(alice.service.currentState.status, SyncStatus.turning);
+
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(alice.service.currentState.status, SyncStatus.idle);
+      expect(alice.abandoned, hasLength(1));
+      expect(alice.service.currentState.errorMessage, contains('that page'));
+    });
+
+    test('a jump without a target is never put to the room', () async {
+      // Everyone would drop it, and the room would wait out the timeout.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.jump),
+        isFalse,
+      );
+      expect(await alice.service.requestJump(targetCfi: ''), isFalse);
+      expect(
+        room.sent.where((e) => e.event == PageSyncService.requestEvent),
+        isEmpty,
+      );
+      expect(alice.service.currentState.status, SyncStatus.idle);
+    });
+
+    test('turning the page does not answer a jump', () async {
+      // Agreeing by turning the same way only makes sense for next/previous.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      await alice.service.requestJump(targetCfi: 'cfi-far');
+      await flush();
+      expect(
+        await bob.service.requestPageTurn(direction: PageTurnDirection.next),
+        isFalse,
+      );
+      expect(bob.service.currentState.status, SyncStatus.confirming);
+    });
+  });
+
+  group('jump requests on the wire', () {
+    PageTurnRequest jump({PageInfo? label}) => PageTurnRequest(
+      requestId: 'r1',
+      requestedByUserId: 'alice',
+      requestedByNickname: 'Alice',
+      direction: PageTurnDirection.jump,
+      fromEpoch: 7,
+      fromSeq: 3,
+      fromCfi: 'cfi-here',
+      targetCfi: 'cfi-there',
+      targetLabel: label,
+      requestedAt: DateTime.utc(2026, 10, 27),
+      confirmedUserIds: const {'alice'},
+      requiredUserIds: const {'alice', 'bob'},
+    );
+
+    test('carry where they go and how to name it', () {
+      final read = PageTurnRequest.fromJson(
+        jump(
+          label: const PageInfo(page: 5, pages: 12, progress: 0.45),
+        ).toJson(),
+      );
+      expect(read.direction, PageTurnDirection.jump);
+      expect(read.targetCfi, 'cfi-there');
+      expect(
+        read.targetLabel,
+        const PageInfo(page: 5, pages: 12, progress: 0.45),
+      );
+    });
+
+    test('name no page when the label is missing or wrong', () {
+      expect(PageTurnRequest.fromJson(jump().toJson()).targetLabel, isNull);
+      final json = jump().toJson()
+        ..['target_page'] = 13
+        ..['target_pages'] = 12;
+      expect(PageTurnRequest.fromJson(json).targetLabel, isNull);
+    });
+
+    test('without a target are refused', () {
+      final json = jump().toJson()..remove('target_cfi');
+      expect(() => PageTurnRequest.fromJson(json), throwsFormatException);
+      json['target_cfi'] = '';
+      expect(() => PageTurnRequest.fromJson(json), throwsFormatException);
+    });
+
+    test('leave turns as they were', () {
+      final turn = PageTurnRequest(
+        requestId: 'r2',
+        requestedByUserId: 'alice',
+        requestedByNickname: 'Alice',
+        direction: PageTurnDirection.next,
+        fromSeq: 1,
+        requestedAt: DateTime.utc(2026, 10, 27),
+        confirmedUserIds: const {'alice'},
+        requiredUserIds: const {'alice', 'bob'},
+      ).toJson();
+      expect(turn.keys.where((key) => key.startsWith('target')), isEmpty);
+      final read = PageTurnRequest.fromJson(turn);
+      expect(read.isJump, isFalse);
+      expect(read.targetCfi, isEmpty);
+    });
+
+    test('only an app that knows jumps is asked for one', () {
+      expect(
+        presenceSpeaksProtocol({
+          'protocols': [
+            [3, 2],
+            [AppConstants.pageJumpProtocol, 2],
+          ],
+        }, AppConstants.pageJumpProtocol),
+        isTrue,
+      );
+      expect(
+        presenceSpeaksProtocol({
+          'protocols': [
+            [3, 2],
+          ],
+        }, AppConstants.pageJumpProtocol),
+        isFalse,
+      );
+      expect(
+        presenceSpeaksProtocol({
+          'protocol': AppConstants.roomProtocolVersion,
+        }, AppConstants.pageJumpProtocol),
+        isTrue,
+      );
+      // Apps from before the field existed.
+      expect(presenceSpeaksProtocol({}, AppConstants.pageJumpProtocol), isFalse);
+
+      // The old device is the one in the book; the new one in the lobby is
+      // never asked, so nobody would answer.
+      Map<String, dynamic> meta(int protocol, {required bool reading}) => {
+        'user_id': 'bob',
+        'protocol': protocol,
+        'protocol_min': 2,
+        'is_reading': reading,
+        'reader_ready': reading,
+      };
+      final oldInBook = mergePresenceUsers([
+        meta(3, reading: true),
+        meta(AppConstants.pageJumpProtocol, reading: false),
+      ]).single;
+      expect(
+        presenceSpeaksProtocol(oldInBook, AppConstants.pageJumpProtocol),
+        isFalse,
+      );
+      // Readiness is merged across connections: a stale flag on the new
+      // app in the lobby must not stand in for the old one in the book.
+      final oldInBookNotReady = mergePresenceUsers([
+        {...meta(3, reading: true), 'reader_ready': false},
+        {...meta(AppConstants.pageJumpProtocol, reading: false),
+          'reader_ready': true},
+      ]).single;
+      expect(oldInBookNotReady['reader_ready'], isTrue);
+      expect(
+        presenceSpeaksProtocol(oldInBookNotReady, AppConstants.pageJumpProtocol),
+        isFalse,
+      );
+      final newInBook = mergePresenceUsers([
+        meta(3, reading: false),
+        meta(AppConstants.pageJumpProtocol, reading: true),
+      ]).single;
+      expect(
+        presenceSpeaksProtocol(newInBook, AppConstants.pageJumpProtocol),
+        isTrue,
+      );
+    });
+  });
+
   group('ad breaks', () {
     /// Turns [pages] pages, each asked by [requester] and agreed to by
     /// everyone else in [room].
@@ -1200,6 +1558,7 @@ void main() {
       'requester_busy',
       'reader_disconnected',
       'ad_break',
+      'jump_failed',
       'declined_by_Bob',
       'something_new',
     ]) {
@@ -1257,6 +1616,7 @@ class FakeRoom {
     Duration nudgeInterval = const Duration(minutes: 5),
     Duration followerLiveness = const Duration(minutes: 5),
     Duration turnTimeout = const Duration(minutes: 5),
+    Duration jumpTimeout = const Duration(minutes: 5),
     Duration errorAutoClearDelay = const Duration(hours: 1),
     Duration positionAnnounceInterval = const Duration(minutes: 5),
     Duration reconnectGrace = const Duration(minutes: 1),
@@ -1286,6 +1646,7 @@ class FakeRoom {
       nudgeInterval: nudgeInterval,
       followerLiveness: followerLiveness,
       turnTimeout: turnTimeout,
+      jumpTimeout: jumpTimeout,
       errorAutoClearDelay: errorAutoClearDelay,
       mintEpoch: mintEpoch ?? () => 1,
       positionAnnounceInterval: positionAnnounceInterval,
@@ -1303,6 +1664,11 @@ class FakeRoom {
       scheduleMicrotask(() {
         if (!canTurn) {
           service.abandonTurn(command.requestId);
+          return;
+        }
+        if (command.direction == PageTurnDirection.jump) {
+          // Laid out on the shared page, so it lands on the page picked.
+          service.completeTurn(command.requestId, command.targetCfi);
           return;
         }
         localPage += command.direction == PageTurnDirection.next ? 1 : -1;

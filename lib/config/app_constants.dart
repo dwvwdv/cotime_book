@@ -67,7 +67,15 @@ class AppConstants {
   /// `reader_ready`. An app on 2 still reads along — it shows its own ads on
   /// its own count and is refused a turn during a break — so 2 stays
   /// compatible.
-  static const int roomProtocolVersion = 3;
+  ///
+  /// 4: jumping to a page (a `page_turn_request` with direction `jump` and a
+  /// `target_cfi`). An app on 3 drops such a request and never answers it,
+  /// but follows the commit like any other, so 3 stays compatible: a jump is
+  /// only refused while one of its readers is on 3 ([pageJumpProtocol]).
+  static const int roomProtocolVersion = 4;
+
+  /// The first [roomProtocolVersion] that answers a request to jump to a page.
+  static const int pageJumpProtocol = 4;
 
   /// The oldest [roomProtocolVersion] this app still reads together with,
   /// also sent in Presence. Members below it are told to update; an app whose

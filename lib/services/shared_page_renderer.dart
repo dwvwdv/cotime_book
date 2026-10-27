@@ -121,6 +121,59 @@ class SharedPageRenderer {
     }
   }
 
+  /// The page start of the [page]th page (as the page counter numbers it)
+  /// of the chapter in view. Null when there is no such page, or the viewer
+  /// could not be asked.
+  static Future<String?> pageStart(EpubController controller, int page) {
+    return _ask<String>(controller, 'window.cotimeSharedPage.pageStart($page)');
+  }
+
+  /// Where [progress] (0 to 1) of the way into the book is. Null until the
+  /// viewer has worked out the book's locations.
+  static Future<String?> cfiAtProgress(
+    EpubController controller,
+    double progress,
+  ) {
+    return _ask<String>(
+      controller,
+      'window.cotimeSharedPage.cfiAtProgress(${progress.clamp(0.0, 1.0)})',
+    );
+  }
+
+  /// How far into the book [cfi] is, 0 to 1. Null until the viewer has
+  /// worked out the book's locations.
+  static Future<double?> progressAt(
+    EpubController controller,
+    String cfi,
+  ) async {
+    final value = await _ask<num>(
+      controller,
+      'window.cotimeSharedPage.progressAt(${jsonEncode(cfi)})',
+    );
+    return value?.toDouble().clamp(0.0, 1.0);
+  }
+
+  /// Runs one of the script's queries; null when it is not installed (the
+  /// book is not laid out on a shared page yet) or answered something else.
+  static Future<T?> _ask<T>(EpubController controller, String call) async {
+    final webView = controller.webViewController;
+    if (webView == null) return null;
+    try {
+      // Wrapped: a bare string result comes back already decoded on some
+      // platforms, and could not be told from JSON.
+      final decoded = _decode(
+        await webView.evaluateJavascript(
+          source:
+              'JSON.stringify({value: window.cotimeSharedPage ? $call : null})',
+        ),
+      );
+      final value = decoded is Map ? decoded['value'] : null;
+      return value is T ? value : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// [verify]'s result as the WebView hands it back: a JSON string on some
   /// platforms, already decoded on others.
   static List<String>? layoutProblemsFrom(Object? raw) {

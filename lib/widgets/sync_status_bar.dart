@@ -165,8 +165,7 @@ class SyncStatusBar extends StatelessWidget {
     }
     final readyReaderCount = onlineUsers
         .where(
-          (user) =>
-              user['is_reading'] == true && user['reader_ready'] == true,
+          (user) => user['is_reading'] == true && user['reader_ready'] == true,
         )
         .map((user) => user['user_id'])
         .whereType<String>()
@@ -253,9 +252,6 @@ class SyncStatusBar extends StatelessWidget {
     final request = syncState.currentRequest;
     if (request == null) return _frame(child: const SizedBox.shrink());
 
-    final direction =
-        request.direction == PageTurnDirection.next ? 'next' : 'previous';
-
     // The one state that needs this reader to act, so it is the one that
     // inverts: on a grayscale page, a solid bar is the loudest thing there is.
     return _frame(
@@ -264,7 +260,7 @@ class SyncStatusBar extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              '${request.requestedByNickname} wants to go to $direction page',
+              describeRequest(request),
               style: _text(bold: true, color: paper),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -297,7 +293,7 @@ class SyncStatusBar extends StatelessWidget {
                 foregroundColor: ink,
                 side: BorderSide(color: paper, width: AppTheme.ruleWidth),
               ),
-              child: const Text('Turn'),
+              child: Text(request.isJump ? 'Go' : 'Turn'),
             ),
           ),
         ],
@@ -335,7 +331,12 @@ class SyncStatusBar extends StatelessWidget {
         children: [
           Icon(Icons.check_circle_outline, size: 20, color: ink),
           const SizedBox(width: 8),
-          Text('Turning page...', style: _text(bold: true)),
+          Text(
+            syncState.currentRequest?.isJump == true
+                ? 'Jumping to the page...'
+                : 'Turning page...',
+            style: _text(bold: true),
+          ),
         ],
       ),
     );
@@ -349,6 +350,23 @@ class SyncStatusBar extends StatelessWidget {
       );
       return user['nickname'] as String? ?? 'Unknown';
     }).toList();
+  }
+}
+
+/// What [request] asks this reader to agree to, in words.
+String describeRequest(PageTurnRequest request) {
+  final who = request.requestedByNickname;
+  switch (request.direction) {
+    case PageTurnDirection.next:
+      return '$who wants to go to next page';
+    case PageTurnDirection.previous:
+      return '$who wants to go to previous page';
+    case PageTurnDirection.jump:
+      final target = request.targetLabel;
+      if (target == null) return '$who wants to jump to another page';
+      final progress = target.progressLabel;
+      return '$who wants to jump to page ${target.pageLabel}'
+          '${progress == null ? '' : ' ($progress)'}';
   }
 }
 

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/page_info.dart';
 import '../models/page_sync_state.dart';
 import '../services/page_sync_service.dart';
 import '../services/realtime_service.dart';
@@ -65,6 +66,11 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     return await _service?.requestPageTurn(direction: direction) ?? false;
   }
 
+  Future<bool> requestJump({required String targetCfi, PageInfo? label}) async {
+    return await _service?.requestJump(targetCfi: targetCfi, label: label) ??
+        false;
+  }
+
   Future<bool> confirmPageTurn() async {
     return await _service?.confirmPageTurn() ?? false;
   }
@@ -77,7 +83,7 @@ class PageSyncNotifier extends StateNotifier<PageSyncState> {
     return _service?.completeTurn(requestId, targetCfi);
   }
 
-  void abandonTurn(String requestId, {String reason = 'turn_failed'}) =>
+  void abandonTurn(String requestId, {String? reason}) =>
       _service?.abandonTurn(requestId, reason: reason);
 
   void endAdBreak() => _service?.endAdBreak();

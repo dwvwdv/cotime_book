@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:uuid/uuid.dart';
 
 import '../config/ad_config.dart';
+import '../config/app_constants.dart';
+import '../models/page_info.dart';
 import '../models/page_sync_state.dart';
 import 'presence_merge.dart';
 import 'realtime_service.dart';
@@ -99,6 +101,11 @@ class RealtimePageSyncTransport implements PageSyncTransport {
 ///   request), and until every ad is closed nobody turns and the new page
 ///   stays covered — also for a reader whose ad never loaded, who would
 ///   otherwise read on while the others watch theirs (GH-63).
+/// * **A jump is a turn with a destination.** It is asked, agreed and
+///   committed like any turn, so it holds the same guarantees: the requester
+///   moves its viewer to the page it picked and commits where it landed as
+///   the next seq. Only apps on [AppConstants.pageJumpProtocol] understand
+///   one; a jump is not put to a room where someone could not answer it.
 class PageSyncService {
   static const requestEvent = 'page_turn_request';
   static const voteEvent = 'page_turn_vote';
@@ -133,6 +140,10 @@ class PageSyncService {
   /// everyone waits this long to find out.
   static const defaultTurnTimeout = Duration(seconds: 4);
 
+  /// Longer than a turn: the page may be in a chapter the viewer has not
+  /// loaded, and an e-reader takes a while to lay one out.
+  static const defaultJumpTimeout = Duration(seconds: 10);
+
   /// How long a reader that reached an ad break without an ad of its own
   /// keeps the page covered to hear whether anyone else has one. The others
   /// learn of the page from the commit, so theirs is announced a round trip
@@ -154,6 +165,7 @@ class PageSyncService {
   final Duration _nudgeInterval;
   final Duration _followerLiveness;
   final Duration _turnTimeout;
+  final Duration _jumpTimeout;
   final Duration _errorAutoClearDelay;
   final int Function() _mintEpoch;
   final Duration _positionAnnounceInterval;
@@ -216,7 +228,8 @@ class PageSyncService {
   bool _disposed = false;
   bool _viewerReady = false;
 
-  /// Requester only: move the viewer one page, then call [completeTurn].
+  /// Requester only: move the viewer one page (or to a jump's target), then
+  /// call [completeTurn].
   void Function(PageTurnCommand command)? onExecuteTurn;
 
   /// The room moved to a page this reader is not displaying.
@@ -246,6 +259,7 @@ class PageSyncService {
     Duration nudgeInterval = defaultNudgeInterval,
     Duration followerLiveness = defaultFollowerLiveness,
     Duration turnTimeout = defaultTurnTimeout,
+    Duration jumpTimeout = defaultJumpTimeout,
     Duration errorAutoClearDelay = defaultErrorAutoClearDelay,
     int Function()? mintEpoch,
     Duration positionAnnounceInterval = defaultPositionAnnounceInterval,
@@ -263,6 +277,7 @@ class PageSyncService {
        _nudgeInterval = nudgeInterval,
        _followerLiveness = followerLiveness,
        _turnTimeout = turnTimeout,
+       _jumpTimeout = jumpTimeout,
        _errorAutoClearDelay = errorAutoClearDelay,
        _mintEpoch = mintEpoch ?? _wallClockEpoch,
        _positionAnnounceInterval = positionAnnounceInterval,
@@ -321,7 +336,29 @@ class PageSyncService {
     _viewerReady = isReady;
   }
 
-  Future<bool> requestPageTurn({required PageTurnDirection direction}) async {
+  Future<bool> requestPageTurn({required PageTurnDirection direction}) {
+    // A jump without a target is dropped by everyone it is put to, and the
+    // room would wait out the timeout for it.
+    if (direction == PageTurnDirection.jump) return Future.value(false);
+    return _request(direction);
+  }
+
+  /// Asks the room to go to [targetCfi], a page start on the shared page
+  /// (the jump preview's). [label] is how the bar names it to the others.
+  Future<bool> requestJump({required String targetCfi, PageInfo? label}) {
+    if (targetCfi.isEmpty) return Future.value(false);
+    return _request(
+      PageTurnDirection.jump,
+      targetCfi: targetCfi,
+      targetLabel: label,
+    );
+  }
+
+  Future<bool> _request(
+    PageTurnDirection direction, {
+    String targetCfi = '',
+    PageInfo? targetLabel,
+  }) async {
     if (_disposed || !_initialized) return false;
     if (_state.status != SyncStatus.idle || _state.currentRequest != null) {
       return false;
@@ -361,6 +398,28 @@ class PageSyncService {
       return false;
     }
 
+    final required = {..._readyReaderIds(users), _currentUserId};
+    if (direction == PageTurnDirection.jump) {
+      // An older app drops the request without a word, and the room would
+      // wait out the whole timeout for an answer that never comes.
+      final cannotJump = [
+        for (final user in users)
+          if (user['user_id'] is String &&
+              user['user_id'] != _currentUserId &&
+              required.contains(user['user_id']) &&
+              !presenceSpeaksProtocol(user, AppConstants.pageJumpProtocol))
+            user['user_id'] as String,
+      ];
+      if (cannotJump.isNotEmpty) {
+        final names = cannotJump.toSet().toList();
+        _setError(
+          '${_joinNames(names)} ${names.length == 1 ? 'needs' : 'need'} to '
+          'update the app to jump to a page',
+        );
+        return false;
+      }
+    }
+
     final request = PageTurnRequest(
       requestId: _uuid.v4(),
       requestedByUserId: _currentUserId,
@@ -369,9 +428,11 @@ class PageSyncService {
       fromEpoch: _position.epoch,
       fromSeq: _position.seq,
       fromCfi: _position.cfi,
+      targetCfi: targetCfi,
+      targetLabel: targetLabel,
       requestedAt: DateTime.now().toUtc(),
       confirmedUserIds: {_currentUserId},
-      requiredUserIds: {..._readyReaderIds(users), _currentUserId},
+      requiredUserIds: required,
     );
 
     if (request.isConsensusReached) {
@@ -495,9 +556,9 @@ class PageSyncService {
     _refreshAdBreak();
   }
 
-  /// Requester only: the viewer could not move (first or last page, or the
-  /// viewer was rebuilt underneath the turn).
-  void abandonTurn(String requestId, {String reason = 'turn_failed'}) {
+  /// Requester only: the viewer could not move (first or last page, a jump
+  /// it could not show, or the viewer was rebuilt underneath the turn).
+  void abandonTurn(String requestId, {String? reason}) {
     final request = _state.currentRequest;
     if (_disposed ||
         request == null ||
@@ -505,6 +566,7 @@ class PageSyncService {
         _state.status != SyncStatus.turning) {
       return;
     }
+    reason ??= request.isJump ? 'jump_failed' : 'turn_failed';
     _finishRequest(request, error: describeCancelReason(reason));
     unawaited(_broadcastCancelQuietly(request, reason));
     onTurnAbandoned?.call(requestId);
@@ -616,9 +678,10 @@ class PageSyncService {
     }
 
     // Two people pressing "next" at once want the same thing; the one that
-    // loses the tie-break should not then have to tap again.
+    // loses the tie-break should not then have to tap again. Two jumps want
+    // the same thing only if they go to the same page.
     final sameIntent =
-        current.direction == incoming.direction &&
+        current.sameIntentAs(incoming) &&
         (current.requestedByUserId == _currentUserId ||
             _acceptedRequestIds.contains(current.requestId));
     if (current.requestedByUserId == _currentUserId) {
@@ -801,13 +864,14 @@ class PageSyncService {
       abandonTurn(request.requestId);
       return;
     }
-    _turnTimer = Timer(_turnTimeout, () {
+    _turnTimer = Timer(request.isJump ? _jumpTimeout : _turnTimeout, () {
       abandonTurn(request.requestId);
     });
     handler(
       PageTurnCommand(
         requestId: request.requestId,
         direction: request.direction,
+        targetCfi: request.targetCfi,
       ),
     );
   }
@@ -1357,8 +1421,7 @@ class PageSyncService {
       if (behind.isNotEmpty)
         '${behind.join(', ')} ${behind.length == 1 ? 'needs' : 'need'} to '
             'update the app to read together',
-      if (ahead.isNotEmpty)
-        'Update the app to read with ${ahead.join(', ')}',
+      if (ahead.isNotEmpty) 'Update the app to read with ${ahead.join(', ')}',
     ].join('. ');
   }
 
@@ -1427,6 +1490,7 @@ String describeCancelReason(String reason) {
     'superseded': 'Another page turn went first',
     'turn_failed':
         'The page did not move — this may be the start or end of the book',
+    'jump_failed': 'Could not go to that page — try again',
     'requester_busy': 'Page turn cancelled: the page was still loading',
     'reader_disconnected': 'Page turn paused: a reader is reconnecting',
     'ad_break': 'Page turn paused: the ad break is not over yet',

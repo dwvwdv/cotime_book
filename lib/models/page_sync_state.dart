@@ -1,13 +1,27 @@
-enum PageTurnDirection { next, previous }
+import 'page_info.dart';
+
+enum PageTurnDirection {
+  next,
+  previous,
+
+  /// Straight to a page the requester picked in the jump preview, named by
+  /// [PageTurnRequest.targetCfi].
+  jump,
+}
 
 String pageTurnDirectionToWire(PageTurnDirection direction) {
-  return direction == PageTurnDirection.next ? 'next' : 'previous';
+  return switch (direction) {
+    PageTurnDirection.next => 'next',
+    PageTurnDirection.previous => 'previous',
+    PageTurnDirection.jump => 'jump',
+  };
 }
 
 PageTurnDirection? pageTurnDirectionFromWire(Object? value) {
   return switch (value) {
     'next' => PageTurnDirection.next,
     'previous' => PageTurnDirection.previous,
+    'jump' => PageTurnDirection.jump,
     _ => null,
   };
 }
@@ -130,6 +144,15 @@ class PageTurnRequest {
   /// Where the requester's page is, so a follower that missed a commit can go
   /// there before answering. Display only, like every CFI.
   final String fromCfi;
+
+  /// A jump's destination: the page start the requester picked, on the same
+  /// shared page everyone is laid out on. Empty for a turn.
+  final String targetCfi;
+
+  /// A jump's destination as the page counter shows it: counted on the
+  /// shared page, so it names the same page to everyone asked. Only for the
+  /// words on the bar; null for a turn, or when the requester did not know.
+  final PageInfo? targetLabel;
   final DateTime requestedAt;
   final Set<String> confirmedUserIds;
   final Set<String> requiredUserIds;
@@ -142,10 +165,22 @@ class PageTurnRequest {
     this.fromEpoch = 0,
     required this.fromSeq,
     this.fromCfi = '',
+    this.targetCfi = '',
+    this.targetLabel,
     required this.requestedAt,
     required this.confirmedUserIds,
     required this.requiredUserIds,
   });
+
+  bool get isJump => direction == PageTurnDirection.jump;
+
+  /// Whether agreeing to [other] means agreeing to this: the same way, and
+  /// for a jump the same page. Only decides whether a reader whose own
+  /// request lost the tie-break is counted as agreeing without being asked;
+  /// two names for one page (a layout still catching up) just ask them, and
+  /// nothing is ordered or synced by it.
+  bool sameIntentAs(PageTurnRequest other) =>
+      direction == other.direction && (!isJump || targetCfi == other.targetCfi);
 
   bool get isConsensusReached =>
       requiredUserIds.isNotEmpty &&
@@ -178,6 +213,8 @@ class PageTurnRequest {
       fromEpoch: fromEpoch,
       fromSeq: fromSeq,
       fromCfi: fromCfi,
+      targetCfi: targetCfi,
+      targetLabel: targetLabel,
       requestedAt: requestedAt,
       confirmedUserIds: confirmedUserIds ?? this.confirmedUserIds,
       requiredUserIds: requiredUserIds ?? this.requiredUserIds,
@@ -193,6 +230,13 @@ class PageTurnRequest {
       'from_epoch': fromEpoch,
       'from_seq': fromSeq,
       'from_cfi': fromCfi,
+      if (isJump) 'target_cfi': targetCfi,
+      if (isJump && targetLabel != null) ...{
+        'target_page': targetLabel!.page,
+        'target_pages': targetLabel!.pages,
+        if (targetLabel!.progress != null)
+          'target_percent': targetLabel!.progress,
+      },
       'requested_at': requestedAt.toUtc().toIso8601String(),
       'required_users': requiredUserIds.toList()..sort(),
     };
@@ -223,6 +267,12 @@ class PageTurnRequest {
         requestedAt == null) {
       throw const FormatException('Invalid page turn request');
     }
+    final targetCfi = json['target_cfi'];
+    final isJump = direction == PageTurnDirection.jump;
+    // A jump nobody can display would be agreed to and then go nowhere.
+    if (isJump && (targetCfi is! String || targetCfi.isEmpty)) {
+      throw const FormatException('Invalid jump target');
+    }
 
     final rawRequiredUsers = json['required_users'];
     if (rawRequiredUsers is! List) {
@@ -245,6 +295,14 @@ class PageTurnRequest {
       fromEpoch: fromEpoch,
       fromSeq: fromSeq,
       fromCfi: json['from_cfi'] is String ? json['from_cfi'] as String : '',
+      targetCfi: isJump ? targetCfi as String : '',
+      targetLabel: isJump
+          ? PageInfo.fromWire({
+              'page': json['target_page'],
+              'pages': json['target_pages'],
+              'percent': json['target_percent'],
+            })
+          : null,
       requestedAt: requestedAt,
       confirmedUserIds: {requestedByUserId},
       requiredUserIds: requiredUserIds,
@@ -253,12 +311,20 @@ class PageTurnRequest {
 }
 
 /// Handed to the requester's reader once everyone agreed: move the viewer one
-/// page and report where it landed through `completeTurn`.
+/// page (or, for a jump, to [targetCfi]) and report where it landed through
+/// `completeTurn`.
 class PageTurnCommand {
   final String requestId;
   final PageTurnDirection direction;
 
-  const PageTurnCommand({required this.requestId, required this.direction});
+  /// Where a jump goes; empty for a turn.
+  final String targetCfi;
+
+  const PageTurnCommand({
+    required this.requestId,
+    required this.direction,
+    this.targetCfi = '',
+  });
 }
 
 class PageSyncState {
