@@ -78,6 +78,8 @@ void main() {
   });
 
   // The Chinese name is the official one; other devices keep the English.
+  // Android 7+ matches scripts and reads a bare `values-zh` as Simplified, so
+  // Traditional Chinese devices need their own folder or they get the English.
   test('the launcher shows 頁間 on Chinese devices', () {
     final manifest =
         File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
@@ -91,6 +93,7 @@ void main() {
             )!
             .group(1)!;
     expect(appName('values-zh'), '頁間');
+    expect(appName('values-b+zh+Hant'), '頁間');
     expect(appName('values'), 'CoTime Book');
   });
 }
