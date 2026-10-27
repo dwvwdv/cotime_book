@@ -435,14 +435,15 @@ class _ToolsBar extends ConsumerWidget {
                     style: _compact,
                     child: const Text('More Apps'),
                   ),
-                  TextButton.icon(
+                  // The megaphone alone: a label beside it would crowd the
+                  // bar. The tooltip still names it for screen readers.
+                  IconButton(
                     onPressed: () => showAnnouncementSheet(
                       context: context,
                       announcements: ref.read(announcementServiceProvider),
                     ),
-                    style: _compact,
+                    tooltip: 'News',
                     icon: const Icon(Icons.campaign_outlined),
-                    label: const Text('News'),
                   ),
                 ],
               ),

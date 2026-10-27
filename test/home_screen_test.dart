@@ -117,7 +117,7 @@ void main() {
     // Nothing is fetched until it is opened.
     expect(announcements.calls, 0);
 
-    await tester.tap(find.text('News'));
+    await tester.tap(find.byTooltip('News'));
     await tester.pumpAndSettle();
 
     expect(announcements.calls, 1);
@@ -180,9 +180,9 @@ void main() {
     await pumpHome(tester);
 
     final convert = tester.getCenter(find.text('TXT to EPUB'));
-    final news = tester.getCenter(find.text('News'));
+    final news = tester.getCenter(find.byTooltip('News'));
     expect(news.dy, convert.dy);
-    expect(tester.getTopRight(find.text('News')).dx, greaterThan(700));
+    expect(tester.getTopRight(find.byTooltip('News')).dx, greaterThan(700));
     expect(convert.dx, lessThan(400));
   });
 
@@ -196,9 +196,13 @@ void main() {
 
     expect(tester.takeException(), isNull);
     final line = tester.getCenter(find.text('TXT to EPUB')).dy;
-    expect(tester.getCenter(find.text('More Apps')).dy, line);
-    expect(tester.getCenter(find.text('News')).dy, line);
-    expect(tester.getTopRight(find.text('News')).dx, lessThanOrEqualTo(320));
+    // closeTo: the shrunk buttons sit a rounding error off the line.
+    expect(tester.getCenter(find.text('More Apps')).dy, closeTo(line, 0.5));
+    expect(tester.getCenter(find.byTooltip('News')).dy, closeTo(line, 0.5));
+    expect(
+      tester.getTopRight(find.byTooltip('News')).dx,
+      lessThanOrEqualTo(320),
+    );
   });
 
   testWidgets('the nickname from last time is already filled in', (
