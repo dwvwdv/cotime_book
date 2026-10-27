@@ -6,6 +6,7 @@ import '../config/supabase_config.dart';
 import '../config/theme.dart';
 import '../providers/announcement_provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/external_link_provider.dart';
 import '../providers/book_provider.dart';
 import '../models/recent_room.dart';
 import '../models/room.dart';
@@ -14,6 +15,7 @@ import '../providers/recent_rooms_provider.dart';
 import '../providers/room_provider.dart';
 import '../widgets/announcement_sheet.dart';
 import '../widgets/masthead.dart';
+import '../widgets/more_apps_sheet.dart';
 import '../widgets/paper.dart';
 import '../widgets/recent_rooms_list.dart';
 import '../widgets/room_code_input.dart';
@@ -381,7 +383,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 }
 
 /// The bar along the bottom: tools that work on this device alone (bottom
-/// left), kept apart from rooms, and the announcements (bottom right).
+/// left), kept apart from rooms, and the maker's other apps and the
+/// announcements (bottom right).
 ///
 /// TXT to EPUB lives here rather than in a room's Share Book: the person who
 /// converts a book reads it first, so a bad conversion never has a whole room
@@ -395,21 +398,40 @@ class _ToolsBar extends ConsumerWidget {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       decoration: const BoxDecoration(border: Border(top: AppTheme.rule)),
-      child: Row(
+      // A Wrap, not a Row: three labelled buttons are wider than a small
+      // phone, and there the ones on the right go down a line instead of
+      // running off the edge.
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        runSpacing: 4,
         children: [
           OutlinedButton.icon(
             onPressed: () => context.pushNamed('convert'),
             icon: const Icon(Icons.swap_horiz),
             label: const Text('TXT to EPUB'),
           ),
-          const Spacer(),
-          TextButton.icon(
-            onPressed: () => showAnnouncementSheet(
-              context: context,
-              announcements: ref.read(announcementServiceProvider),
-            ),
-            icon: const Icon(Icons.campaign_outlined),
-            label: const Text('News'),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Out here, never in a room: nothing about a reading session
+              // points at another app.
+              TextButton(
+                onPressed: () => showMoreAppsSheet(
+                  context: context,
+                  openLink: ref.read(externalLinkProvider),
+                ),
+                child: const Text('More Apps'),
+              ),
+              TextButton.icon(
+                onPressed: () => showAnnouncementSheet(
+                  context: context,
+                  announcements: ref.read(announcementServiceProvider),
+                ),
+                icon: const Icon(Icons.campaign_outlined),
+                label: const Text('News'),
+              ),
+            ],
           ),
         ],
       ),
