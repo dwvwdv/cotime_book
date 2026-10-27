@@ -10,9 +10,13 @@
 - 同一個 PR 只有一個版本條目（見 `version-update.md`）；review 修復追加在同一條目下。
 - 只動文件、`.claude/`、`.github/` 的 PR 不 bump 版號，不必新增條目。
 
+### v1.0.19+23 (2026-10-27)
+
+- ✨ 首頁底部列右側新增「News」：打開後依時間由新到舊列出版本公告與消息。公告存在 Supabase 的 `cotime_book.announcements` 表，從 dashboard 新增就上線，不必等發版；落後幾版的 App 也看得到之後的更新說明。`published_at` 填未來的時間可以先寫好、到時才出現。`20261027021053_announcements.sql` 已套用到正式庫，第一則公告（v1.0.19）也已發布。
+
 ### v1.0.18+22 (2026-10-27)
 
-- ✨ 首頁底部列右側新增「News」：打開後依時間由新到舊列出版本公告與消息。公告存在 Supabase 的 `cotime_book.announcements` 表，從 dashboard 新增就上線，不必等發版；落後幾版的 App 也看得到之後的更新說明。`published_at` 填未來的時間可以先寫好、到時才出現。`20261027021053_announcements.sql` 已套用到正式庫，第一則公告（v1.0.18）也已發布。
+- 🐛 修正繁體中文手機的桌面圖示名稱一直是「CoTime Book」，沒有顯示「頁間」（1.0.7 起就是這樣）。Android 7.0 以後比對資源時也會比對文字：只寫 `values-zh` 會被當成簡體中文，台灣、香港的手機（`zh-Hant`）配不到，就退回英文名稱。改成另外放一份 `values-b+zh+Hant`。
 
 ### v1.0.17+21 (2026-10-27)
 
