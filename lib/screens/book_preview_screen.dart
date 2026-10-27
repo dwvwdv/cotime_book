@@ -196,7 +196,7 @@ class _BookPreviewScreenState extends ConsumerState<BookPreviewScreen> {
   }
 
   Future<void> _showContents(ReadingPreferences prefs) async {
-    final href = await showPaperSheet<String>(
+    final href = await showPaperDialog<String>(
       context: context,
       builder: (sheetContext) => ConstrainedBox(
         constraints: BoxConstraints(

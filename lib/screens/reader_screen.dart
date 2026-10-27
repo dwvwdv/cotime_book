@@ -1242,7 +1242,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   // Feature 1: reading theme, type size and page-turn keys.
   void _showReadingSettings() {
     unawaited(
-      showPaperSheet<void>(
+      showPaperDialog<void>(
         context: context,
         builder: (sheetContext) => Consumer(
           builder: (context, ref, _) {
@@ -1483,7 +1483,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       recentMoves: List.of(_recentMoves),
       script: script,
     );
-    await showPaperSheet<void>(
+    await showPaperDialog<void>(
       context: context,
       builder: (_) => LayoutReportSheet(
         report: report,
@@ -1515,7 +1515,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   // Feature 3: Members panel showing who's reading and who left.
   void _showMembersDrawer() {
     unawaited(
-      showPaperSheet<void>(
+      showPaperDialog<void>(
         context: context,
         builder: (_) => const ReaderMembersSheet(),
       ),

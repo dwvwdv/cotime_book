@@ -10,7 +10,7 @@ Future<void> showAnnouncementSheet({
   required BuildContext context,
   required AnnouncementService announcements,
 }) {
-  return showPaperSheet<void>(
+  return showPaperDialog<void>(
     context: context,
     builder: (sheetContext) => SizedBox(
       // A fixed height, so the sheet does not jump from one line of

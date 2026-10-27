@@ -213,8 +213,9 @@ supabase/
    設計系統叫 Paper，定義在 `lib/config/theme.dart`，共用元件在 `lib/widgets/paper.dart`：
    - 狀態不靠顏色傳達（面板是灰階）——用字重、實心/空心、黑白反轉、文字標籤。
    - 不要動畫：不用 `CircularProgressIndicator`（改成「Loading...」之類的文字）、
-     snackbar 用 `showPaperMessage()`、bottom sheet 用 `showPaperSheet()`
-     （右上角一律有關閉按鈕：電子紙上滑動關閉不可靠，也不要只靠點面板外面）。
+     snackbar 用 `showPaperMessage()`、彈出面板用 `showPaperDialog()`——置中的浮動彈窗，
+     不用 bottom sheet：高的 sheet 會延伸到狀態列底下，把關閉按鈕擠到點不到的地方，而電子紙上
+     滑動關閉也不可靠。彈窗右上角一律有 56dp 的關閉按鈕，並自己避開系統列與鍵盤。
    - 不要半透明與陰影；用 1.5px 的線分隔。
    - 插頁式廣告（AdMob）是唯一的例外：閱讀時每 `AdConfig.pageTurnsPerAd`（20）頁、
      以及 TXT 轉檔存檔前各播一則。**翻頁廣告是全房的「廣告時段」，不是各裝置自己數**（GH-63）：

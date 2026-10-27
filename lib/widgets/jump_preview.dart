@@ -473,7 +473,7 @@ class _JumpPreviewState extends State<JumpPreview> {
   }
 
   Future<void> _showContents() async {
-    final href = await showPaperSheet<String>(
+    final href = await showPaperDialog<String>(
       context: context,
       builder: (sheetContext) => ConstrainedBox(
         constraints: BoxConstraints(

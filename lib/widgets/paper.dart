@@ -14,49 +14,80 @@ void showPaperMessage(
   );
 }
 
-/// A bottom sheet that appears in one frame. It overlays the page instead of
-/// dimming it: a translucent scrim dithers into gray noise on e-ink.
+/// A dialog that floats over the page, appears in one frame, and closes
+/// from a button in its corner.
 ///
-/// Every sheet has a close button in its top corner. A swipe down is how a
-/// phone closes one, but an e-reader's panel registers a drag late and
-/// coarsely, and tapping outside the sheet is not obvious when nothing dims
-/// the page behind it.
-Future<T?> showPaperSheet<T>({
+/// Not a bottom sheet: a tall sheet runs up under the status bar, which
+/// puts its close button where nobody can tap it, and a swipe down — how a
+/// phone closes a sheet — is registered late and coarsely on an e-reader's
+/// panel. Nothing dims the page behind it (a translucent scrim dithers into
+/// gray noise on e-ink); its heavy frame sets it apart instead. A tap
+/// outside it closes it too, and so does Back.
+///
+/// It keeps clear of the system bars and of the keyboard, so what it holds
+/// only has to fit the height it is given: a list or a form scrolls in it.
+Future<T?> showPaperDialog<T>({
   required BuildContext context,
   required WidgetBuilder builder,
 }) {
-  return showModalBottomSheet<T>(
+  return showGeneralDialog<T>(
     context: context,
-    isScrollControlled: true,
-    sheetAnimationStyle: AnimationStyle.noAnimation,
-    builder: (sheetContext) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Align(
-            alignment: Alignment.centerRight,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 4, right: 8),
-              child: IconButton(
-                tooltip: 'Close',
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.of(sheetContext).maybePop(),
-              ),
-            ),
-          ),
-          // Whatever height the button leaves: a sheet that sizes itself to
-          // a share of the screen must not push the button off it.
-          Flexible(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-              child: builder(sheetContext),
-            ),
-          ),
-        ],
-      ),
+    barrierDismissible: true,
+    barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+    barrierColor: const Color(0x00000000),
+    transitionDuration: Duration.zero,
+    pageBuilder: (dialogContext, _, _) => SafeArea(
+      child: PaperDialog(child: Builder(builder: builder)),
     ),
   );
+}
+
+/// The frame [showPaperDialog] puts its content in.
+class PaperDialog extends StatelessWidget {
+  /// Big enough to hit with a thumb on a panel that registers taps loosely.
+  static const double closeButtonSize = 56;
+
+  final Widget child;
+
+  const PaperDialog({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      // Moves out of the keyboard's way in one step: no animation on e-ink.
+      insetAnimationDuration: Duration.zero,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: IconButton(
+                tooltip: 'Close',
+                iconSize: 30,
+                style: IconButton.styleFrom(
+                  minimumSize: const Size.square(closeButtonSize),
+                ),
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.of(context).maybePop(),
+              ),
+            ),
+            // Whatever height the button leaves: content that sizes itself
+            // to a share of the screen must not push the button off it.
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                child: child,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// An all-caps label with a rule under it, the way a book sets a part title.
