@@ -120,7 +120,9 @@ supabase/
      （`cfiAtProgress`，問房間 viewer 已算好的 locations），頁數框是「這一章的第幾頁」，和頁數元件
      同一套編號（`pageStart(n)`）。確認後送出 `direction: jump`＋`target_cfi` 的請求，照一般共識流程，
      requester 的 viewer `display(target)`、以落點 commit seq+1。預覽蓋在 viewer 與底部列上、不取代它們：
-     房間的 viewer 不能換尺寸（issue #13），所以 reader 的 Scaffold 也不讓鍵盤縮小 body。預覽的 viewer
+     房間的 viewer 不能換尺寸（issue #13），所以 reader 的 Scaffold 也不讓鍵盤縮小 body，
+     而且用 `ReaderSafeArea`（`maintainBottomViewPadding`）——鍵盤出現時 `MediaQuery.padding.bottom`
+     會歸零，一般的 `SafeArea` 會讓 viewer 反而長高、全房重排。預覽的 viewer
      比頁框矮，頁底幾行被滑桿蓋住，但頁不裁切；`check.js` 驗證這樣的 viewer 頁首仍與房間一致，
      並逐頁確認 `pageStart(章內頁碼)` 就是那一頁。廣告時段不能開預覽（會看到被蓋住的頁）。
      改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，先在本機跑
@@ -211,7 +213,9 @@ supabase/
    設計系統叫 Paper，定義在 `lib/config/theme.dart`，共用元件在 `lib/widgets/paper.dart`：
    - 狀態不靠顏色傳達（面板是灰階）——用字重、實心/空心、黑白反轉、文字標籤。
    - 不要動畫：不用 `CircularProgressIndicator`（改成「Loading...」之類的文字）、
-     snackbar 用 `showPaperMessage()`、bottom sheet 用 `showPaperSheet()`。
+     snackbar 用 `showPaperMessage()`、彈出面板用 `showPaperDialog()`——置中的浮動彈窗，
+     不用 bottom sheet：高的 sheet 會延伸到狀態列底下，把關閉按鈕擠到點不到的地方，而電子紙上
+     滑動關閉也不可靠。彈窗右上角一律有 56dp 的關閉按鈕，並自己避開系統列與鍵盤。
    - 不要半透明與陰影；用 1.5px 的線分隔。
    - 插頁式廣告（AdMob）是唯一的例外：閱讀時每 `AdConfig.pageTurnsPerAd`（20）頁、
      以及 TXT 轉檔存檔前各播一則。**翻頁廣告是全房的「廣告時段」，不是各裝置自己數**（GH-63）：

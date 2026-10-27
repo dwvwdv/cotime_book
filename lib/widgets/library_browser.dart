@@ -12,25 +12,17 @@ Future<LibraryBook?> showLibraryBrowser({
   required BuildContext context,
   required LibraryService library,
 }) {
-  return showPaperSheet<LibraryBook>(
+  return showPaperDialog<LibraryBook>(
     context: context,
     builder: (sheetContext) {
-      final media = MediaQuery.of(sheetContext);
       // A fixed height, so filtering a long list down to a few books does not
-      // collapse the sheet under the reader's finger; it only gives way to
-      // the keyboard while searching.
-      final height = (media.size.height * 0.85 - media.viewInsets.bottom).clamp(
-        240.0,
-        double.infinity,
-      );
-      return Padding(
-        padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
-        child: SizedBox(
-          height: height,
-          child: LibraryBrowser(
-            library: library,
-            onSelected: (book) => Navigator.of(sheetContext).pop(book),
-          ),
+      // collapse the dialog under the reader's finger. The dialog caps it at
+      // the room it has, which the keyboard takes from while searching.
+      return SizedBox(
+        height: MediaQuery.of(sheetContext).size.height,
+        child: LibraryBrowser(
+          library: library,
+          onSelected: (book) => Navigator.of(sheetContext).pop(book),
         ),
       );
     },

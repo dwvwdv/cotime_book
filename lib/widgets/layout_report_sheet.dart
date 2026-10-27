@@ -167,11 +167,10 @@ class _LayoutReportSheetState extends State<LayoutReportSheet> {
   @override
   Widget build(BuildContext context) {
     final sentId = _sentId;
-    // The whole sheet scrolls, and stops above the keyboard: on a landscape
-    // phone or a small e-reader the note field, the report and both buttons
-    // do not fit at once, least of all with the keyboard up.
+    // The whole sheet scrolls: on a landscape phone or a small e-reader the
+    // note field, the report and both buttons do not fit at once, least of
+    // all with the keyboard up (the dialog it is shown in stops above it).
     return SingleChildScrollView(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

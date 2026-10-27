@@ -17,23 +17,14 @@ Future<TxtBookRequest?> showTxtImportSheet({
   required BuildContext context,
   required TxtImportDraft draft,
 }) {
-  return showPaperSheet<TxtBookRequest>(
+  return showPaperDialog<TxtBookRequest>(
     context: context,
     builder: (sheetContext) {
-      final media = MediaQuery.of(sheetContext);
-      return Padding(
-        padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: (media.size.height * 0.85 - media.viewInsets.bottom)
-                .clamp(240.0, double.infinity),
-          ),
-          child: TxtImportSheet(
-            draft: draft,
-            onConfirm: (request) => Navigator.of(sheetContext).pop(request),
-            onCancel: () => Navigator.of(sheetContext).pop(),
-          ),
-        ),
+      // The dialog keeps it clear of the keyboard and caps its height.
+      return TxtImportSheet(
+        draft: draft,
+        onConfirm: (request) => Navigator.of(sheetContext).pop(request),
+        onCancel: () => Navigator.of(sheetContext).pop(),
       );
     },
   );

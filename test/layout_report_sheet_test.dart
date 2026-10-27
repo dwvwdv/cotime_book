@@ -6,6 +6,7 @@ import 'package:cotime_book/models/shared_page.dart';
 import 'package:cotime_book/services/presence_merge.dart';
 import 'package:cotime_book/services/layout_report_service.dart';
 import 'package:cotime_book/widgets/layout_report_sheet.dart';
+import 'package:cotime_book/widgets/paper.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -249,13 +250,31 @@ void main() {
       addTearDown(tester.view.reset);
       var sent = 0;
 
-      await pumpSheet(
-        tester,
-        onSend: (_) async {
-          sent++;
-          return '9a8b0000-0000-0000-0000-000000000000';
-        },
+      // In the dialog it is shown in, which stops above the keyboard.
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.paperTheme,
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showPaperDialog<void>(
+                  context: context,
+                  builder: (_) => LayoutReportSheet(
+                    report: report(),
+                    onSend: (_) async {
+                      sent++;
+                      return '9a8b0000-0000-0000-0000-000000000000';
+                    },
+                  ),
+                ),
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        ),
       );
+      await tester.tap(find.text('Open'));
+      await tester.pump();
       await tester.enterText(find.byType(TextField), 'cut off');
       await tester.scrollUntilVisible(
         find.text('Send Report'),
