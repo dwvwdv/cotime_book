@@ -1,3 +1,4 @@
+import 'package:cotime_book/models/page_info.dart';
 import 'package:cotime_book/models/page_sync_state.dart';
 import 'package:cotime_book/widgets/sync_status_bar.dart';
 import 'package:flutter/material.dart';
@@ -75,6 +76,53 @@ void main() {
     expect(find.text('1/2'), findsOneWidget);
   });
 
+  testWidgets('a jump says where it goes, and is answered with Go',
+      (tester) async {
+    PageTurnRequest jump(PageInfo? label) => PageTurnRequest(
+          requestId: 'request-1',
+          requestedByUserId: 'user-a',
+          requestedByNickname: 'Alice',
+          direction: PageTurnDirection.jump,
+          fromSeq: 3,
+          targetCfi: 'epubcfi(/6/14!/4/2/1:0)',
+          targetLabel: label,
+          requestedAt: DateTime.now(),
+          confirmedUserIds: const {'user-a'},
+          requiredUserIds: const {'user-a', 'user-b'},
+        );
+
+    var confirmed = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SyncStatusBar(
+          syncState: PageSyncState(
+            status: SyncStatus.confirming,
+            currentRequest: jump(
+              const PageInfo(page: 5, pages: 12, progress: 0.45),
+            ),
+          ),
+          onlineUsers: [readyUser('user-a'), readyUser('user-b')],
+          onConfirm: () => confirmed++,
+        ),
+      ),
+    ));
+    expect(
+      find.text('Alice wants to jump to page 5 / 12 (45%)'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Go'));
+    expect(confirmed, 1);
+
+    expect(
+      describeRequest(jump(null)),
+      'Alice wants to jump to another page',
+    );
+    expect(
+      describeRequest(jump(const PageInfo(page: 2, pages: 3))),
+      'Alice wants to jump to page 2 / 3',
+    );
+  });
+
   testWidgets('the bar keeps one height in every state', (tester) async {
     // The bar sits on top of the EPUB viewer. If it changes height, the
     // WebView resizes and epub.js re-paginates mid-turn, replacing this
@@ -109,6 +157,21 @@ void main() {
         currentRequest: request(const {'user-a', 'user-b'}),
       ),
       const PageSyncState(status: SyncStatus.turning),
+      PageSyncState(
+        status: SyncStatus.confirming,
+        currentRequest: PageTurnRequest(
+          requestId: 'request-2',
+          requestedByUserId: 'user-a',
+          requestedByNickname: 'Alice with a rather long nickname',
+          direction: PageTurnDirection.jump,
+          fromSeq: 3,
+          targetCfi: 'cfi-far',
+          targetLabel: const PageInfo(page: 1234, pages: 5678, progress: 0.5),
+          requestedAt: DateTime.now(),
+          confirmedUserIds: const {'user-a'},
+          requiredUserIds: const {'user-a', 'user-b'},
+        ),
+      ),
       const PageSyncState.idle().withReadersReconnecting([
         'Reader user-b with a long name',
         'Reader user-c with a long name',

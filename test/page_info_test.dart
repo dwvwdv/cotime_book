@@ -63,4 +63,36 @@ void main() {
     expect(find.text('1234 / 5678'), findsOneWidget);
     expect(find.text('50%'), findsOneWidget);
   });
+
+  testWidgets('the counter is the way to the jump preview', (tester) async {
+    var taps = 0;
+    for (final info in [
+      null,
+      const PageInfo(page: 1234, pages: 5678, progress: 0.5),
+    ]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                height: 64,
+                child: PageCounter(
+                  info: info,
+                  ink: Colors.black,
+                  onTap: () => taps++,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      // Same width as a counter that is not a button: the bar fits 320dp.
+      expect(tester.getSize(find.byType(PageCounter)).width, PageCounter.width);
+      expect(tester.takeException(), isNull);
+      // A button before the first count too.
+      expect(find.bySemanticsLabel(RegExp('Go to page')), findsOneWidget);
+      await tester.tap(find.byType(PageCounter));
+    }
+    expect(taps, 2);
+  });
 }

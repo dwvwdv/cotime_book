@@ -566,6 +566,11 @@
     remember('unhandled: ' + (e.reason && e.reason.message || e.reason));
   });
 
+  function bookHasLocations() {
+    return typeof book !== 'undefined' && book && book.locations &&
+      book.locations.length() > 0;
+  }
+
   var appliedPage = null;
   var applies = 0;
   var repairs = 0;
@@ -681,8 +686,7 @@
       }
       var percent = null;
       var location = rendition.location;
-      if (typeof book !== 'undefined' && book && book.locations &&
-          book.locations.length() > 0 && location && location.start) {
+      if (bookHasLocations() && location && location.start) {
         percent = book.locations.percentageFromCfi(location.start.cfi);
       }
       return {
@@ -691,6 +695,47 @@
         pages: Math.max(pages, 1),
         percent: percent,
       };
+    },
+
+    // The name of the [n]th page of the chapter in view, counted the way
+    // pageInfo() counts it (blank pages skipped): the page start a turn onto
+    // that page would commit, so the jump preview can show it and the room
+    // can go to it. Null when there is no such page or the viewer cannot
+    // say.
+    pageStart: function (n) {
+      var info = window.cotimeSharedPage.pageInfo();
+      if (!info || !counted || n < 1 || n > info.pages) return null;
+      var manager = rendition.manager;
+      var layout = manager.layout;
+      var inView = pagesInView(manager)[0];
+      var index = -1;
+      for (var i = 0, seen = 0; i < counted.length; i++) {
+        if (counted[i] && ++seen === n) {
+          index = i;
+          break;
+        }
+      }
+      if (index < 0 || !inView.view.contents) return null;
+      var start = index * layout.delta;
+      var range = manager.mapping.page(inView.view.contents,
+        inView.view.section.cfiBase, start, start + layout.width);
+      return range && range.start ? range.start : null;
+    },
+
+    // Where [progress] (0 to 1) of the way into the book is, and how far
+    // into the book [cfi] is. Both null until epub.js has worked out the
+    // book's locations. Locations count characters, not pages, so they are
+    // the same on every layout.
+    cfiAtProgress: function (progress) {
+      if (!bookHasLocations()) return null;
+      return book.locations.cfiFromPercentage(
+        Math.min(1, Math.max(0, progress))) || null;
+    },
+
+    progressAt: function (cfi) {
+      if (!bookHasLocations() || !cfi) return null;
+      var value = book.locations.percentageFromCfi(cfi);
+      return typeof value === 'number' && isFinite(value) ? value : null;
     },
 
     // Everything that decides what is on screen, for a reader to copy into

@@ -1,4 +1,4 @@
-import 'package:cotime_book/screens/book_preview_screen.dart';
+import 'package:cotime_book/widgets/book_contents.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_epub_viewer/flutter_epub_viewer.dart';
 import 'package:flutter_test/flutter_test.dart';

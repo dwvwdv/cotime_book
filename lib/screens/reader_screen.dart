@@ -20,6 +20,7 @@ import '../providers/room_provider.dart';
 import '../services/layout_report_service.dart';
 import '../services/shared_page_renderer.dart';
 import '../widgets/ad_break_cover.dart';
+import '../widgets/jump_preview.dart';
 import '../widgets/layout_report_sheet.dart';
 import '../widgets/page_counter.dart';
 import '../widgets/page_turn_input.dart';
@@ -166,6 +167,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   bool _adShowing = false;
   static const _pageTurnAdDelay = Duration(seconds: 1);
 
+  /// The jump preview is open over the viewer and the bottom bar. The
+  /// viewer stays underneath, the same size, on the room's page.
+  bool _jumpPreviewOpen = false;
+
+  /// Takes the page keys. Given back when the preview, which takes them
+  /// while it is open, closes.
+  final FocusNode _readerFocus = FocusNode(debugLabel: 'reader');
+
   PageSyncNotifier get _pageSync => ref.read(pageSyncProvider.notifier);
 
   @override
@@ -309,6 +318,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _roomRecheckTimer?.cancel();
     unawaited(_roomSettingsSub?.cancel());
     _textSizeSaving.dispose();
+    _readerFocus.dispose();
     if (!_leaving) {
       // The route went away without _leaveReader (the room was revoked, say).
       _leaving = true;
@@ -421,10 +431,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
     _publishReadiness();
     try {
-      if (command.direction == PageTurnDirection.next) {
-        _epubController.next();
-      } else {
-        _epubController.prev();
+      switch (command.direction) {
+        case PageTurnDirection.next:
+          _epubController.next();
+        case PageTurnDirection.previous:
+          _epubController.prev();
+        case PageTurnDirection.jump:
+          // Laid out on the same shared page as the preview it was picked
+          // in, so it lands on that page; where it lands is what commits.
+          _epubController.display(cfi: command.targetCfi);
       }
     } catch (_) {
       _pendingTurn = null;
@@ -864,19 +879,36 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       );
     }
 
+    // The page the room just reached is covered until every ad is closed;
+    // the preview would show it, and the pages after it, all the same.
+    ref.listen(pageSyncProvider.select((state) => state.adBreak), (_, adBreak) {
+      if (adBreak) _closeJumpPreview();
+    });
+
     // Feature 2: intercept hardware back button in reader → go back to lobby.
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _leaveReader();
+        if (didPop) return;
+        // Back closes the preview first, as it would a dialog.
+        if (_jumpPreviewOpen) {
+          _closeJumpPreview();
+        } else {
+          _leaveReader();
+        }
       },
       child: Scaffold(
         backgroundColor: prefs.backgroundColor,
+        // The keyboard for the preview's page box goes over the page, never
+        // shrinks it: a smaller viewer is a new page for the whole room
+        // (issue #20).
+        resizeToAvoidBottomInset: false,
         body: SafeArea(
           // Physical page buttons, Bluetooth page turners and keyboards. The
           // viewer absorbs pointers, so the WebView never takes focus from
           // this node.
           child: Focus(
+            focusNode: _readerFocus,
             autofocus: true,
             onKeyEvent: (_, event) => _handleKeyEvent(event),
             child: Column(
@@ -893,23 +925,67 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                   onShowMembers: _showMembersDrawer,
                 ),
 
-                // EPUB reader with gesture overlay
                 Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, viewerConstraints) {
-                      _updateRoomPage(
-                        viewerConstraints.biggest,
-                        presenceState,
-                        prefs,
-                        textSize,
-                      );
-                      return _buildViewer(bookState, prefs, syncState);
-                    },
+                  child: Stack(
+                    children: [
+                      Column(
+                        children: [
+                          // EPUB reader with gesture overlay
+                          Expanded(
+                            child: LayoutBuilder(
+                              builder: (context, viewerConstraints) {
+                                _updateRoomPage(
+                                  viewerConstraints.biggest,
+                                  presenceState,
+                                  prefs,
+                                  textSize,
+                                );
+                                return _buildViewer(
+                                  bookState,
+                                  prefs,
+                                  syncState,
+                                );
+                              },
+                            ),
+                          ),
+
+                          // Bottom navigation bar
+                          _buildBottomBar(syncState, prefs),
+                        ],
+                      ),
+                      // Over the viewer, never in its place: the room's page
+                      // stays laid out and on screen underneath. The sync bar
+                      // stays above it, so a request from someone else can
+                      // still be answered.
+                      if (_jumpPreviewOpen && _appliedPage != null)
+                        Positioned.fill(
+                          child: JumpPreview(
+                            bookFile: bookState.bookFile!,
+                            displaySettings: prefs.displaySettings,
+                            page: _appliedPage!,
+                            initialCfi:
+                                _lastLocalCfi ?? _pageSync.position?.cfi,
+                            currentCfi: _lastLocalCfi,
+                            canConfirm: _canRequestTurn(syncState),
+                            volumeKeysTurnPages: prefs.volumeKeysTurnPages,
+                            ink: prefs.textColor,
+                            paper: prefs.backgroundColor,
+                            cfiAtProgress: (progress) =>
+                                SharedPageRenderer.cfiAtProgress(
+                                  _epubController,
+                                  progress,
+                                ),
+                            progressAt: (cfi) => SharedPageRenderer.progressAt(
+                              _epubController,
+                              cfi,
+                            ),
+                            onCancel: _closeJumpPreview,
+                            onConfirm: _requestJump,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-
-                // Bottom navigation bar
-                _buildBottomBar(syncState, prefs),
               ],
             ),
           ),
@@ -989,6 +1065,36 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       !syncState.adBreak &&
       _viewerReadyForTurns;
 
+  bool _canOpenJumpPreview(PageSyncState syncState) =>
+      !_leaving &&
+      !_adShowing &&
+      !syncState.adBreak &&
+      _viewerLoaded &&
+      _appliedPage != null;
+
+  void _openJumpPreview() {
+    if (!mounted || _jumpPreviewOpen) return;
+    if (!_canOpenJumpPreview(ref.read(pageSyncProvider))) return;
+    setState(() => _jumpPreviewOpen = true);
+  }
+
+  void _closeJumpPreview() {
+    if (!mounted || !_jumpPreviewOpen) return;
+    setState(() => _jumpPreviewOpen = false);
+    _readerFocus.requestFocus();
+  }
+
+  /// The page picked in the preview goes to the room like any turn: nobody
+  /// moves until everyone has agreed.
+  void _requestJump(JumpTarget target) {
+    _closeJumpPreview();
+    if (!mounted || _leaving) return;
+    if (!_canRequestTurn(ref.read(pageSyncProvider))) return;
+    unawaited(
+      _pageSync.requestJump(targetCfi: target.cfi, label: target.label),
+    );
+  }
+
   /// One entry point for taps, swipes and keys.
   ///
   /// While someone else's request is waiting on this reader, turning the same
@@ -1010,6 +1116,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   KeyEventResult _handleKeyEvent(KeyEvent event) {
+    // The preview turns its own pages; whatever it lets through (a digit in
+    // its page box) is not a turn for the room.
+    if (_jumpPreviewOpen) return KeyEventResult.ignored;
     final direction = pageTurnDirectionForKey(
       event.logicalKey,
       volumeKeysTurnPages: ref
@@ -1090,7 +1199,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 : null,
             tooltip: 'Reading settings',
           ),
-          PageCounter(info: _pageInfo, ink: ink),
+          PageCounter(
+            info: _pageInfo,
+            ink: ink,
+            onTap: _canOpenJumpPreview(syncState) ? _openJumpPreview : null,
+          ),
         ],
       ),
     );

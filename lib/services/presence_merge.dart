@@ -170,6 +170,22 @@ ProtocolCompatibility presenceProtocolCompatibility(
   return ProtocolCompatibility.older;
 }
 
+/// Whether some connection of [user] (a merged row, or one raw meta) speaks
+/// [version] or later. A request only that version answers is put to them.
+bool presenceSpeaksProtocol(Map<String, dynamic> user, int version) {
+  final listed = user['protocols'];
+  if (listed is List && listed.isNotEmpty) {
+    return listed.any(
+      (entry) =>
+          entry is List &&
+          entry.isNotEmpty &&
+          entry[0] is num &&
+          (entry[0] as num) >= version,
+    );
+  }
+  return presenceProtocolRange(user).version >= version;
+}
+
 DateTime presenceTime(Map<String, dynamic> presence) {
   return DateTime.tryParse(presence['online_at'] as String? ?? '') ??
       DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);

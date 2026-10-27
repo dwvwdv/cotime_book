@@ -13,7 +13,11 @@
 // (GH-37); its pages must still be the phone's. Chromium runs with the
 // viewport settings of Android's WebView, where a page scale without a width
 // used to put the book on a 980px layout viewport (GH-48). A layout the
-// frame no longer matches must be found and laid out again (GH-49).
+// frame no longer matches must be found and laid out again (GH-49). The
+// jump preview's "go to page n of this chapter" must name exactly the page
+// the counter numbers n, and the preview — a viewer shorter than the page,
+// whose bottom lines are under its slider — must name every page as the
+// room does.
 //
 //   flutter pub get
 //   node tool/shared_page_check/check.js        (from the repo root)
@@ -86,6 +90,15 @@ const devices = {
     cjk: '"IPAGothic"',
     loadFontSize: 22,
   },
+  // The phone's jump preview: the same device, with less height than the
+  // page (JumpPreview's header and footer take more than the bottom bar).
+  preview: {
+    viewport: { width: 360, height: 592 },
+    deviceScaleFactor: 3,
+    sysFont: '"DejaVu Sans", "WenQuanYi Zen Hei"',
+    cjk: '"WenQuanYi Zen Hei"',
+    loadFontSize: 18,
+  },
 };
 const page = { width: 360, height: 640, fontSize: 22 };
 
@@ -141,8 +154,9 @@ async function openBook(browser, device, shared, fontSize = page.fontSize) {
       {
         ...page,
         fontSize,
-        left: Math.floor((device.viewport.width - page.width) / 2),
-        top: Math.floor((device.viewport.height - page.height) / 2),
+        // SharedPageRenderer.originFor.
+        left: Math.max(0, Math.floor((device.viewport.width - page.width) / 2)),
+        top: Math.max(0, Math.floor((device.viewport.height - page.height) / 2)),
         scale: scaleFor(device.viewport),
         screenWidth: device.viewport.width,
         rules: rulesFor(device),
@@ -276,6 +290,7 @@ async function pageStarts(browser, device, shared, turns) {
   const ends = new Set();
   const back = [];
   const numbers = [];
+  const misnamed = [];
   for (const direction of ['next', 'prev']) {
     const seen = direction === 'next' ? starts : back;
     for (let i = 0; i < turns; i++) {
@@ -294,6 +309,10 @@ async function pageStarts(browser, device, shared, turns) {
       if (shared && direction === 'next') {
         const info = await tab.evaluate(() => cotimeSharedPage.pageInfo());
         numbers.push(info ? `${info.section}:${info.page}/${info.pages}` : 'none');
+        // The page a jump to "page n" of this chapter goes to is this one.
+        const named = info &&
+          (await tab.evaluate((n) => cotimeSharedPage.pageStart(n), info.page));
+        if (named !== cfi) misnamed.push(`${i}: ${named} for ${cfi}`);
       }
       if (!shared && (direction === 'next' ? here.atEnd : here.atStart)) break;
       if (!(await turn(tab, direction))) break;
@@ -301,7 +320,7 @@ async function pageStarts(browser, device, shared, turns) {
   }
   back.reverse();
   await context.close();
-  return { starts, blank, pictures, ends, back, scale, numbers };
+  return { starts, blank, pictures, ends, back, scale, numbers, misnamed };
 }
 
 /// Whether a frame that no longer matches the book's layout is noticed and
@@ -429,6 +448,16 @@ async function missedCommits(browser, device, starts) {
         console.log(`page numbers: ${sameNumbers ? 'the same on both' : 'different'}, ` +
           `${counting || 'counted one by one'}`);
         if (!sameNumbers || counting) failed = true;
+        const misnamed = [...phone.misnamed, ...tablet.misnamed];
+        console.log(`jump names  : ${misnamed.length === 0 ? 'every page' :
+          `${misnamed.length} pages misnamed, first ${misnamed[0]}`}`);
+        if (misnamed.length > 0) failed = true;
+        const preview = await pageStarts(browser, devices.preview, true, turns);
+        const previewSame = preview.starts.length === a.length &&
+          preview.starts.every((cfi, i) => cfi === a[i]);
+        console.log(`jump preview: ${preview.starts.filter((cfi, i) => cfi === a[i]).length}` +
+          `/${a.length} pages start at the same place`);
+        if (!previewSame) failed = true;
         const named = new Set(a).size;
         console.log(`page names  : ${named}/${a.length} distinct`);
         if (named !== a.length) failed = true;

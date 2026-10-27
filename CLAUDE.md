@@ -110,6 +110,14 @@ supabase/
      跳號。每章的計數會快取，`layOut()` 一律清掉快取（字級、頁框、修復都會移動分頁點）——新增
      排版路徑時別繞過它。`check.js` 確認兩台裝置的頁數一致、每章從 1 數到最後一頁，以及換字級後
      的頁數等於直接用新字級開書的頁數。
+     **跳頁**是帶目的地的翻頁：點底部列的頁數打開 `JumpPreview`，它用第二個 viewer 排在房間的
+     `SharedPage` 上（不是自己的螢幕），所以預覽看到的頁首 CFI 就是房間的頁名；滑桿走全書
+     （`cfiAtProgress`，問房間 viewer 已算好的 locations），頁數框是「這一章的第幾頁」，和頁數元件
+     同一套編號（`pageStart(n)`）。確認後送出 `direction: jump`＋`target_cfi` 的請求，照一般共識流程，
+     requester 的 viewer `display(target)`、以落點 commit seq+1。預覽蓋在 viewer 與底部列上、不取代它們：
+     房間的 viewer 不能換尺寸（issue #13），所以 reader 的 Scaffold 也不讓鍵盤縮小 body。預覽的 viewer
+     比頁框矮，頁底幾行被滑桿蓋住，但頁不裁切；`check.js` 驗證這樣的 viewer 頁首仍與房間一致，
+     並逐頁確認 `pageStart(章內頁碼)` 就是那一頁。廣告時段不能開預覽（會看到被蓋住的頁）。
      改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，先在本機跑
      `node tool/shared_page_check/check.js` 確認兩台不同的裝置仍然逐頁一致（本機約 5 分鐘）。
      CI 的 `shared-page-check.yml` 也會在這些來源變動時跑它；但 `check.js` 把 `displaySettings`
@@ -125,6 +133,8 @@ supabase/
      **共享頁面的分頁點改變時也算**（`SharedPageStyle` 的規則、`shared_page.js` 的頁首或空白頁判斷）：
      commit 帶的是本機分頁下的頁名，分頁不同的舊版會顯示到別頁。版本 2 就是為了 GH-49 / GH-52 的分頁改變。
      版本 3 是全房廣告時段（GH-63）：舊版跟得上（自己計數播廣告、廣告時段發起的翻頁被拒），所以 `minCompatibleRoomProtocol` 仍是 2。
+     版本 4 是跳頁：舊版收到 `direction: jump` 會丟掉、不回應，但跟得上 commit，所以仍相容；
+     房內有讀者的 App 低於 `AppConstants.pageJumpProtocol` 時，requester 直接不發出跳頁請求。
      只新增可被忽略的欄位不用改。版號只能往上加。舊版（v1.0.5 以前）不送這兩個欄位，算成 0，
      與目前的版本相容。只提示、不把對方排除在共識之外。
 
