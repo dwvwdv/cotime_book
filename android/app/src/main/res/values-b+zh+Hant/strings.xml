@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Traditional Chinese devices (zh-Hant-TW, -HK, -MO) never match
+         values-zh: Android 7+ compares scripts, and a bare "zh" resource is
+         taken to be Simplified, so they fell back to "CoTime Book". -->
+    <string name="app_name">頁間</string>
+</resources>
