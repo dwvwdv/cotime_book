@@ -8,12 +8,14 @@ import 'paper.dart';
 class MakerApp {
   final String name;
   final String subtitle;
+  final String tagline;
   final String description;
   final Uri storeUrl;
 
   const MakerApp({
     required this.name,
     required this.subtitle,
+    required this.tagline,
     required this.description,
     required this.storeUrl,
   });
@@ -25,10 +27,10 @@ final List<MakerApp> makerApps = [
   MakerApp(
     name: '無感記帳',
     subtitle: 'Seamless Track · Android',
+    tagline: '背景交易，全自動記帳',
     description:
-        'Bookkeeping that keeps itself: it reads the payment notifications '
-        'on your phone and records each amount for you. Your accounts stay '
-        'on your device.',
+        '刷卡、行動支付、轉帳的通知一跳出來，就在背景自動記成一筆交易，'
+        '不用打開 App，也不用手動輸入。帳務資料完全存在手機本地，預設不上傳。',
     storeUrl: Uri.parse(
       'https://play.google.com/store/apps/details'
       '?id=com.lazyrhythm.seamless_track',
@@ -121,7 +123,15 @@ class _MakerAppEntryState extends State<_MakerAppEntry> {
           ),
           const SizedBox(height: 4),
           Text(app.subtitle, style: AppTheme.caption),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
+          Text(
+            app.tagline,
+            style: AppTheme.body.copyWith(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
           Text(app.description, style: AppTheme.body.copyWith(height: 1.5)),
           const SizedBox(height: 14),
           OutlinedButton(

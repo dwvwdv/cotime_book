@@ -186,16 +186,19 @@ void main() {
     expect(convert.dx, lessThan(400));
   });
 
-  testWidgets('the bottom bar fits a small phone', (tester) async {
+  testWidgets('on a small phone the bottom bar stays on one line', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(320, 640);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await pumpHome(tester);
 
-    expect(find.text('TXT to EPUB'), findsOneWidget);
-    expect(find.text('More Apps'), findsOneWidget);
-    expect(find.text('News'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    final line = tester.getCenter(find.text('TXT to EPUB')).dy;
+    expect(tester.getCenter(find.text('More Apps')).dy, line);
+    expect(tester.getCenter(find.text('News')).dy, line);
+    expect(tester.getTopRight(find.text('News')).dx, lessThanOrEqualTo(320));
   });
 
   testWidgets('the nickname from last time is already filled in', (

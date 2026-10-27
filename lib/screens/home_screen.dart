@@ -392,46 +392,61 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 class _ToolsBar extends ConsumerWidget {
   const _ToolsBar();
 
+  static final ButtonStyle _compact = TextButton.styleFrom(
+    padding: const EdgeInsets.symmetric(horizontal: 8),
+  );
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       decoration: const BoxDecoration(border: Border(top: AppTheme.rule)),
-      // A Wrap, not a Row: three labelled buttons are wider than a small
-      // phone, and there the ones on the right go down a line instead of
-      // running off the edge.
-      child: Wrap(
-        alignment: WrapAlignment.spaceBetween,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        runSpacing: 4,
+      child: Row(
         children: [
           OutlinedButton.icon(
             onPressed: () => context.pushNamed('convert'),
+            // Narrower than the theme's padding, so the three buttons share
+            // one line on a 360dp phone.
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+            ),
             icon: const Icon(Icons.swap_horiz),
             label: const Text('TXT to EPUB'),
           ),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Out here, never in a room: nothing about a reading session
-              // points at another app.
-              TextButton(
-                onPressed: () => showMoreAppsSheet(
-                  context: context,
-                  openLink: ref.read(externalLinkProvider),
-                ),
-                child: const Text('More Apps'),
+          const SizedBox(width: 8),
+          // Shrinks rather than wraps where even that does not fit (a
+          // smaller phone, a larger font): a second line of buttons reads as
+          // a broken layout, and on e-ink the bar should never change shape.
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Out here, never in a room: nothing about a reading
+                  // session points at another app.
+                  TextButton(
+                    onPressed: () => showMoreAppsSheet(
+                      context: context,
+                      openLink: ref.read(externalLinkProvider),
+                    ),
+                    style: _compact,
+                    child: const Text('More Apps'),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => showAnnouncementSheet(
+                      context: context,
+                      announcements: ref.read(announcementServiceProvider),
+                    ),
+                    style: _compact,
+                    icon: const Icon(Icons.campaign_outlined),
+                    label: const Text('News'),
+                  ),
+                ],
               ),
-              TextButton.icon(
-                onPressed: () => showAnnouncementSheet(
-                  context: context,
-                  announcements: ref.read(announcementServiceProvider),
-                ),
-                icon: const Icon(Icons.campaign_outlined),
-                label: const Text('News'),
-              ),
-            ],
+            ),
           ),
         ],
       ),
