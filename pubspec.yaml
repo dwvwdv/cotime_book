@@ -1,7 +1,7 @@
 name: cotime_book
 description: 頁間（CoTime Book）- 遠程同步看書工具
 publish_to: 'none'
-version: 1.0.22+26
+version: 1.0.23+27
 
 environment:
   sdk: ^3.8.0
@@ -46,6 +46,10 @@ dependencies:
   # with its Android adapter and Vungle SDK). No Dart calls needed; the
   # Mediation Group in AdMob decides who bids. 1.4.2 needs google_mobile_ads 7.
   gma_mediation_liftoffmonetize: ">=1.4.1 <1.4.2"
+
+  # Google Play in-app update (app_update_service): checked on start and at
+  # most every 4 hours on resume, installed only outside a room.
+  in_app_update: ^4.2.3
 
   # UI
   gap: ^3.0.1

@@ -280,6 +280,10 @@ paths 過濾、concurrency、Telegram 通知的逾時與備援，每一條都對
 上架 Google Play 走手動觸發的 `.github/workflows/publish-play-store.yml`（套件名
 `com.lazyrhythm.cotime_book`，所需 secrets 與輸入見 README）。每次上傳都要新的版本碼——
 記得先調 `pubspec.yaml` 的 `+N`，或在觸發時填 `version_code`。
+App 端用 Play 的 in-app update 檢查新版（`AppUpdateService`）：啟動時一定查、回到前景最多每 4 小時查一次；
+上架時優先度設為 5 的版本走全螢幕更新，其餘在背景下載。安裝會重啟 App、沒有送出離開訊號，
+所以檢查與安裝都只在首頁且不在房間時進行（`isIdleForUpdate`），房間裡到期的等回首頁——
+不要讓更新流程在房間或 TXT 轉檔工具裡跑。
 
 ## Skills 索引
 
