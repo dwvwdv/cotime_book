@@ -39,6 +39,39 @@ void main() {
     expect(night.backgroundColor, const Color(0xFF000000));
   });
 
+  test("a book's own colours never cover the theme", () {
+    // Project Gutenberg's books paint their body white and their text black
+    // with a rule that outranks the viewer's `body { color }`: Sepia stayed
+    // white, and Night drew its light ink on a white page.
+    for (final theme in ReadingTheme.values) {
+      final prefs = ReadingPreferences(theme: theme);
+      final rules = prefs.themeRules;
+      final hex = (prefs.textColor.toARGB32() & 0xFFFFFF)
+          .toRadixString(16)
+          .padLeft(6, '0');
+
+      expect(rules['html, body, body *'], {
+        'background-color': 'transparent !important',
+      }, reason: '${theme.name}: the colour behind the WebView must show');
+      expect(rules['body'], {'color': '#$hex !important'});
+      expect(rules['body *'], {'color': 'inherit !important'});
+      expect(prefs.displaySettings.theme!.customCss, rules);
+    }
+  });
+
+  test('the colours are put into the book once it has loaded', () async {
+    // flutter_epub_viewer's loadBook() drops the custom CSS it is given, so
+    // the colours only take when handed over again after the load.
+    const sepia = ReadingPreferences(theme: ReadingTheme.sepia);
+    final controller = _RecordingEpubController();
+
+    await sepia.applyTheme(controller);
+
+    expect(controller.themes, hasLength(1));
+    expect(controller.themes.single.foregroundColor, sepia.textColor);
+    expect(controller.themes.single.customCss, sepia.themeRules);
+  });
+
   test('the type size reaches the viewer', () {
     const prefs = ReadingPreferences(fontSize: 24);
     expect(prefs.displaySettings.fontSize, 24);
@@ -173,4 +206,13 @@ void main() {
       expect(ReadingPreferencesNotifier(store).state.fontSize, 28);
     });
   });
+}
+
+class _RecordingEpubController extends EpubController {
+  final themes = <EpubTheme>[];
+
+  @override
+  Future<void> updateTheme({required EpubTheme theme}) async {
+    themes.add(theme);
+  }
 }

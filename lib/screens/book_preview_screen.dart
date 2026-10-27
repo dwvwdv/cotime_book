@@ -149,6 +149,14 @@ class _BookPreviewScreenState extends ConsumerState<BookPreviewScreen> {
 
   void _onChaptersLoaded(List<EpubChapter> chapters) {
     if (!mounted) return;
+    unawaited(
+      ref
+          .read(readingPreferencesProvider)
+          .applyTheme(_epubController)
+          .catchError((Object _) {
+            // The page keeps the book's own colours.
+          }),
+    );
     setState(() {
       _chapters = chapters;
       _chaptersLoaded = true;

@@ -78,6 +78,11 @@ supabase/
      （最小的頁框、最大的字級，由 Presence 的 `page_fit` 算出）上、用內建字型與固定行高排版，
      由 `assets/reader/shared_page.js` 在書載入後套用。不要讓書回到用本機視窗或系統字型排版，
      也不要用 CSS transform 縮放頁面——epub.js 會因此算錯頁首 CFI。
+     閱讀主題（Paper / Sepia / Night）是各人自己的，而且只有顏色：底色由 Flutter 畫在透明的 WebView
+     後面，`ReadingPreferences.themeRules` 以 `!important` 把書裡每個元素的底色清成透明、字色換成主題的
+     墨色——書自己常寫死白底黑字（Gutenberg 的 `body.tei.tei-text`），不蓋過去主題就沒效果。
+     flutter_epub_viewer 1.2.x 的 `loadBook()` 會丟掉傳進去的 custom CSS，所以書載入後由 `applyTheme()`
+     再交一次。主題規則不能碰任何影響排版的屬性：同房各人主題不同，分頁必須相同（`check.js` 用 Night 翻完整本比對）。
      比頁框大的螢幕把整頁放大填滿（GH-37），用的是 WebView 自己的 page scale（viewport meta，
      等同 pinch zoom），它不改變 CSS px 與 `getBoundingClientRect()`；WebView 不吃這個縮放時，
      `shared_page.js` 退回不縮放、置中。viewport tag 一定要寫明 `width`：Android WebView

@@ -112,11 +112,45 @@ class ReadingPreferences {
     // overlay.
     useSnapAnimationAndroid: true,
     fontSize: fontSize.round(),
-    theme: EpubTheme.custom(
-      backgroundDecoration: BoxDecoration(color: backgroundColor),
-      foregroundColor: textColor,
-    ),
+    theme: epubTheme,
   );
+
+  EpubTheme get epubTheme => EpubTheme.custom(
+    backgroundDecoration: BoxDecoration(color: backgroundColor),
+    foregroundColor: textColor,
+    customCss: themeRules,
+  );
+
+  /// Puts [themeRules] into the book once the viewer has loaded it.
+  ///
+  /// [displaySettings] alone is not enough: flutter_epub_viewer 1.2.x ends
+  /// `loadBook()` by registering the theme once more without its custom CSS,
+  /// which throws [themeRules] away before the first page is drawn. Call this
+  /// when the chapters are loaded, which is after `loadBook()` has returned.
+  Future<void> applyTheme(EpubController controller) async {
+    await controller.updateTheme(theme: epubTheme);
+  }
+
+  /// The theme's colours over the book's own.
+  ///
+  /// The viewer paints [backgroundColor] behind a transparent WebView, and
+  /// gives the book only a plain `body { color }`. Books colour themselves:
+  /// Project Gutenberg's stylesheet has `body.tei.tei-text { color: black;
+  /// background-color: white }`, which outranks that rule, so the page stayed
+  /// white under Sepia and Night drew its light ink on the white page. Every
+  /// box is cleared and every text takes the theme's ink, or a book's white
+  /// box or black text would sink back into a Night page.
+  ///
+  /// Colours only: nothing here moves a line, so the shared page's breaks do
+  /// not depend on the theme (issue #20).
+  Map<String, dynamic> get themeRules => {
+    'html, body, body *': {'background-color': 'transparent !important'},
+    'body': {'color': '${_cssColor(textColor)} !important'},
+    'body *': {'color': 'inherit !important'},
+  };
+
+  static String _cssColor(Color color) =>
+      '#${(color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 
   ReadingPreferences copyWith({
     ReadingTheme? theme,

@@ -62,6 +62,11 @@ class JumpPreview extends StatefulWidget {
   final File bookFile;
   final EpubDisplaySettings displaySettings;
 
+  /// Puts the reading theme's colours into the book once it has loaded, as
+  /// the room's viewer does (`ReadingPreferences.applyTheme`): the display
+  /// settings alone lose them.
+  final Future<void> Function(EpubController controller) applyTheme;
+
   /// The page the room's viewer is laid out on.
   final SharedPage page;
 
@@ -91,6 +96,7 @@ class JumpPreview extends StatefulWidget {
     super.key,
     required this.bookFile,
     required this.displaySettings,
+    required this.applyTheme,
     required this.page,
     required this.initialCfi,
     required this.currentCfi,
@@ -292,6 +298,11 @@ class _JumpPreviewState extends State<JumpPreview> {
 
   void _onChaptersLoaded(List<EpubChapter> chapters) {
     if (!mounted) return;
+    unawaited(
+      widget.applyTheme(_epubController).catchError((Object _) {
+        // The preview keeps the book's own colours.
+      }),
+    );
     setState(() {
       _chapters = chapters;
       _chaptersLoaded = true;
