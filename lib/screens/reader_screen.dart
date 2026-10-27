@@ -585,6 +585,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   void _onChaptersLoaded() {
     if (!mounted || _leaving) return;
+    unawaited(
+      ref
+          .read(readingPreferencesProvider)
+          .applyTheme(_epubController)
+          .catchError((Object _) {
+            // The page keeps the book's own colours until the next load.
+          }),
+    );
     setState(() => _chaptersLoaded = true);
     _scheduleLayoutSync();
   }
