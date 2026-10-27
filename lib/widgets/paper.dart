@@ -16,6 +16,11 @@ void showPaperMessage(
 
 /// A bottom sheet that appears in one frame. It overlays the page instead of
 /// dimming it: a translucent scrim dithers into gray noise on e-ink.
+///
+/// Every sheet has a close button in its top corner. A swipe down is how a
+/// phone closes one, but an e-reader's panel registers a drag late and
+/// coarsely, and tapping outside the sheet is not obvious when nothing dims
+/// the page behind it.
 Future<T?> showPaperSheet<T>({
   required BuildContext context,
   required WidgetBuilder builder,
@@ -25,9 +30,30 @@ Future<T?> showPaperSheet<T>({
     isScrollControlled: true,
     sheetAnimationStyle: AnimationStyle.noAnimation,
     builder: (sheetContext) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-        child: builder(sheetContext),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 4, right: 8),
+              child: IconButton(
+                tooltip: 'Close',
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.of(sheetContext).maybePop(),
+              ),
+            ),
+          ),
+          // Whatever height the button leaves: a sheet that sizes itself to
+          // a share of the screen must not push the button off it.
+          Flexible(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              child: builder(sheetContext),
+            ),
+          ),
+        ],
       ),
     ),
   );
