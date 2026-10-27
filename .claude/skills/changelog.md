@@ -12,7 +12,7 @@
 
 ### v1.0.18+22 (2026-10-27)
 
-- ✨ 首頁底部列右側新增「News」：打開後依時間由新到舊列出版本公告與消息。公告存在 Supabase 的 `cotime_book.announcements` 表，從 dashboard 新增就上線，不必等發版；落後幾版的 App 也看得到之後的更新說明。`published_at` 填未來的時間可以先寫好、到時才出現。需要先套 `20261027120000_announcements.sql` 再發版，否則打開會顯示「The announcements could not be loaded.」。
+- ✨ 首頁底部列右側新增「News」：打開後依時間由新到舊列出版本公告與消息。公告存在 Supabase 的 `cotime_book.announcements` 表，從 dashboard 新增就上線，不必等發版；落後幾版的 App 也看得到之後的更新說明。`published_at` 填未來的時間可以先寫好、到時才出現。`20261027021053_announcements.sql` 已套用到正式庫，第一則公告（v1.0.18）也已發布。
 
 ### v1.0.17+21 (2026-10-27)
 
