@@ -175,7 +175,10 @@ class PageTurnRequest {
   bool get isJump => direction == PageTurnDirection.jump;
 
   /// Whether agreeing to [other] means agreeing to this: the same way, and
-  /// for a jump the same page.
+  /// for a jump the same page. Only decides whether a reader whose own
+  /// request lost the tie-break is counted as agreeing without being asked;
+  /// two names for one page (a layout still catching up) just ask them, and
+  /// nothing is ordered or synced by it.
   bool sameIntentAs(PageTurnRequest other) =>
       direction == other.direction && (!isJump || targetCfi == other.targetCfi);
 

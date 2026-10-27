@@ -989,7 +989,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                               cfi,
                             ),
                             onCancel: _closeJumpPreview,
-                            onConfirm: _requestJump,
+                            onConfirm: (target) =>
+                                unawaited(_requestJump(target)),
                           ),
                         ),
                     ],
@@ -1095,13 +1096,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   /// The page picked in the preview goes to the room like any turn: nobody
   /// moves until everyone has agreed.
-  void _requestJump(JumpTarget target) {
-    _closeJumpPreview();
+  ///
+  /// The preview stays open until the request is out: a refusal (a reader on
+  /// an app that cannot jump, a reconnect) shows on the sync bar above it,
+  /// and the page picked is still there to ask for again.
+  Future<void> _requestJump(JumpTarget target) async {
     if (!mounted || _leaving) return;
     if (!_canRequestTurn(ref.read(pageSyncProvider))) return;
-    unawaited(
-      _pageSync.requestJump(targetCfi: target.cfi, label: target.label),
+    final sent = await _pageSync.requestJump(
+      targetCfi: target.cfi,
+      label: target.label,
     );
+    if (sent) _closeJumpPreview();
   }
 
   /// One entry point for taps, swipes and keys.

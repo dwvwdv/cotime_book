@@ -337,7 +337,9 @@ class PageSyncService {
   }
 
   Future<bool> requestPageTurn({required PageTurnDirection direction}) {
-    assert(direction != PageTurnDirection.jump, 'Use requestJump');
+    // A jump without a target is dropped by everyone it is put to, and the
+    // room would wait out the timeout for it.
+    if (direction == PageTurnDirection.jump) return Future.value(false);
     return _request(direction);
   }
 

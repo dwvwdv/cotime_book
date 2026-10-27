@@ -966,6 +966,26 @@ void main() {
       expect(alice.service.currentState.errorMessage, contains('that page'));
     });
 
+    test('a jump without a target is never put to the room', () async {
+      // Everyone would drop it, and the room would wait out the timeout.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.jump),
+        isFalse,
+      );
+      expect(await alice.service.requestJump(targetCfi: ''), isFalse);
+      expect(
+        room.sent.where((e) => e.event == PageSyncService.requestEvent),
+        isEmpty,
+      );
+      expect(alice.service.currentState.status, SyncStatus.idle);
+    });
+
     test('turning the page does not answer a jump', () async {
       // Agreeing by turning the same way only makes sense for next/previous.
       final room = FakeRoom();
@@ -1088,6 +1108,18 @@ void main() {
       ]).single;
       expect(
         presenceSpeaksProtocol(oldInBook, AppConstants.pageJumpProtocol),
+        isFalse,
+      );
+      // Readiness is merged across connections: a stale flag on the new
+      // app in the lobby must not stand in for the old one in the book.
+      final oldInBookNotReady = mergePresenceUsers([
+        {...meta(3, reading: true), 'reader_ready': false},
+        {...meta(AppConstants.pageJumpProtocol, reading: false),
+          'reader_ready': true},
+      ]).single;
+      expect(oldInBookNotReady['reader_ready'], isTrue);
+      expect(
+        presenceSpeaksProtocol(oldInBookNotReady, AppConstants.pageJumpProtocol),
         isFalse,
       );
       final newInBook = mergePresenceUsers([

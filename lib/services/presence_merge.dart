@@ -66,15 +66,14 @@ List<Map<String, dynamic>> mergePresenceUsers(
             .map((range) => [range.version, range.oldestCompatible])
             .toList()
           ..sort((a, b) => a[0] != b[0] ? a[0] - b[0] : a[1] - b[1]);
-    // The versions of the connections that are in the book and can be asked
-    // to agree: a request only a newer version answers is answered by one of
-    // these or by nobody, whatever the person's other devices speak.
+    // The versions of the connections that are in the book: a request only a
+    // newer version answers is answered by one of these or by nobody,
+    // whatever the person's other devices speak. Not narrowed to the ones
+    // that are reader_ready: readiness is merged across connections, so a
+    // person can be asked on the strength of another connection's flag.
     latest['reader_protocols'] =
         metas
-            .where(
-              (meta) =>
-                  meta['is_reading'] == true && meta['reader_ready'] == true,
-            )
+            .where((meta) => meta['is_reading'] == true)
             .map((meta) => presenceProtocolRange(meta).version)
             .toSet()
             .toList()

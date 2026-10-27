@@ -140,6 +140,10 @@ class _JumpPreviewState extends State<JumpPreview> {
   int _layoutRepairs = 0;
   Timer? _layoutCheckTimer;
 
+  /// Layouts that did not reach the WebView, retried like the reader's.
+  int _layoutAttempts = 0;
+  Timer? _layoutRetryTimer;
+
   /// The page start in view, and what the counter would say about it. The
   /// page can only be picked once [_info] is about [_cfi]: a page still
   /// moving has no name yet.
@@ -201,6 +205,7 @@ class _JumpPreviewState extends State<JumpPreview> {
   @override
   void dispose() {
     _layoutCheckTimer?.cancel();
+    _layoutRetryTimer?.cancel();
     _settleTimer?.cancel();
     _moveTimer?.cancel();
     _pageField.dispose();
@@ -245,13 +250,31 @@ class _JumpPreviewState extends State<JumpPreview> {
     }
     final generation = ++_layoutGeneration;
     _layoutCheckTimer?.cancel();
+    _layoutRetryTimer?.cancel();
     setState(() => _layoutInFlight = true);
+    var applied = false;
     try {
-      await SharedPageRenderer.apply(_epubController, page, viewerSize);
+      applied = await SharedPageRenderer.apply(
+        _epubController,
+        page,
+        viewerSize,
+      );
     } catch (_) {
-      // The check below asks again.
+      applied = false;
     }
     if (!mounted || generation != _layoutGeneration) return;
+    if (applied) {
+      _layoutAttempts = 0;
+    } else if (_layoutAttempts++ < 3) {
+      // Shown on the WebView's own layout meanwhile, whose page starts are
+      // not the room's: verify() cannot catch it (no page was applied), so
+      // the layout is tried again here, as the reader does.
+      _layoutRetryTimer = Timer(const Duration(seconds: 2), () {
+        if (!mounted) return;
+        _layoutOwed = true;
+        _scheduleLayout();
+      });
+    }
     setState(() {
       _layoutInFlight = false;
       _appliedPage = page;
@@ -262,13 +285,11 @@ class _JumpPreviewState extends State<JumpPreview> {
     });
     // Every page break moved: back to the page in view, or where it opened.
     // Not a move of the reader's: a display that does not relocate (the page
-    // already shown) must not lock Go.
+    // already shown) must not lock Go, and the page is read again whether or
+    // not it relocates.
     final cfi = _cfi ?? widget.initialCfi;
-    if (cfi != null && cfi.isNotEmpty) {
-      _display(cfi, moving: false);
-    } else {
-      _settleSoon();
-    }
+    if (cfi != null && cfi.isNotEmpty) _display(cfi, moving: false);
+    _settleSoon();
     _checkLayoutSoon();
     if (widget.page != page || _viewerSize != viewerSize) _scheduleLayout();
   }
@@ -311,8 +332,11 @@ class _JumpPreviewState extends State<JumpPreview> {
   }
 
   void _onRelocated(EpubLocation location) {
-    // A layout's own relocations are not where the preview went.
-    if (!mounted || _layoutInFlight) return;
+    // A layout's own relocations are not where the preview went, and nor is
+    // the first display on the WebView's own layout, before the room's page
+    // is applied: its page start is not a page of the room's, and showing it
+    // again on the room's page would open the preview a page behind.
+    if (!mounted || _layoutInFlight || _appliedPage == null) return;
     _moveTimer?.cancel();
     setState(() {
       _cfi = location.startCfi;
