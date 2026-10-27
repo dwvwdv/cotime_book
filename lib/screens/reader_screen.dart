@@ -24,6 +24,7 @@ import '../widgets/jump_preview.dart';
 import '../widgets/layout_report_sheet.dart';
 import '../widgets/page_counter.dart';
 import '../widgets/page_turn_input.dart';
+import '../widgets/reader_safe_area.dart';
 import '../widgets/paper.dart';
 import '../widgets/reader_members_sheet.dart';
 import '../widgets/sync_status_bar.dart';
@@ -911,7 +912,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         // shrinks it: a smaller viewer is a new page for the whole room
         // (issue #20).
         resizeToAvoidBottomInset: false,
-        body: SafeArea(
+        body: ReaderSafeArea(
           // Physical page buttons, Bluetooth page turners and keyboards. The
           // viewer absorbs pointers, so the WebView never takes focus from
           // this node.

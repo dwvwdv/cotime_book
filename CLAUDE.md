@@ -120,7 +120,9 @@ supabase/
      （`cfiAtProgress`，問房間 viewer 已算好的 locations），頁數框是「這一章的第幾頁」，和頁數元件
      同一套編號（`pageStart(n)`）。確認後送出 `direction: jump`＋`target_cfi` 的請求，照一般共識流程，
      requester 的 viewer `display(target)`、以落點 commit seq+1。預覽蓋在 viewer 與底部列上、不取代它們：
-     房間的 viewer 不能換尺寸（issue #13），所以 reader 的 Scaffold 也不讓鍵盤縮小 body。預覽的 viewer
+     房間的 viewer 不能換尺寸（issue #13），所以 reader 的 Scaffold 也不讓鍵盤縮小 body，
+     而且用 `ReaderSafeArea`（`maintainBottomViewPadding`）——鍵盤出現時 `MediaQuery.padding.bottom`
+     會歸零，一般的 `SafeArea` 會讓 viewer 反而長高、全房重排。預覽的 viewer
      比頁框矮，頁底幾行被滑桿蓋住，但頁不裁切；`check.js` 驗證這樣的 viewer 頁首仍與房間一致，
      並逐頁確認 `pageStart(章內頁碼)` 就是那一頁。廣告時段不能開預覽（會看到被蓋住的頁）。
      改到 `displaySettings`、`SharedPageStyle` 或 `shared_page.js` 時，先在本機跑

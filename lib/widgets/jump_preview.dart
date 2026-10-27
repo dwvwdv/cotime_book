@@ -579,7 +579,10 @@ class _JumpPreviewState extends State<JumpPreview> {
             child: TextField(
               controller: _pageField,
               focusNode: _pageFieldFocus,
-              enabled: _ready && info != null,
+              // Read-only, not disabled, while the page is laid out again: a
+              // disabled field drops the focus and the keyboard with it.
+              enabled: info != null,
+              readOnly: !_ready,
               keyboardType: TextInputType.number,
               textInputAction: TextInputAction.go,
               textAlign: TextAlign.center,
