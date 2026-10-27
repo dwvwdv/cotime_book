@@ -1,4 +1,5 @@
 import 'package:cotime_book/providers/app_update_provider.dart';
+import 'package:cotime_book/router/app_router.dart';
 import 'package:cotime_book/services/app_update_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -241,48 +242,75 @@ void main() {
     });
   });
 
-  testWidgets('the TXT tool pushed from Home is not idle', (tester) async {
-    // Home opens the TXT tool with push, as home_screen does.
-    final router = GoRouter(
-      initialLocation: '/',
+  group('Home', () {
+    // Home on another path than '/', to show nothing depends on the path.
+    GoRouter testRouter() => GoRouter(
+      initialLocation: '/home',
       routes: [
-        GoRoute(path: '/', builder: (context, state) => const Text('home')),
+        GoRoute(
+          path: '/home',
+          name: 'home',
+          builder: (context, state) => const Text('home'),
+        ),
         GoRoute(
           path: '/convert',
+          name: 'convert',
           builder: (context, state) => const Text('convert'),
         ),
       ],
     );
-    addTearDown(router.dispose);
-    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
-    expect(
-      isIdleForUpdate(location: topLocation(router), inRoom: false),
-      isTrue,
-    );
 
-    router.push('/convert');
-    await tester.pumpAndSettle();
-    expect(find.text('convert'), findsOneWidget);
-    expect(
-      isIdleForUpdate(location: topLocation(router), inRoom: false),
-      isFalse,
-    );
+    testWidgets('is the route named home, wherever it is', (tester) async {
+      final router = testRouter();
+      addTearDown(router.dispose);
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      expect(isIdleForUpdate(router, inRoom: false), isTrue);
+      expect(isIdleForUpdate(router, inRoom: true), isFalse);
 
-    router.pop();
-    await tester.pumpAndSettle();
-    expect(
-      isIdleForUpdate(location: topLocation(router), inRoom: false),
-      isTrue,
-    );
-  });
+      // Home opens the TXT tool with push, as home_screen does. A
+      // conversion that is not saved yet would be lost to the restart.
+      router.pushNamed('convert');
+      await tester.pumpAndSettle();
+      expect(find.text('convert'), findsOneWidget);
+      expect(isIdleForUpdate(router, inRoom: false), isFalse);
 
-  test('only Home with no room is idle', () {
-    expect(isIdleForUpdate(location: '/', inRoom: false), isTrue);
-    expect(isIdleForUpdate(location: '/', inRoom: true), isFalse);
-    expect(isIdleForUpdate(location: '/lobby/ABCDEF', inRoom: true), isFalse);
-    expect(isIdleForUpdate(location: '/reader/ABCDEF', inRoom: true), isFalse);
-    // A conversion that is not saved yet would be lost to the restart.
-    expect(isIdleForUpdate(location: '/convert', inRoom: false), isFalse);
+      router.pop();
+      await tester.pumpAndSettle();
+      expect(isIdleForUpdate(router, inRoom: false), isTrue);
+    });
+
+    testWidgets('opening the app asks Play once', (tester) async {
+      final router = testRouter();
+      addTearDown(router.dispose);
+      service = AppUpdateService(
+        platform: play,
+        isIdle: () => isIdleForUpdate(router, inRoom: false),
+        now: () => now,
+      );
+      // Started before the app is built, as CoTimeBookApp.initState does.
+      addTearDown(startUpdateChecks(router, service));
+      expect(play.checks, 0, reason: 'no page yet');
+
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pump();
+      expect(play.checks, 1);
+
+      // Moving around Home with nothing held back does not ask again.
+      router.pushNamed('convert');
+      await tester.pumpAndSettle();
+      router.pop();
+      await tester.pumpAndSettle();
+      expect(play.checks, 1);
+    });
+
+    testWidgets('the app opens on Home', (tester) async {
+      // Otherwise the start-up check would wait for the user to go Home.
+      final router = AppRouter.router;
+      expect(
+        router.routeInformationProvider.value.uri.path,
+        router.namedLocation('home'),
+      );
+    });
   });
 }
 
