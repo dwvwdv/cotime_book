@@ -1,6 +1,8 @@
+import 'package:cotime_book/config/theme.dart';
 import 'package:cotime_book/models/recent_room.dart';
 import 'package:cotime_book/providers/announcement_provider.dart';
 import 'package:cotime_book/providers/auth_provider.dart';
+import 'package:cotime_book/providers/external_link_provider.dart';
 import 'package:cotime_book/providers/local_store_provider.dart';
 import 'package:cotime_book/providers/room_provider.dart';
 import 'package:cotime_book/screens/home_screen.dart';
@@ -29,6 +31,8 @@ void main() {
   late FakeAnnouncements announcements;
   late ProviderContainer container;
   late List<String> visitedLobbies;
+  late List<Uri> openedLinks;
+  late bool linksOpen;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -36,6 +40,8 @@ void main() {
     rooms = FakeRoomService();
     announcements = FakeAnnouncements();
     visitedLobbies = [];
+    openedLinks = [];
+    linksOpen = true;
   });
 
   Future<void> pumpHome(WidgetTester tester) async {
@@ -45,6 +51,10 @@ void main() {
         roomServiceProvider.overrideWithValue(rooms),
         authProvider.overrideWith((ref) => _SignedInAuth(store)),
         announcementServiceProvider.overrideWithValue(announcements),
+        externalLinkProvider.overrideWithValue((uri) async {
+          openedLinks.add(uri);
+          return linksOpen;
+        }),
       ],
     );
     addTearDown(container.dispose);
@@ -70,7 +80,11 @@ void main() {
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
-        child: MaterialApp.router(routerConfig: router),
+        child: MaterialApp.router(
+          // The app's own buttons, whose padding decides what fits a row.
+          theme: AppTheme.paperTheme,
+          routerConfig: router,
+        ),
       ),
     );
   }
@@ -103,12 +117,92 @@ void main() {
     // Nothing is fetched until it is opened.
     expect(announcements.calls, 0);
 
-    await tester.tap(find.text('News'));
+    await tester.tap(find.byTooltip('News'));
     await tester.pumpAndSettle();
 
     expect(announcements.calls, 1);
     expect(find.text('v1.0.18'), findsOneWidget);
     expect(find.text('News on the home screen'), findsOneWidget);
+  });
+
+  testWidgets('More Apps opens the Google Play page of 無感記帳', (tester) async {
+    await pumpHome(tester);
+
+    await tester.tap(find.text('More Apps'));
+    await tester.pumpAndSettle();
+    expect(find.text('無感記帳'), findsOneWidget);
+
+    await tester.tap(find.text('Get it on Google Play'));
+    await tester.pumpAndSettle();
+
+    expect(openedLinks.single.host, 'play.google.com');
+    expect(
+      openedLinks.single.queryParameters['id'],
+      'com.lazyrhythm.seamless_track',
+    );
+    expect(find.textContaining('could not be opened'), findsNothing);
+  });
+
+  testWidgets(
+    'a device that cannot open Google Play is shown the link to copy',
+    (tester) async {
+      linksOpen = false;
+      await pumpHome(tester);
+
+      await tester.tap(find.text('More Apps'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Get it on Google Play'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('could not be opened'), findsOneWidget);
+      expect(
+        find.widgetWithText(SelectableText, openedLinks.single.toString()),
+        findsOneWidget,
+      );
+      // The button still works: a second try is not blocked by the first.
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.widgetWithText(OutlinedButton, 'Get it on Google Play'),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    },
+  );
+
+  testWidgets('on a wide screen the bottom bar is one line, News at the end', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await pumpHome(tester);
+
+    final convert = tester.getCenter(find.text('TXT to EPUB'));
+    final news = tester.getCenter(find.byTooltip('News'));
+    expect(news.dy, convert.dy);
+    expect(tester.getTopRight(find.byTooltip('News')).dx, greaterThan(700));
+    expect(convert.dx, lessThan(400));
+  });
+
+  testWidgets('on a small phone the bottom bar stays on one line', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await pumpHome(tester);
+
+    expect(tester.takeException(), isNull);
+    final line = tester.getCenter(find.text('TXT to EPUB')).dy;
+    // closeTo: the shrunk buttons sit a rounding error off the line.
+    expect(tester.getCenter(find.text('More Apps')).dy, closeTo(line, 0.5));
+    expect(tester.getCenter(find.byTooltip('News')).dy, closeTo(line, 0.5));
+    expect(
+      tester.getTopRight(find.byTooltip('News')).dx,
+      lessThanOrEqualTo(320),
+    );
   });
 
   testWidgets('the nickname from last time is already filled in', (

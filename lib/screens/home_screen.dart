@@ -6,6 +6,7 @@ import '../config/supabase_config.dart';
 import '../config/theme.dart';
 import '../providers/announcement_provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/external_link_provider.dart';
 import '../providers/book_provider.dart';
 import '../models/recent_room.dart';
 import '../models/room.dart';
@@ -14,6 +15,7 @@ import '../providers/recent_rooms_provider.dart';
 import '../providers/room_provider.dart';
 import '../widgets/announcement_sheet.dart';
 import '../widgets/masthead.dart';
+import '../widgets/more_apps_sheet.dart';
 import '../widgets/paper.dart';
 import '../widgets/recent_rooms_list.dart';
 import '../widgets/room_code_input.dart';
@@ -381,13 +383,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 }
 
 /// The bar along the bottom: tools that work on this device alone (bottom
-/// left), kept apart from rooms, and the announcements (bottom right).
+/// left), kept apart from rooms, and the maker's other apps and the
+/// announcements (bottom right).
 ///
 /// TXT to EPUB lives here rather than in a room's Share Book: the person who
 /// converts a book reads it first, so a bad conversion never has a whole room
 /// waiting on it, and rooms only ever deal in EPUB.
 class _ToolsBar extends ConsumerWidget {
   const _ToolsBar();
+
+  static final ButtonStyle _compact = TextButton.styleFrom(
+    padding: const EdgeInsets.symmetric(horizontal: 8),
+  );
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -399,17 +406,48 @@ class _ToolsBar extends ConsumerWidget {
         children: [
           OutlinedButton.icon(
             onPressed: () => context.pushNamed('convert'),
+            // Narrower than the theme's padding, so the three buttons share
+            // one line on a 360dp phone.
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+            ),
             icon: const Icon(Icons.swap_horiz),
             label: const Text('TXT to EPUB'),
           ),
-          const Spacer(),
-          TextButton.icon(
-            onPressed: () => showAnnouncementSheet(
-              context: context,
-              announcements: ref.read(announcementServiceProvider),
+          const SizedBox(width: 8),
+          // Shrinks rather than wraps where even that does not fit (a
+          // smaller phone, a larger font): a second line of buttons reads as
+          // a broken layout, and on e-ink the bar should never change shape.
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Out here, never in a room: nothing about a reading
+                  // session points at another app.
+                  TextButton(
+                    onPressed: () => showMoreAppsSheet(
+                      context: context,
+                      openLink: ref.read(externalLinkProvider),
+                    ),
+                    style: _compact,
+                    child: const Text('More Apps'),
+                  ),
+                  // The megaphone alone: a label beside it would crowd the
+                  // bar. The tooltip still names it for screen readers.
+                  IconButton(
+                    onPressed: () => showAnnouncementSheet(
+                      context: context,
+                      announcements: ref.read(announcementServiceProvider),
+                    ),
+                    tooltip: 'News',
+                    icon: const Icon(Icons.campaign_outlined),
+                  ),
+                ],
+              ),
             ),
-            icon: const Icon(Icons.campaign_outlined),
-            label: const Text('News'),
           ),
         ],
       ),

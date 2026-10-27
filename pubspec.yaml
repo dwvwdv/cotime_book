@@ -1,7 +1,7 @@
 name: cotime_book
 description: 頁間（CoTime Book）- 遠程同步看書工具
 publish_to: 'none'
-version: 1.0.22+26
+version: 1.0.23+27
 
 environment:
   sdk: ^3.8.0
@@ -59,6 +59,8 @@ dependencies:
   json_annotation: ^4.9.0
   collection: ^1.19.1
   shared_preferences: ^2.5.3
+  # More Apps opens Google Play. Already a dependency of supabase_flutter.
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:
