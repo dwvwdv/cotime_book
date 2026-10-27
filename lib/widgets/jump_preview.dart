@@ -149,7 +149,19 @@ class _JumpPreviewState extends State<JumpPreview> {
   bool get _ready =>
       _chaptersLoaded && _appliedPage != null && !_layoutInFlight;
 
-  bool get _settled => _ready && _cfi != null && _infoCfi == _cfi;
+  /// A move asked for (a turn, the slider, a chapter, a typed page) has not
+  /// landed yet. Until it has, the page on screen is about to be replaced
+  /// and must not be the one the room is asked for: on an e-reader a new
+  /// chapter takes a while to lay out.
+  bool _moving = false;
+  Timer? _moveTimer;
+
+  /// A move that never relocates (the end of the book, the page already
+  /// shown) does not lock the preview for good.
+  static const _moveTimeout = Duration(seconds: 8);
+
+  bool get _settled =>
+      _ready && !_moving && !_dragging && _cfi != null && _infoCfi == _cfi;
 
   bool get _isHere => _cfi != null && _cfi == widget.currentCfi;
 
@@ -184,6 +196,7 @@ class _JumpPreviewState extends State<JumpPreview> {
   void dispose() {
     _layoutCheckTimer?.cancel();
     _settleTimer?.cancel();
+    _moveTimer?.cancel();
     _pageField.dispose();
     _pageFieldFocus.dispose();
     _focus.dispose();
@@ -238,11 +251,15 @@ class _JumpPreviewState extends State<JumpPreview> {
       _appliedPage = page;
       _appliedViewerSize = viewerSize;
       _layoutOwed = false;
+      // Counted on the old page breaks.
+      _infoCfi = null;
     });
     // Every page break moved: back to the page in view, or where it opened.
+    // Not a move of the reader's: a display that does not relocate (the page
+    // already shown) must not lock Go.
     final cfi = _cfi ?? widget.initialCfi;
     if (cfi != null && cfi.isNotEmpty) {
-      _display(cfi);
+      _display(cfi, moving: false);
     } else {
       _settleSoon();
     }
@@ -285,7 +302,11 @@ class _JumpPreviewState extends State<JumpPreview> {
   void _onRelocated(EpubLocation location) {
     // A layout's own relocations are not where the preview went.
     if (!mounted || _layoutInFlight) return;
-    setState(() => _cfi = location.startCfi);
+    _moveTimer?.cancel();
+    setState(() {
+      _cfi = location.startCfi;
+      _moving = false;
+    });
     _settleSoon();
     _checkLayoutSoon();
   }
@@ -333,16 +354,33 @@ class _JumpPreviewState extends State<JumpPreview> {
   // ---------------------------------------------------------------------------
   // Moving the preview
 
-  void _display(String cfi) {
+  void _startMoving() {
+    _moveTimer?.cancel();
+    _moveTimer = Timer(_moveTimeout, _stopMoving);
+    if (!_moving) setState(() => _moving = true);
+  }
+
+  void _stopMoving() {
+    _moveTimer?.cancel();
+    if (!mounted || !_moving) return;
+    setState(() => _moving = false);
+    // Whatever is on screen now is the page; read it again.
+    _settleSoon();
+  }
+
+  void _display(String cfi, {bool moving = true}) {
+    if (moving) _startMoving();
     try {
       _epubController.display(cfi: cfi);
     } catch (_) {
       // The viewer went away; nothing to show.
+      if (moving) _stopMoving();
     }
   }
 
   void _turn(PageTurnDirection direction) {
     if (!_ready) return;
+    _startMoving();
     try {
       if (direction == PageTurnDirection.next) {
         _epubController.next();
@@ -351,16 +389,20 @@ class _JumpPreviewState extends State<JumpPreview> {
       }
     } catch (_) {
       // The viewer went away.
+      _stopMoving();
     }
   }
 
   Future<void> _goToProgress(double progress) async {
     if (!_ready) return;
+    // From the moment it is asked for, not from when the page is found.
+    _startMoving();
     final cfi =
         await widget.cfiAtProgress(progress) ??
         await SharedPageRenderer.cfiAtProgress(_epubController, progress);
     if (!mounted || cfi == null || cfi.isEmpty) {
       if (mounted) {
+        _stopMoving();
         showPaperMessage(
           context,
           'Still working out the length of the book. Try again in a moment.',
@@ -381,9 +423,11 @@ class _JumpPreviewState extends State<JumpPreview> {
     }
     _pageField.text = '$page';
     if (page == info.page) return;
+    _startMoving();
     final cfi = await SharedPageRenderer.pageStart(_epubController, page);
     if (!mounted) return;
     if (cfi == null) {
+      _stopMoving();
       // Not a page after all (the chapter was recounted): back to the one
       // on screen, so Go does not keep asking for it.
       final shown = _info;
