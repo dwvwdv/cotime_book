@@ -6,6 +6,7 @@ import 'config/app_constants.dart';
 import 'config/supabase_config.dart';
 import 'config/theme.dart';
 import 'providers/ads_provider.dart';
+import 'providers/app_update_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/presence_provider.dart';
 import 'providers/room_provider.dart';
@@ -28,12 +29,25 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
     ref.read(pageTurnAdsProvider);
     ref.read(txtSaveAdsProvider);
     _initAuth();
+    final updates = ref.read(appUpdateServiceProvider);
+    if (updates != null) {
+      unawaited(updates.checkOnStart());
+      AppRouter.router.routerDelegate.addListener(_onMaybeIdle);
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    AppRouter.router.routerDelegate.removeListener(_onMaybeIdle);
     super.dispose();
+  }
+
+  // An update held back by a room runs once the app is back Home with no
+  // room; leaving clears the room and goes Home in either order.
+  void _onMaybeIdle() {
+    final updates = ref.read(appUpdateServiceProvider);
+    if (updates != null) unawaited(updates.onIdle());
   }
 
   @override
@@ -56,6 +70,8 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
       // on pause, and e-readers sleep between pages). If the library's own
       // rejoin does not bring the room channel back, rebuild it.
       ref.read(realtimeServiceProvider).checkConnection();
+      final updates = ref.read(appUpdateServiceProvider);
+      if (updates != null) unawaited(updates.checkOnResume());
     }
     try {
       await ref.read(presenceProvider.notifier).setAppActive(isActive);
@@ -80,6 +96,12 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<bool>(
+      roomProvider.select((state) => state.currentRoom == null),
+      (_, noRoom) {
+        if (noRoom) _onMaybeIdle();
+      },
+    );
     return MaterialApp.router(
       title: AppConstants.appName,
       theme: AppTheme.paperTheme,
