@@ -1,6 +1,8 @@
 import 'package:cotime_book/providers/app_update_provider.dart';
 import 'package:cotime_book/services/app_update_service.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:in_app_update/in_app_update.dart';
 
 class FakePlay implements AppUpdatePlatform {
@@ -136,6 +138,26 @@ void main() {
       expect(play.flexibleDownloads, 1);
     });
 
+    test(
+      'an immediate update closed halfway resumes on the next start',
+      () async {
+        play.availability =
+            UpdateAvailability.developerTriggeredUpdateInProgress;
+        play.priority = 5;
+        await service.checkOnStart();
+        expect(play.immediateUpdates, 1);
+      },
+    );
+
+    test('a background download in progress is left to finish', () async {
+      play.availability = UpdateAvailability.developerTriggeredUpdateInProgress;
+      play.installStatus = InstallStatus.downloading;
+      await service.checkOnStart();
+      expect(play.immediateUpdates, 0);
+      expect(play.flexibleDownloads, 0);
+      expect(play.installs, 0);
+    });
+
     test('a declined download installs nothing', () async {
       play.offer();
       play.flexibleResult = AppUpdateResult.userDeniedUpdate;
@@ -217,6 +239,41 @@ void main() {
       await service.onIdle();
       expect(play.checks, 1);
     });
+  });
+
+  testWidgets('the TXT tool pushed from Home is not idle', (tester) async {
+    // Home opens the TXT tool with push, as home_screen does.
+    final router = GoRouter(
+      initialLocation: '/',
+      routes: [
+        GoRoute(path: '/', builder: (context, state) => const Text('home')),
+        GoRoute(
+          path: '/convert',
+          builder: (context, state) => const Text('convert'),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    expect(
+      isIdleForUpdate(location: topLocation(router), inRoom: false),
+      isTrue,
+    );
+
+    router.push('/convert');
+    await tester.pumpAndSettle();
+    expect(find.text('convert'), findsOneWidget);
+    expect(
+      isIdleForUpdate(location: topLocation(router), inRoom: false),
+      isFalse,
+    );
+
+    router.pop();
+    await tester.pumpAndSettle();
+    expect(
+      isIdleForUpdate(location: topLocation(router), inRoom: false),
+      isTrue,
+    );
   });
 
   test('only Home with no room is idle', () {

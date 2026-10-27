@@ -114,9 +114,16 @@ class AppUpdateService {
         await _install();
         return;
       }
-      if (info.updateAvailability != UpdateAvailability.updateAvailable) {
-        return;
-      }
+      final available =
+          info.updateAvailability == UpdateAvailability.updateAvailable;
+      // An immediate update the app was closed in the middle of: Play wants
+      // it resumed on the next start, and the plugin only resumes one it
+      // started in this process. A flexible download in progress carries on
+      // by itself and is installed once a check sees it downloaded.
+      final interrupted =
+          info.updateAvailability ==
+          UpdateAvailability.developerTriggeredUpdateInProgress;
+      if (!available && !interrupted) return;
       // The room may have started while Play was answering.
       if (!isIdle()) {
         _checkDeferred = true;
@@ -125,7 +132,7 @@ class AppUpdateService {
       if (info.immediateUpdateAllowed &&
           info.updatePriority >= immediatePriority) {
         await _platform.performImmediateUpdate();
-      } else if (info.flexibleUpdateAllowed) {
+      } else if (available && info.flexibleUpdateAllowed) {
         // Play asks the user, then downloads in the background; the user can
         // walk into a room meanwhile.
         final result = await _platform.startFlexibleUpdate();
