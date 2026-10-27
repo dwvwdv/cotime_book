@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../config/supabase_config.dart';
 import '../config/theme.dart';
+import '../providers/announcement_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/book_provider.dart';
 import '../models/recent_room.dart';
@@ -11,6 +12,7 @@ import '../models/room.dart';
 import '../providers/presence_provider.dart';
 import '../providers/recent_rooms_provider.dart';
 import '../providers/room_provider.dart';
+import '../widgets/announcement_sheet.dart';
 import '../widgets/masthead.dart';
 import '../widgets/paper.dart';
 import '../widgets/recent_rooms_list.dart';
@@ -378,27 +380,38 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-/// Tools that work on this device alone, kept apart from rooms (bottom left).
+/// The bar along the bottom: tools that work on this device alone (bottom
+/// left), kept apart from rooms, and the announcements (bottom right).
 ///
 /// TXT to EPUB lives here rather than in a room's Share Book: the person who
 /// converts a book reads it first, so a bad conversion never has a whole room
 /// waiting on it, and rooms only ever deal in EPUB.
-class _ToolsBar extends StatelessWidget {
+class _ToolsBar extends ConsumerWidget {
   const _ToolsBar();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       decoration: const BoxDecoration(border: Border(top: AppTheme.rule)),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: OutlinedButton.icon(
-          onPressed: () => context.pushNamed('convert'),
-          icon: const Icon(Icons.swap_horiz),
-          label: const Text('TXT to EPUB'),
-        ),
+      child: Row(
+        children: [
+          OutlinedButton.icon(
+            onPressed: () => context.pushNamed('convert'),
+            icon: const Icon(Icons.swap_horiz),
+            label: const Text('TXT to EPUB'),
+          ),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: () => showAnnouncementSheet(
+              context: context,
+              announcements: ref.read(announcementServiceProvider),
+            ),
+            icon: const Icon(Icons.campaign_outlined),
+            label: const Text('News'),
+          ),
+        ],
       ),
     );
   }
