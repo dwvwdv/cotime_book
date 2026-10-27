@@ -34,6 +34,14 @@ int? parseJumpPage(String text, {required int pages}) {
   return value.clamp(1, pages);
 }
 
+/// Whether [text] in the page box names another page than [shown], the one
+/// on screen: then it has been typed and not gone to yet.
+bool isTypedPagePending(String text, PageInfo? shown) {
+  if (shown == null) return false;
+  final typed = parseJumpPage(text, pages: shown.pages);
+  return typed != null && typed != shown.page;
+}
+
 /// Picks a page to take the room to, without moving anyone.
 ///
 /// The book opens on a viewer of its own, laid out on the room's
@@ -145,12 +153,23 @@ class _JumpPreviewState extends State<JumpPreview> {
 
   bool get _isHere => _cfi != null && _cfi == widget.currentCfi;
 
+  /// A page number typed but not gone to yet. Go then goes to it in the
+  /// preview first: the room is only ever asked for the page on screen.
+  bool get _typedPagePending => isTypedPagePending(_pageField.text, _info);
+
   @override
   void initState() {
     super.initState();
+    // Go reads the field: a number typed and not gone to yet is not the
+    // page on screen.
+    _pageField.addListener(_onPageFieldChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _focus.requestFocus();
     });
+  }
+
+  void _onPageFieldChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -363,7 +382,14 @@ class _JumpPreviewState extends State<JumpPreview> {
     _pageField.text = '$page';
     if (page == info.page) return;
     final cfi = await SharedPageRenderer.pageStart(_epubController, page);
-    if (!mounted || cfi == null) return;
+    if (!mounted) return;
+    if (cfi == null) {
+      // Not a page after all (the chapter was recounted): back to the one
+      // on screen, so Go does not keep asking for it.
+      final shown = _info;
+      if (shown != null) _pageField.text = '${shown.page}';
+      return;
+    }
     _display(cfi);
   }
 
@@ -385,8 +411,16 @@ class _JumpPreviewState extends State<JumpPreview> {
   }
 
   void _confirm() {
+    if (!_settled) return;
+    if (_typedPagePending) {
+      // Typed and not submitted (Go tapped instead of the keyboard's
+      // action): show that page, and let the next Go ask for it.
+      _focus.requestFocus();
+      unawaited(_goToTypedPage());
+      return;
+    }
     final cfi = _cfi;
-    if (!_settled || cfi == null || _isHere || !widget.canConfirm) return;
+    if (cfi == null || _isHere || !widget.canConfirm) return;
     widget.onConfirm(JumpTarget(cfi: cfi, label: _info));
   }
 
@@ -440,7 +474,8 @@ class _JumpPreviewState extends State<JumpPreview> {
   Widget _buildHeader(Color ink, Color paper) {
     final info = _info;
     final progress = info?.progressLabel;
-    final canGo = _settled && !_isHere && widget.canConfirm;
+    final canGo =
+        _settled && (_typedPagePending || (!_isHere && widget.canConfirm));
     return Container(
       height: JumpPreview.headerHeight,
       padding: const EdgeInsets.only(right: 8),
@@ -544,7 +579,9 @@ class _JumpPreviewState extends State<JumpPreview> {
                 width: AppTheme.ruleWidth,
               ),
             ),
-            child: Text(_isHere && _settled ? 'Here' : 'Go'),
+            child: Text(
+              _isHere && _settled && !_typedPagePending ? 'Here' : 'Go',
+            ),
           ),
         ],
       ),

@@ -1072,6 +1072,32 @@ void main() {
       );
       // Apps from before the field existed.
       expect(presenceSpeaksProtocol({}, AppConstants.pageJumpProtocol), isFalse);
+
+      // The old device is the one in the book; the new one in the lobby is
+      // never asked, so nobody would answer.
+      Map<String, dynamic> meta(int protocol, {required bool reading}) => {
+        'user_id': 'bob',
+        'protocol': protocol,
+        'protocol_min': 2,
+        'is_reading': reading,
+        'reader_ready': reading,
+      };
+      final oldInBook = mergePresenceUsers([
+        meta(3, reading: true),
+        meta(AppConstants.pageJumpProtocol, reading: false),
+      ]).single;
+      expect(
+        presenceSpeaksProtocol(oldInBook, AppConstants.pageJumpProtocol),
+        isFalse,
+      );
+      final newInBook = mergePresenceUsers([
+        meta(3, reading: false),
+        meta(AppConstants.pageJumpProtocol, reading: true),
+      ]).single;
+      expect(
+        presenceSpeaksProtocol(newInBook, AppConstants.pageJumpProtocol),
+        isTrue,
+      );
     });
   });
 
