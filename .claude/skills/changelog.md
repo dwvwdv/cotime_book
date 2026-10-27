@@ -10,6 +10,10 @@
 - 同一個 PR 只有一個版本條目（見 `version-update.md`）；review 修復追加在同一條目下。
 - 只動文件、`.claude/`、`.github/` 的 PR 不 bump 版號，不必新增條目。
 
+### v1.0.18+22 (2026-10-27)
+
+- ✨ 首頁底部列右側新增「News」：打開後依時間由新到舊列出版本公告與消息。公告存在 Supabase 的 `cotime_book.announcements` 表，從 dashboard 新增就上線，不必等發版；落後幾版的 App 也看得到之後的更新說明。`published_at` 填未來的時間可以先寫好、到時才出現。需要先套 `20261027120000_announcements.sql` 再發版，否則打開會顯示「The announcements could not be loaded.」。
+
 ### v1.0.17+21 (2026-10-27)
 
 - 🐛 修正 Sepia 與 Night 主題在部分書上沒有效果：頁面仍是白底，Night 的淺色字印在白底上，看起來一片淡灰。原因是書自己的樣式表把頁面塗成白底黑字（例如公共圖書館裡 Project Gutenberg 的書，`body.tei.tei-text { background-color: white }`），優先順序高於閱讀器的主題。現在主題的底色與字色一律蓋過書自己的顏色；只動顏色，不影響分頁，房間裡各人選不同主題仍是同一頁。
