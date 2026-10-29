@@ -8,7 +8,22 @@ void showPaperMessage(
   String message, {
   Duration duration = const Duration(seconds: 4),
 }) {
-  ScaffoldMessenger.of(context).showSnackBar(
+  showPaperMessageOn(
+    ScaffoldMessenger.of(context),
+    message,
+    duration: duration,
+  );
+}
+
+/// [showPaperMessage] for a caller whose context may be gone by the time
+/// there is something to say (a dialog that closed before its work ended):
+/// it looks the messenger up first and says it later.
+void showPaperMessageOn(
+  ScaffoldMessengerState messenger,
+  String message, {
+  Duration duration = const Duration(seconds: 4),
+}) {
+  messenger.showSnackBar(
     SnackBar(content: Text(message), duration: duration),
     snackBarAnimationStyle: AnimationStyle.noAnimation,
   );

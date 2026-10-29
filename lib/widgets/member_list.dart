@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/room_member.dart';
 import '../services/presence_merge.dart';
+import 'member_removal.dart';
 import 'user_avatar.dart';
 
 class MemberList extends StatelessWidget {
@@ -17,12 +18,16 @@ class MemberList extends StatelessWidget {
   /// its own.
   final bool shrinkWrap;
 
+  /// Starts a vote to remove another member. No button when null.
+  final ValueChanged<RoomMember>? onAskToLeave;
+
   const MemberList({
     super.key,
     required this.members,
     this.currentUserId,
     this.appVersions = const {},
     this.shrinkWrap = false,
+    this.onAskToLeave,
   });
 
   /// Online first, each group in join order. A member whose app was killed
@@ -125,6 +130,11 @@ class MemberList extends StatelessWidget {
               // Spelled out: a filled-vs-outlined book glyph was the only
               // signal before, and it relied on green to be noticed.
               _BookTag(hasBook: member.hasBook),
+              if (onAskToLeave != null && !isMe)
+                AskToLeaveButton(
+                  nickname: member.nickname,
+                  onPressed: () => onAskToLeave!(member),
+                ),
             ],
           ),
         );

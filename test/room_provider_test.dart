@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cotime_book/models/member_removal.dart';
 import 'package:cotime_book/models/room.dart';
 import 'package:cotime_book/models/room_member.dart';
 import 'package:cotime_book/providers/room_provider.dart';
@@ -725,6 +726,76 @@ void main() {
   // GH-30: copyWith used to drop the error on every update, so a message
   // vanished whenever some unrelated update ran, and code that needed one to
   // survive had to copy it across by hand.
+  group('voting a member out', () {
+    test('the roster drops the member as soon as the vote removes them',
+        () async {
+      final service = FakeRoomService()
+        ..members = [
+          testMember(roomId: 'room-a'),
+          testMember(roomId: 'room-a', id: 'member-b', userId: 'user-b',
+              nickname: 'Bob'),
+        ];
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+      await notifier.joinRoom('ABC234', 'Alice');
+      expect(notifier.state.members, hasLength(2));
+
+      service.members = [testMember(roomId: 'room-a')];
+      final readsBefore = service.roomReads;
+      final result = await notifier.voteToRemoveMember('user-b');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.voteTargets, ['user-b']);
+      // A removed host hands the room over: the room is read again too.
+      expect(service.roomReads, readsBefore + 1);
+      expect(result?.status, MemberRemovalStatus.removed);
+      expect(notifier.state.members.map((member) => member.nickname), [
+        'Alice',
+      ]);
+    });
+
+    test('a reader who votes after losing their own place is sent home',
+        () async {
+      final service = FakeRoomService()
+        ..voteError = const RoomSessionRevokedException(
+          'This room membership is inactive or has expired.',
+        );
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+      await notifier.joinRoom('ABC234', 'Alice');
+
+      expect(await notifier.voteToRemoveMember('user-b'), isNull);
+      expect(notifier.state.currentRoom, isNull);
+      expect(notifier.state.error, isNotNull);
+    });
+
+    test('told the room voted it out, the device leaves and says why',
+        () async {
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+      await notifier.joinRoom('ABC234', 'Alice');
+
+      service.roomRead = Completer<Room?>()..complete(null);
+      expect(await notifier.confirmMembershipAfterRemoval(), isFalse);
+
+      expect(notifier.state.currentRoom, isNull);
+      expect(notifier.state.error, RoomNotifier.removedByVoteMessage);
+    });
+
+    test('a removal the database does not confirm leaves the reader in',
+        () async {
+      // The broadcast is a hint; only the database says who is a member.
+      final service = FakeRoomService();
+      final notifier = RoomNotifier(service);
+      addTearDown(notifier.dispose);
+      await notifier.joinRoom('ABC234', 'Alice');
+
+      expect(await notifier.confirmMembershipAfterRemoval(), isTrue);
+      expect(notifier.state.currentRoom, isNotNull);
+    });
+  });
+
   group('room errors', () {
     test('stay up through Presence and book updates that fix nothing', () async {
       final service = FakeRoomService()..members = [testMember(roomId: 'room-a')];
@@ -906,6 +977,25 @@ class FakeRoomService extends RoomService {
     final error = roomReadError;
     if (error != null) throw error;
     return roomRead?.future ?? nextRoom;
+  }
+
+  MemberRemovalVote nextVote = const MemberRemovalVote(
+    status: MemberRemovalStatus.removed,
+    votes: 1,
+    needed: 1,
+  );
+  Object? voteError;
+  final List<String> voteTargets = [];
+
+  @override
+  Future<MemberRemovalVote> voteToRemoveMember({
+    required String roomId,
+    required String targetUserId,
+  }) async {
+    voteTargets.add(targetUserId);
+    final error = voteError;
+    if (error != null) throw error;
+    return nextVote;
   }
 
   int roomReads = 0;

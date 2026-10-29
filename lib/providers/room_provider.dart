@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../models/member_removal.dart';
 import '../models/room.dart';
 import '../models/room_member.dart';
 import '../providers/page_sync_provider.dart';
@@ -441,6 +442,35 @@ class RoomNotifier extends StateNotifier<RoomState> {
     }
   }
 
+  /// Votes [targetUserId] out of the room (someone who is gone and holds
+  /// everyone up). Returns null when this device is no longer in the room
+  /// itself, or left it meanwhile; other failures are thrown for the caller
+  /// to report.
+  Future<MemberRemovalVote?> voteToRemoveMember(String targetUserId) async {
+    final room = state.currentRoom;
+    if (room == null) return null;
+    final roomSessionGeneration = _roomSessionGeneration;
+    try {
+      final result = await _roomService.voteToRemoveMember(
+        roomId: room.id,
+        targetUserId: targetUserId,
+      );
+      if (!_isCurrentRoomSession(room.id, roomSessionGeneration)) return null;
+      if (result.status != MemberRemovalStatus.voting) {
+        // The roster changed (or was already behind); the lobby would only
+        // catch up on its next periodic read. The room too: a removed host
+        // hands the room over, and the reader only re-reads it every 30
+        // seconds.
+        unawaited(refreshMembers());
+        unawaited(refreshRoom(quiet: true));
+      }
+      return result;
+    } on RoomSessionRevokedException catch (error) {
+      await _revokeSession(room.id, error.message, roomSessionGeneration);
+      return null;
+    }
+  }
+
   Future<void> updateCfi(String cfi) async {
     final room = state.currentRoom;
     if (room == null) return;
@@ -604,6 +634,11 @@ class RoomNotifier extends StateNotifier<RoomState> {
       'You are no longer in this room. It may have closed, or you left it on '
       'another device.';
 
+  /// Shown when the others in the room voted this device out.
+  static const removedByVoteMessage =
+      'The other readers removed you from this room. You can join again '
+      'with the room code.';
+
   /// Realtime refused this room's channel. That happens when the membership
   /// is gone — left on another device, evicted after a long sleep, the room
   /// closed — but the database is the authority on membership, so ask it.
@@ -611,7 +646,15 @@ class RoomNotifier extends StateNotifier<RoomState> {
   /// Returns whether this device is still in the room, i.e. whether the
   /// channel is worth trying again. A failed read counts as still in: a
   /// network error is no reason to throw the reader out of the room.
-  Future<bool> confirmMembershipAfterAccessDenied() async {
+  Future<bool> confirmMembershipAfterAccessDenied() =>
+      _confirmMembership(removedFromRoomMessage);
+
+  /// Another member said the room voted this device out. Only a hint, like a
+  /// refused channel: the database decides.
+  Future<bool> confirmMembershipAfterRemoval() =>
+      _confirmMembership(removedByVoteMessage);
+
+  Future<bool> _confirmMembership(String goneMessage) async {
     final room = state.currentRoom;
     if (room == null) return false;
     final roomSessionGeneration = _roomSessionGeneration;
@@ -626,11 +669,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
       return false;
     }
     if (current == null) {
-      await _revokeSession(
-        room.id,
-        removedFromRoomMessage,
-        roomSessionGeneration,
-      );
+      await _revokeSession(room.id, goneMessage, roomSessionGeneration);
       return false;
     }
     _applyRoomUpdate(

@@ -195,6 +195,8 @@ class RealtimeService {
     'book_peer_signal',
     'start_reading',
     'membership_changed',
+    // MemberRemovalProposal.event.
+    'member_removal_vote',
     'room_closed',
     'room_settings_changed',
   ];

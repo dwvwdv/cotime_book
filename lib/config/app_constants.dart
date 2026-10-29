@@ -72,7 +72,13 @@ class AppConstants {
   /// `target_cfi`). An app on 3 drops such a request and never answers it,
   /// but follows the commit like any other, so 3 stays compatible: a jump is
   /// only refused while one of its readers is on 3 ([pageJumpProtocol]).
-  static const int roomProtocolVersion = 4;
+  ///
+  /// 5: voting a member out of the room: a `member_removal_vote` broadcast
+  /// that asks the others to agree, and `membership_changed` with action
+  /// `removed` for the member who is out. An app on 4 ignores both and goes
+  /// on waiting out the reconnect grace for the removed reader, as before,
+  /// so 4 stays compatible.
+  static const int roomProtocolVersion = 5;
 
   /// The first [roomProtocolVersion] that answers a request to jump to a page.
   static const int pageJumpProtocol = 4;
