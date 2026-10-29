@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:cotime_book/l10n/l10n.dart';
 import 'package:cotime_book/providers/app_locale_provider.dart';
 import 'package:cotime_book/services/local_store.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Map<String, dynamic> _arb(String name) =>
@@ -25,8 +25,17 @@ Set<String> _placeholders(String message) => RegExp(
   r'(?<![=\w])\{(\w+)\}',
 ).allMatches(message).map((match) => match.group(1)!).toSet();
 
+/// An app wired for languages the way CoTimeBookApp is.
+Widget _app({Locale? locale, Widget home = const SizedBox()}) => MaterialApp(
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: appLocales,
+  locale: locale,
+  builder: followAppLocale,
+  home: home,
+);
+
 void main() {
-  tearDown(() => resolveAppLocale(const [Locale('en', 'US')]));
+  tearDown(() => useAppStringsOf(const Locale('en')));
 
   group('the Traditional Chinese strings', () {
     final english = _messages(_arb('app_en.arb'));
@@ -84,13 +93,57 @@ void main() {
       );
     });
 
-    // Provider state and service messages are made away from any widget; they
-    // must come out in the language the screens resolved to.
-    test('moves the strings made outside the widget tree with it', () {
-      resolveAppLocale(const [Locale('zh', 'TW')]);
+    // A bare zh gave Material's Simplified built-ins (复制, 粘贴) in a
+    // Traditional interface.
+    testWidgets('gives Material its Traditional Chinese text too', (
+      tester,
+    ) async {
+      tester.platformDispatcher.localesTestValue = const [Locale('zh', 'TW')];
+      addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+      late BuildContext context;
+      await tester.pumpWidget(
+        _app(
+          home: Builder(
+            builder: (inner) {
+              context = inner;
+              return const SizedBox();
+            },
+          ),
+        ),
+      );
+
+      expect(MaterialLocalizations.of(context).copyButtonLabel, '複製');
+      expect(context.l10n.createRoom, '建立房間');
+    });
+  });
+
+  // Provider state and service messages are made away from any widget; they
+  // must come out in the language the screens are in.
+  group('the strings made outside the widget tree', () {
+    testWidgets('follow the language on screen', (tester) async {
+      await tester.pumpWidget(_app(locale: appLocales.last));
       expect(appStrings.reconnectingToRoom, '正在重新連上房間...');
-      resolveAppLocale(const [Locale('en', 'US')]);
+      await tester.pumpWidget(_app(locale: appLocales.first));
       expect(appStrings.reconnectingToRoom, 'Reconnecting to the room...');
+    });
+
+    // WidgetsApp resolves the device's languages again when they change,
+    // even while MaterialApp.locale overrides them. appStrings used to be
+    // set from that resolution, and turned Chinese under English screens.
+    testWidgets('stay in the picked language when the device changes its', (
+      tester,
+    ) async {
+      tester.platformDispatcher.localesTestValue = const [Locale('zh', 'TW')];
+      addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+      await tester.pumpWidget(_app(locale: appLocales.first));
+      expect(appStrings.createRoom, 'Create Room');
+
+      tester.platformDispatcher.localesTestValue = const [
+        Locale('zh', 'HK'),
+        Locale('ja'),
+      ];
+      await tester.pump();
+      expect(appStrings.createRoom, 'Create Room');
     });
   });
 

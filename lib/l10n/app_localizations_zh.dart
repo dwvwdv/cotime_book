@@ -1131,4 +1131,18 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get switchLanguageTooltip => '切換成英文';
+
+  @override
+  String get txtNeedsTitle => '書需要書名。';
+
+  @override
+  String get txtPickAtLeastOne => '請至少選一個 TXT 檔。';
+
+  @override
+  String get txtNoText => '這些檔案裡沒有文字。';
+
+  @override
+  String cannotReadFile(String fileName) {
+    return '無法讀取 $fileName';
+  }
 }

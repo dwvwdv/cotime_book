@@ -80,207 +80,201 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           child: Column(
             children: [
               Expanded(
-                child: Stack(
-                  children: [
-                    Center(
-                      // E-readers are mostly 7-10" portrait panels; a full-width form
-                      // on those reads like a spreadsheet. Keep a book-page measure.
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 480),
-                        child: ListView(
-                          padding: const EdgeInsets.fromLTRB(28, 48, 28, 28),
-                          children: [
-                            const Masthead(),
-                            const SizedBox(height: 28),
-                            const Divider(thickness: AppTheme.heavyRuleWidth),
-                            const SizedBox(height: 28),
-
-                            if (roomState.currentRoom != null) ...[
-                              SectionHeader(label: context.l10n.activeRoom),
-                              const SizedBox(height: 14),
-                              Text(
-                                roomState.currentRoom!.code,
-                                style: AppTheme.title.copyWith(
-                                  letterSpacing: 6,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: ElevatedButton(
-                                      onPressed: _isLeavingRoom
-                                          ? null
-                                          : () => context.goNamed(
-                                              'lobby',
-                                              pathParameters: {
-                                                'roomCode':
-                                                    roomState.currentRoom!.code,
-                                              },
-                                            ),
-                                      child: Text(context.l10n.continueAction),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: OutlinedButton(
-                                      onPressed: _isLeavingRoom
-                                          ? null
-                                          : _leaveActiveRoom,
-                                      // Words, not a spinner: a spinning indicator
-                                      // keeps an e-ink panel refreshing until it stops.
-                                      child: Text(
-                                        _isLeavingRoom
-                                            ? context.l10n.leaving
-                                            : context.l10n.leaveRoom,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 28),
-                            ],
-
-                            if (!roomState.isInRoom) ...[
-                              TextField(
-                                controller: _nicknameController,
-                                decoration: InputDecoration(
-                                  labelText: context.l10n.nickname,
-                                  hintText: context.l10n.nicknameHint,
-                                  prefixIcon: const Icon(Icons.person_outline),
-                                ),
-                                style: AppTheme.body,
-                                maxLength: 20,
-                                buildCounter:
-                                    (
-                                      _, {
-                                      required currentLength,
-                                      required isFocused,
-                                      maxLength,
-                                    }) => null,
-                              ),
-                              const SizedBox(height: 20),
-
-                              if (_isJoinMode) ...[
-                                RoomCodeInput(controller: _roomCodeController),
-                                const SizedBox(height: 16),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: OutlinedButton(
-                                        onPressed: roomState.isLoading
-                                            ? null
-                                            : () => setState(
-                                                () => _isJoinMode = false,
-                                              ),
-                                        child: Text(context.l10n.back),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: ElevatedButton(
-                                        onPressed: roomState.isLoading
-                                            ? null
-                                            : _joinRoom,
-                                        child: Text(
-                                          roomState.isLoading
-                                              ? context.l10n.joining
-                                              : context.l10n.joinRoom,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ] else ...[
-                                ElevatedButton.icon(
-                                  onPressed: roomState.isLoading
-                                      ? null
-                                      : _createRoom,
-                                  icon: const Icon(Icons.add),
-                                  label: Text(
-                                    roomState.isLoading
-                                        ? context.l10n.creating
-                                        : context.l10n.createRoom,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                OutlinedButton.icon(
-                                  onPressed: roomState.isLoading
-                                      ? null
-                                      : () =>
-                                            setState(() => _isJoinMode = true),
-                                  icon: const Icon(Icons.login),
-                                  label: Text(context.l10n.joinRoom),
-                                ),
-                                if (recentRooms.isNotEmpty) ...[
-                                  const SizedBox(height: 36),
-                                  RecentRoomsList(
-                                    rooms: recentRooms,
-                                    enabled: !roomState.isLoading,
-                                    onOpen: _openRecentRoom,
-                                    onForget: (room) => ref
-                                        .read(recentRoomsProvider.notifier)
-                                        .remove(room.code),
-                                  ),
-                                ],
-                              ],
-                            ],
-
-                            if (roomState.error != null ||
-                                authState.error != null) ...[
-                              const SizedBox(height: 20),
-                              PaperNotice(
-                                message: roomState.error ?? authState.error!,
-                              ),
-                            ],
-
-                            const SizedBox(height: 40),
-
-                            // Auth status
-                            if (!SupabaseConfig.isConfigured)
-                              Text(
-                                context.l10n.supabaseNotConfigured,
-                                style: const TextStyle(
-                                  color: AppTheme.inkMuted,
-                                  fontSize: 12,
-                                ),
-                                textAlign: TextAlign.center,
-                              )
-                            else if (authState.isAuthenticated)
-                              Text(
-                                context.l10n.connected,
-                                style: AppTheme.caption,
-                                textAlign: TextAlign.center,
-                              )
-                            else
-                              Center(
-                                child: TextButton(
-                                  onPressed: authState.isLoading
-                                      ? null
-                                      : () async {
-                                          await ref
-                                              .read(authProvider.notifier)
-                                              .signInAnonymously();
-                                        },
-                                  child: Text(
-                                    authState.isLoading
-                                        ? context.l10n.connecting
-                                        : context.l10n.tapToConnect,
-                                  ),
-                                ),
-                              ),
-                          ],
+                child: Center(
+                  // E-readers are mostly 7-10" portrait panels; a full-width form
+                  // on those reads like a spreadsheet. Keep a book-page measure.
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 480),
+                    child: ListView(
+                      padding: const EdgeInsets.fromLTRB(28, 8, 28, 28),
+                      children: [
+                        // Part of the list, not laid over it: scrolled
+                        // content would pass under a button with no
+                        // background, and a tap there would switch the
+                        // language. It takes the room the top padding had.
+                        const Align(
+                          alignment: Alignment.centerRight,
+                          child: _LanguageToggle(),
                         ),
-                      ),
+                        const Masthead(),
+                        const SizedBox(height: 28),
+                        const Divider(thickness: AppTheme.heavyRuleWidth),
+                        const SizedBox(height: 28),
+
+                        if (roomState.currentRoom != null) ...[
+                          SectionHeader(label: context.l10n.activeRoom),
+                          const SizedBox(height: 14),
+                          Text(
+                            roomState.currentRoom!.code,
+                            style: AppTheme.title.copyWith(letterSpacing: 6),
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: _isLeavingRoom
+                                      ? null
+                                      : () => context.goNamed(
+                                          'lobby',
+                                          pathParameters: {
+                                            'roomCode':
+                                                roomState.currentRoom!.code,
+                                          },
+                                        ),
+                                  child: Text(context.l10n.continueAction),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: _isLeavingRoom
+                                      ? null
+                                      : _leaveActiveRoom,
+                                  // Words, not a spinner: a spinning indicator
+                                  // keeps an e-ink panel refreshing until it stops.
+                                  child: Text(
+                                    _isLeavingRoom
+                                        ? context.l10n.leaving
+                                        : context.l10n.leaveRoom,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 28),
+                        ],
+
+                        if (!roomState.isInRoom) ...[
+                          TextField(
+                            controller: _nicknameController,
+                            decoration: InputDecoration(
+                              labelText: context.l10n.nickname,
+                              hintText: context.l10n.nicknameHint,
+                              prefixIcon: const Icon(Icons.person_outline),
+                            ),
+                            style: AppTheme.body,
+                            maxLength: 20,
+                            buildCounter:
+                                (
+                                  _, {
+                                  required currentLength,
+                                  required isFocused,
+                                  maxLength,
+                                }) => null,
+                          ),
+                          const SizedBox(height: 20),
+
+                          if (_isJoinMode) ...[
+                            RoomCodeInput(controller: _roomCodeController),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: roomState.isLoading
+                                        ? null
+                                        : () => setState(
+                                            () => _isJoinMode = false,
+                                          ),
+                                    child: Text(context.l10n.back),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: roomState.isLoading
+                                        ? null
+                                        : _joinRoom,
+                                    child: Text(
+                                      roomState.isLoading
+                                          ? context.l10n.joining
+                                          : context.l10n.joinRoom,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ] else ...[
+                            ElevatedButton.icon(
+                              onPressed: roomState.isLoading
+                                  ? null
+                                  : _createRoom,
+                              icon: const Icon(Icons.add),
+                              label: Text(
+                                roomState.isLoading
+                                    ? context.l10n.creating
+                                    : context.l10n.createRoom,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: roomState.isLoading
+                                  ? null
+                                  : () => setState(() => _isJoinMode = true),
+                              icon: const Icon(Icons.login),
+                              label: Text(context.l10n.joinRoom),
+                            ),
+                            if (recentRooms.isNotEmpty) ...[
+                              const SizedBox(height: 36),
+                              RecentRoomsList(
+                                rooms: recentRooms,
+                                enabled: !roomState.isLoading,
+                                onOpen: _openRecentRoom,
+                                onForget: (room) => ref
+                                    .read(recentRoomsProvider.notifier)
+                                    .remove(room.code),
+                              ),
+                            ],
+                          ],
+                        ],
+
+                        if (roomState.error != null ||
+                            authState.error != null) ...[
+                          const SizedBox(height: 20),
+                          PaperNotice(
+                            message: roomState.error ?? authState.error!,
+                          ),
+                        ],
+
+                        const SizedBox(height: 40),
+
+                        // Auth status
+                        if (!SupabaseConfig.isConfigured)
+                          Text(
+                            context.l10n.supabaseNotConfigured,
+                            style: const TextStyle(
+                              color: AppTheme.inkMuted,
+                              fontSize: 12,
+                            ),
+                            textAlign: TextAlign.center,
+                          )
+                        else if (authState.isAuthenticated)
+                          Text(
+                            context.l10n.connected,
+                            style: AppTheme.caption,
+                            textAlign: TextAlign.center,
+                          )
+                        else
+                          Center(
+                            child: TextButton(
+                              onPressed: authState.isLoading
+                                  ? null
+                                  : () async {
+                                      await ref
+                                          .read(authProvider.notifier)
+                                          .signInAnonymously();
+                                    },
+                              child: Text(
+                                authState.isLoading
+                                    ? context.l10n.connecting
+                                    : context.l10n.tapToConnect,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
-                    // In the corner the list's top padding leaves free, so the
-                    // masthead does not move when the language does.
-                    const Positioned(
-                      top: 0,
-                      right: 8,
-                      child: _LanguageToggle(),
-                    ),
-                  ],
+                  ),
                 ),
               ),
               const _ToolsBar(),
@@ -395,6 +389,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 }
+
 
 /// Switches the interface between English and Chinese, from whichever is on
 /// screen. Named in the other language, as a language picker is: someone who

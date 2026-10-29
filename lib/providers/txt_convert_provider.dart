@@ -59,6 +59,13 @@ String epubFileNameFor(String title) {
   return '${safe.isEmpty ? 'book' : safe}.epub';
 }
 
+/// Why a book could not be made, in the reader's language.
+String describeTxtBookProblem(TxtBookProblem problem) => switch (problem) {
+  TxtBookProblem.noTitle => appStrings.txtNeedsTitle,
+  TxtBookProblem.noFiles => appStrings.txtPickAtLeastOne,
+  TxtBookProblem.noText => appStrings.txtNoText,
+};
+
 /// The EPUB a TXT conversion made, on this device only.
 class ConvertedBook {
   final File file;
@@ -157,6 +164,8 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
       ];
       if (!_isCurrent(generation)) return;
       await _convert(sources, confirm, generation);
+    } on TxtBookException catch (e) {
+      _fail(generation, describeTxtBookProblem(e.problem));
     } on FormatException catch (e) {
       _fail(generation, e.message);
     } catch (e) {
@@ -176,6 +185,8 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
     final generation = ++_generation;
     try {
       await _convert(sources, confirm, generation);
+    } on TxtBookException catch (e) {
+      _fail(generation, describeTxtBookProblem(e.problem));
     } on FormatException catch (e) {
       _fail(generation, e.message);
     } catch (e) {

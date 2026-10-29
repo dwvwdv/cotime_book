@@ -318,5 +318,9 @@
   "anotherReader": "另一位讀者",
   "aReader": "一位讀者",
   "switchLanguage": "English",
-  "switchLanguageTooltip": "切換成英文"
+  "switchLanguageTooltip": "切換成英文",
+  "txtNeedsTitle": "書需要書名。",
+  "txtPickAtLeastOne": "請至少選一個 TXT 檔。",
+  "txtNoText": "這些檔案裡沒有文字。",
+  "cannotReadFile": "無法讀取 {fileName}"
 }

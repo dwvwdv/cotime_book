@@ -109,10 +109,9 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
       onGenerateTitle: (context) => context.l10n.appName,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: appLocales,
-      // The language picked on Home; null follows the device. Either way it
-      // goes through resolveAppLocale, which moves appStrings along.
+      // The language picked on Home; null follows the device.
       locale: ref.watch(appLocaleProvider),
-      localeListResolutionCallback: (locales, _) => resolveAppLocale(locales),
+      builder: followAppLocale,
       theme: AppTheme.paperTheme,
       scrollBehavior: const PaperScrollBehavior(),
       routerConfig: AppRouter.router,

@@ -2011,6 +2011,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Switch to Chinese'**
   String get switchLanguageTooltip;
+
+  /// No description provided for @txtNeedsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The book needs a title.'**
+  String get txtNeedsTitle;
+
+  /// No description provided for @txtPickAtLeastOne.
+  ///
+  /// In en, this message translates to:
+  /// **'Pick at least one TXT file.'**
+  String get txtPickAtLeastOne;
+
+  /// No description provided for @txtNoText.
+  ///
+  /// In en, this message translates to:
+  /// **'These files have no text in them.'**
+  String get txtNoText;
+
+  /// No description provided for @cannotReadFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Cannot read {fileName}'**
+  String cannotReadFile(String fileName);
 }
 
 class _AppLocalizationsDelegate

@@ -35,7 +35,7 @@ class AppLocaleNotifier extends StateNotifier<Locale?> {
     );
     // Now, not on the rebuild: a message made in between would come out in
     // the old language.
-    resolveAppLocale([next]);
+    useAppStringsOf(next);
     state = next;
     unawaited(_store.saveAppLanguage(next.languageCode));
   }

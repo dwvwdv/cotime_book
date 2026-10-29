@@ -60,7 +60,7 @@ String formatMegabytes(int bytes) =>
 Future<Uint8List> readPickedFile(PlatformFile file) async {
   if (file.bytes != null) return file.bytes!;
   if (file.path != null) return File(file.path!).readAsBytes();
-  throw Exception('Cannot read ${file.name}');
+  throw Exception(appStrings.cannotReadFile(file.name));
 }
 
 final bookProvider = StateNotifierProvider<BookNotifier, BookState>((ref) {

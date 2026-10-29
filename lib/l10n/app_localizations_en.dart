@@ -1205,4 +1205,18 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get switchLanguageTooltip => 'Switch to Chinese';
+
+  @override
+  String get txtNeedsTitle => 'The book needs a title.';
+
+  @override
+  String get txtPickAtLeastOne => 'Pick at least one TXT file.';
+
+  @override
+  String get txtNoText => 'These files have no text in them.';
+
+  @override
+  String cannotReadFile(String fileName) {
+    return 'Cannot read $fileName';
+  }
 }

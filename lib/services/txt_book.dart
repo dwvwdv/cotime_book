@@ -545,6 +545,18 @@ Future<TxtFileAnalysis> analyzeTxtInBackground(
   TxtEncoding? encoding,
 }) => Isolate.run(() => analyzeTxt(source, encoding: encoding));
 
+/// Why [buildTxtEpub] could not make a book.
+enum TxtBookProblem { noTitle, noFiles, noText }
+
+/// What [buildTxtEpub] refuses, by [problem] for the screen to put in the
+/// reader's language: it runs in a background isolate, where the language
+/// picked on Home is not known. The message is English, for logs.
+class TxtBookException extends FormatException {
+  final TxtBookProblem problem;
+
+  const TxtBookException(this.problem, super.message);
+}
+
 /// [buildTxtEpub] off the UI isolate.
 Future<Uint8List> buildTxtEpubInBackground(TxtBookRequest request) =>
     Isolate.run(() => buildTxtEpub(request));
@@ -743,13 +755,20 @@ class _NavEntry {
 /// The same request always gives the same bytes: no clock and no random
 /// identifier goes in, so two people who import the same TXT with the same
 /// app version end up with the same book hash and nothing has to be sent.
-/// Throws a [FormatException] with a message for people when there is no
-/// text to make a book of.
+/// Throws a [TxtBookException] when there is no text to make a book of.
 Uint8List buildTxtEpub(TxtBookRequest request) {
   final title = request.title.trim();
-  if (title.isEmpty) throw const FormatException('The book needs a title.');
+  if (title.isEmpty) {
+    throw const TxtBookException(
+      TxtBookProblem.noTitle,
+      'The book needs a title.',
+    );
+  }
   if (request.parts.isEmpty) {
-    throw const FormatException('Pick at least one TXT file.');
+    throw const TxtBookException(
+      TxtBookProblem.noFiles,
+      'Pick at least one TXT file.',
+    );
   }
 
   final sections = <_Section>[];
@@ -804,7 +823,10 @@ Uint8List buildTxtEpub(TxtBookRequest request) {
   }
 
   if (sections.every((s) => s.heading == null && s.paragraphs.isEmpty)) {
-    throw const FormatException('These files have no text in them.');
+    throw const TxtBookException(
+      TxtBookProblem.noText,
+      'These files have no text in them.',
+    );
   }
 
   final language = _guessLanguage(languageSample.toString());

@@ -93,8 +93,7 @@ void main() {
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             supportedLocales: appLocales,
             locale: ref.watch(appLocaleProvider),
-            localeListResolutionCallback: (locales, _) =>
-                resolveAppLocale(locales),
+            builder: followAppLocale,
           ),
         ),
       ),
@@ -219,7 +218,7 @@ void main() {
 
   group('the language toggle', () {
     // appStrings is global: later tests in this file read English again.
-    tearDown(() => resolveAppLocale(const [Locale('en', 'US')]));
+    tearDown(() => useAppStringsOf(const Locale('en')));
 
     testWidgets('switches the interface at once, both ways', (tester) async {
       await pumpHome(tester);
@@ -283,7 +282,7 @@ void main() {
       addTearDown(() {
         dispatcher.clearLocalesTestValue();
         // appStrings is global: later tests in this file read English again.
-        resolveAppLocale(const [Locale('en', 'US')]);
+        useAppStringsOf(const Locale('en'));
       });
     });
 

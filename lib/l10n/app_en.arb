@@ -871,5 +871,16 @@
   "@switchLanguage": {
     "description": "The language toggle on Home: names the other language, in that language."
   },
-  "switchLanguageTooltip": "Switch to Chinese"
+  "switchLanguageTooltip": "Switch to Chinese",
+  "txtNeedsTitle": "The book needs a title.",
+  "txtPickAtLeastOne": "Pick at least one TXT file.",
+  "txtNoText": "These files have no text in them.",
+  "cannotReadFile": "Cannot read {fileName}",
+  "@cannotReadFile": {
+    "placeholders": {
+      "fileName": {
+        "type": "String"
+      }
+    }
+  }
 }
