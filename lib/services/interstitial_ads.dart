@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 import '../config/ad_config.dart';
+import 'ad_consent.dart';
 
 /// Full-screen ads shown between pages and before a converted book is saved.
 ///
@@ -60,9 +61,18 @@ class AdMobInterstitialAds implements InterstitialAds {
   /// Shared by every placement: the SDK is initialized once.
   static Future<bool>? _sdkReady;
 
-  static Future<bool> _initializeSdk() async {
+  /// [_sdkReady] resolved true. Until then no ad is requested, from
+  /// [preload] or a [show] that found none ready: before consent is in, or
+  /// without it, AdMob must not be asked (GH-58).
+  static bool _sdkStarted = false;
+
+  static Future<bool> _initializeSdk(AdConsent consent) async {
+    // Not even initialized without consent (GH-58): the SDK starts its
+    // adapters and their network requests on initialize.
+    if (!await consent.gather()) return false;
     try {
       await MobileAds.instance.initialize();
+      _sdkStarted = true;
       return true;
     } catch (error) {
       debugPrint('Mobile Ads unavailable: $error');
@@ -70,10 +80,11 @@ class AdMobInterstitialAds implements InterstitialAds {
     }
   }
 
-  /// Initializes the SDK and loads the first ad, so the first one due is
-  /// usually ready.
-  Future<void> start() async {
-    if (await (_sdkReady ??= _initializeSdk())) preload();
+  /// Asks for consent where it is needed, initializes the SDK and loads the
+  /// first ad, so the first one due is usually ready. Without consent no ad
+  /// is ever loaded in this session, and [show] always resolves false.
+  Future<void> start(AdConsent consent) async {
+    if (await (_sdkReady ??= _initializeSdk(consent))) preload();
   }
 
   bool get _isStale {
@@ -87,7 +98,7 @@ class AdMobInterstitialAds implements InterstitialAds {
 
   @override
   void preload() {
-    if (_loading || _showing) return;
+    if (!_sdkStarted || _loading || _showing) return;
     if (_ad != null) {
       if (!_isStale) return;
       _discard();

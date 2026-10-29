@@ -1360,6 +1360,28 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                     'to go forward. Page Up/Down and arrow keys work too.',
                     style: AppTheme.caption,
                   ),
+                  // Where the consent asked for on start has to be changeable
+                  // (GH-58): the EEA, the UK and Switzerland.
+                  if (ref.watch(adConsentProvider)?.privacyOptionsRequired ??
+                      false) ...[
+                    const SizedBox(height: 24),
+                    const SectionHeader(label: 'Ads'),
+                    const SizedBox(height: 12),
+                    OutlinedButton(
+                      onPressed: () {
+                        Navigator.of(sheetContext).pop();
+                        unawaited(
+                          ref.read(adConsentProvider)!.showPrivacyOptions(),
+                        );
+                      },
+                      child: const Text('Ad Privacy Choices'),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Change what you agreed to for the ads in this app.',
+                      style: AppTheme.caption,
+                    ),
+                  ],
                   const SizedBox(height: 24),
                   const SectionHeader(label: 'Troubleshooting'),
                   const SizedBox(height: 12),
