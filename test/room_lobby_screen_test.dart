@@ -355,6 +355,37 @@ void main() {
     });
   });
 
+  group('RoomLobbyScreen removal vote', () {
+    testWidgets('a member who is gone can be voted out from the roster', (
+      tester,
+    ) async {
+      final rooms = FakeRoomService()
+        ..members = [testMember('alice'), testMember('bob')];
+      final container = await joinedContainer(tester, rooms);
+      await pumpLobby(tester, container);
+
+      expect(find.byTooltip('Ask Alice to leave'), findsNothing);
+      await tester.tap(find.byTooltip('Ask Bob to leave'));
+      await tester.pump();
+      expect(find.text('Ask Bob to leave?'), findsOneWidget);
+
+      rooms.members = [testMember('alice')];
+      await tester.tap(find.widgetWithText(FilledButton, 'Ask to leave'));
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+
+      expect(rooms.voteTargets, ['bob']);
+      expect(find.text('Bob was removed from the room.'), findsOneWidget);
+      expect(
+        container.read(roomProvider).members.map((m) => m.userId),
+        ['alice'],
+      );
+      expect(find.byTooltip('Ask Bob to leave'), findsNothing);
+      await disposeLobby(tester, container);
+    });
+  });
+
   group('RoomLobbyScreen library', () {
     testWidgets('the library has its own button, apart from Share Book', (
       tester,
