@@ -167,7 +167,8 @@ supabase/
    `membership_changed`（`action: removed`、`user_id` 是被請離的人），還差票時廣播
    `member_removal_vote` 讓其他人被詢問（`MemberRemovalNotifier`）。這兩則訊號都可能遺失：
    被請離的裝置靠下一次心跳或 channel 被拒發現（GH-36 的路徑），`PageSyncService` 收到 `removed`
-   後在 `removalMemory` 內不再等那個人——Presence 可能比表決活得久（睡著的裝置、舊版 App）。
+   後在 `removalMemory` 內不再等那個人、也不採用他發起的翻頁——Presence 可能比表決活得久（睡著的裝置、舊版 App）。
+   只有他重新加入（`joined`）能提早結束：還沒發現自己被請離的舊版 App 每次重連都會送位置詢問、離開時也會送 `reader_left`，兩者都不算。
 
 5. **Realtime 連線會斷，而且 library 不一定會自己接回來。** 裝置在讀一頁時休眠是常態。
    `RealtimeService` 有 watchdog 會重建壞掉的 channel（見 issue #17）。

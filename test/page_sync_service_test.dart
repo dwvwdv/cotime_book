@@ -851,6 +851,71 @@ void main() {
       expect(alice.service.currentState.currentRequest, isNull);
     });
 
+    test('a removed reader whose app has not noticed cannot turn the page',
+        () async {
+      // An app before removal (protocol 4) reads on until its heartbeat finds
+      // it out, and its requests still reach the room.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      final bob = room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      room.inject('membership_changed', removed('bob'));
+      await flush();
+      await bob.service.requestPageTurn(direction: PageTurnDirection.next);
+      await flush();
+
+      expect(alice.service.currentState.status, SyncStatus.idle);
+      expect(alice.service.currentState.currentRequest, isNull);
+    });
+
+    test('its own departure does not cut the removal short', () async {
+      // The removed device announces reader_left as it shuts down; a
+      // Presence meta it leaves behind must not bring it back after the
+      // shorter memory of an ordinary departure.
+      var now = DateTime.utc(2026, 10, 29, 12);
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice', clock: () => now);
+      room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      room.inject('membership_changed', removed('bob'));
+      room.inject(PageSyncService.readerLeftEvent, {'user_id': 'bob'});
+      await flush();
+      now = now.add(const Duration(minutes: 1));
+
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isTrue,
+      );
+      await flush();
+      expect(alice.service.position.seq, 1, reason: 'Bob is not asked');
+    });
+
+    test('a removed app asking for positions does not bring it back',
+        () async {
+      // An app that has not noticed its removal asks again after every
+      // reconnect; only joining the room again ends the removal.
+      final room = FakeRoom();
+      final alice = room.join('alice', 'Alice');
+      room.join('bob', 'Bob');
+      addTearDown(room.dispose);
+      await flush();
+
+      room.inject('membership_changed', removed('bob'));
+      room.inject(PageSyncService.positionQueryEvent, {'user_id': 'bob'});
+      await flush();
+
+      expect(
+        await alice.service.requestPageTurn(direction: PageTurnDirection.next),
+        isTrue,
+      );
+      await flush();
+      expect(alice.service.position.seq, 1, reason: 'Bob is not asked');
+    });
+
     test('a removed reader who joins again is asked again', () async {
       final room = FakeRoom();
       final alice = room.join('alice', 'Alice');

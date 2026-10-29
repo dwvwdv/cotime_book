@@ -130,8 +130,9 @@ class PageSyncService {
   /// waiting for them, but their Presence can outlast the vote: a sleeping
   /// device's until the server times its socket out, and an app that does
   /// not know about removal (protocol < 5) until its next heartbeat, every
-  /// [RoomNotifier.heartbeatInterval], finds the membership gone. Coming back
-  /// (a position query, or a join) ends it early.
+  /// [RoomNotifier.heartbeatInterval], finds the membership gone. Only a
+  /// join ends it early: a removed app that has not noticed yet still asks
+  /// for positions after every reconnect.
   static const removalMemory = Duration(minutes: 6);
 
   /// How long a failure stays on screen before the bar returns to idle.
@@ -191,9 +192,14 @@ class PageSyncService {
   /// Readers who vanished from Presence while reading: user id → when.
   final Map<String, DateTime> _awaySince = {};
 
-  /// Readers who said they left, or were voted out: user id → until when
-  /// that outweighs Presence.
+  /// Readers who said they left: user id → until when that outweighs
+  /// Presence.
   final Map<String, DateTime> _departedUntil = {};
+
+  /// Readers the room voted out: user id → until when. Apart from
+  /// [_departedUntil] because the removed app's own departure (`reader_left`
+  /// as it shuts down) or position query must not cut it short.
+  final Map<String, DateTime> _removedUntil = {};
   Timer? _awayTimer;
   Timer? _announceTimer;
   bool _wasSelfPresent = false;
@@ -624,6 +630,9 @@ class PageSyncService {
     // Realtime is configured with self: true.
     if (incoming.requestedByUserId == _currentUserId) return;
     if (_finishedRequestIds.contains(incoming.requestId)) return;
+    // An app from before removal (protocol < 5) reads on until its next
+    // heartbeat finds it out; voted out, it no longer turns the room's page.
+    if (_isRemoved(incoming.requestedByUserId)) return;
 
     final current = _state.currentRequest;
     if (current?.requestId == incoming.requestId) {
@@ -1244,26 +1253,37 @@ class PageSyncService {
       case 'removed':
         // Voted out: the room stops waiting for them now, not after the
         // reconnect grace, and goes on without them in a turn already asked.
-        _markDeparted(userId, memory: removalMemory);
+        _removedUntil[userId] = _clock().add(removalMemory);
+        _forget(userId);
         _onPresence(const {});
       case 'joined':
         // Back in the room (after a removal, say): theirs again to answer.
         _departedUntil.remove(userId);
+        _removedUntil.remove(userId);
     }
   }
 
-  void _markDeparted(String userId, {Duration memory = departureMemory}) {
-    _departedUntil[userId] = _clock().add(memory);
+  void _markDeparted(String userId) {
+    _departedUntil[userId] = _clock().add(departureMemory);
+    _forget(userId);
+  }
+
+  void _forget(String userId) {
     _knownReaders.remove(userId);
     if (_awaySince.remove(userId) != null) _refreshAway();
     if (_othersInAd.remove(userId) != null) _refreshAdBreak();
   }
 
-  bool _hasDeparted(String userId) {
-    final until = _departedUntil[userId];
+  bool _hasDeparted(String userId) =>
+      _isRemoved(userId) || _isStillHeld(_departedUntil, userId);
+
+  bool _isRemoved(String userId) => _isStillHeld(_removedUntil, userId);
+
+  bool _isStillHeld(Map<String, DateTime> untils, String userId) {
+    final until = untils[userId];
     if (until == null) return false;
     if (_clock().isBefore(until)) return true;
-    _departedUntil.remove(userId);
+    untils.remove(userId);
     return false;
   }
 

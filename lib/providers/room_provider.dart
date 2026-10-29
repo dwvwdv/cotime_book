@@ -458,8 +458,11 @@ class RoomNotifier extends StateNotifier<RoomState> {
       if (!_isCurrentRoomSession(room.id, roomSessionGeneration)) return null;
       if (result.status != MemberRemovalStatus.voting) {
         // The roster changed (or was already behind); the lobby would only
-        // catch up on its next periodic read.
+        // catch up on its next periodic read. The room too: a removed host
+        // hands the room over, and the reader only re-reads it every 30
+        // seconds.
         unawaited(refreshMembers());
+        unawaited(refreshRoom(quiet: true));
       }
       return result;
     } on RoomSessionRevokedException catch (error) {

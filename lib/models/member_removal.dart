@@ -38,6 +38,10 @@ class MemberRemovalVote {
 
   int get remaining => max(0, needed - votes);
 
+  /// "1 more vote", "2 more votes".
+  static String moreVotes(int remaining) =>
+      '$remaining more ${remaining == 1 ? 'vote' : 'votes'}';
+
   static int _int(Object? value) => switch (value) {
     final int number => number,
     final num number => number.toInt(),
@@ -69,6 +73,8 @@ class MemberRemovalProposal {
     required this.votes,
     required this.needed,
   });
+
+  int get remaining => max(0, needed - votes);
 
   Map<String, dynamic> toWire() => {
     'room_code': roomCode,

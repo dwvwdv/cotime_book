@@ -69,13 +69,19 @@ void listenForMemberRemovalVotes(BuildContext context, WidgetRef ref) {
     next,
   ) {
     final seen = {for (final open in previous ?? const []) open.targetUserId};
+    final notifier = ref.read(memberRemovalProvider.notifier);
     for (final proposal in next) {
-      if (seen.contains(proposal.targetUserId)) continue;
+      final target = proposal.targetUserId;
+      if (seen.contains(target)) continue;
       unawaited(
-        showPaperDialog<void>(
+        showPaperDialog<bool>(
           context: context,
           builder: (_) => MemberRemovalPrompt(proposal: proposal),
-        ),
+        ).then((agreed) {
+          // Closed from the corner, by a tap outside or by Back: as good as
+          // "Not now", or the next voter's proposal asks again.
+          if (agreed != true && notifier.mounted) notifier.dismiss(target);
+        }),
       );
     }
   });
@@ -83,23 +89,27 @@ void listenForMemberRemovalVotes(BuildContext context, WidgetRef ref) {
 
 /// Someone else voted to remove a member and this reader is asked to agree.
 ///
-/// Watches the open votes: once this one is decided or runs out, the prompt
-/// says so instead of offering a vote that would start over.
+/// Watches the open votes: a later voter's count replaces the one it opened
+/// with, and once this vote is decided or runs out, the prompt says so
+/// instead of offering a vote that would start over. Pops with true when
+/// this reader agreed.
 class MemberRemovalPrompt extends ConsumerWidget {
+  /// The vote it opened for; only its target is kept to.
   final MemberRemovalProposal proposal;
 
   const MemberRemovalPrompt({super.key, required this.proposal});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final open = ref.watch(
+    final latest = ref.watch(
       memberRemovalProvider.select(
-        (votes) =>
-            votes.any((vote) => vote.targetUserId == proposal.targetUserId),
+        (votes) => votes
+            .where((vote) => vote.targetUserId == proposal.targetUserId)
+            .firstOrNull,
       ),
     );
     final target = proposal.targetNickname;
-    if (!open) {
+    if (latest == null) {
       return _RemovalQuestion(
         title: 'Remove $target?',
         message: 'This vote is over.',
@@ -107,21 +117,21 @@ class MemberRemovalPrompt extends ConsumerWidget {
         cancelLabel: 'Close',
       );
     }
-    final remaining = proposal.needed - proposal.votes;
+    final remaining = latest.remaining;
     return _RemovalQuestion(
       title: 'Remove $target?',
       message:
-          '${proposal.voterNickname} asked $target to leave the room, so '
+          '${latest.voterNickname} asked $target to leave the room, so '
           'nobody waits for them to turn the page. $target can join again '
           'with the room code.'
-          '${remaining > 0 ? '\n\n$remaining more ${remaining == 1 ? 'vote' : 'votes'} needed.' : ''}',
+          '${remaining > 0 ? '\n\n${MemberRemovalVote.moreVotes(remaining)} needed.' : ''}',
       confirmLabel: 'Agree',
       cancelLabel: 'Not now',
       onConfirm: () {
         // Read before the pop: this prompt's context is gone after it.
         final messenger = ScaffoldMessenger.maybeOf(context);
         final notifier = ref.read(memberRemovalProvider.notifier);
-        Navigator.of(context).pop();
+        Navigator.of(context).pop(true);
         unawaited(
           _vote(
             messenger,
@@ -131,10 +141,8 @@ class MemberRemovalPrompt extends ConsumerWidget {
           ),
         );
       },
-      onCancel: () {
-        ref.read(memberRemovalProvider.notifier).dismiss(proposal.targetUserId);
-        Navigator.of(context).pop();
-      },
+      // The listener that opened this dismisses the vote however it closes.
+      onCancel: () => Navigator.of(context).pop(false),
     );
   }
 }
@@ -156,10 +164,7 @@ Future<void> _vote(
     message = 'Could not ask $nickname to leave. Try again.';
   }
   if (message == null || messenger == null) return;
-  messenger.showSnackBar(
-    SnackBar(content: Text(message), duration: const Duration(seconds: 6)),
-    snackBarAnimationStyle: AnimationStyle.noAnimation,
-  );
+  showPaperMessageOn(messenger, message, duration: const Duration(seconds: 6));
 }
 
 /// What a vote did, for the reader who cast it.
@@ -168,9 +173,8 @@ String describeRemovalVote(MemberRemovalVote vote, String nickname) {
     MemberRemovalStatus.removed => '$nickname was removed from the room.',
     MemberRemovalStatus.gone => '$nickname is no longer in the room.',
     MemberRemovalStatus.voting =>
-      'Your vote is in. ${vote.remaining} more '
-          '${vote.remaining == 1 ? 'vote' : 'votes'} needed to remove '
-          '$nickname.',
+      'Your vote is in. ${MemberRemovalVote.moreVotes(vote.remaining)} '
+          'needed to remove $nickname.',
   };
 }
 

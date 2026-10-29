@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:cotime_book/models/member_removal.dart';
 import 'package:cotime_book/providers/member_removal_provider.dart';
 import 'package:cotime_book/widgets/member_removal.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -67,20 +69,22 @@ void main() {
       expect(harness.sent.single.$2, containsPair('voter_nickname', 'Alice'));
     });
 
-    test('a vote that removes the member tells the room they are out',
-        () async {
-      await harness.notifier.askToLeave(
-        targetUserId: 'carol',
-        targetNickname: 'Carol',
-      );
+    test(
+      'a vote that removes the member tells the room they are out',
+      () async {
+        await harness.notifier.askToLeave(
+          targetUserId: 'carol',
+          targetNickname: 'Carol',
+        );
 
-      expect(harness.sent.single.$1, 'membership_changed');
-      expect(harness.sent.single.$2, {
-        'action': 'removed',
-        'room_code': 'ROOM22',
-        'user_id': 'carol',
-      });
-    });
+        expect(harness.sent.single.$1, 'membership_changed');
+        expect(harness.sent.single.$2, {
+          'action': 'removed',
+          'room_code': 'ROOM22',
+          'user_id': 'carol',
+        });
+      },
+    );
 
     test('another reader\'s vote asks this reader to agree', () async {
       harness.proposals.add(_proposal(voter: 'bob', target: 'carol'));
@@ -138,16 +142,82 @@ void main() {
       expect(harness.notifier.state, isEmpty);
     });
 
-    test('this device checks with the database when told it was voted out',
-        () async {
-      harness.memberships.add({
-        'action': 'removed',
-        'room_code': 'ROOM22',
-        'user_id': 'alice',
-      });
-      await pumpEventQueue();
+    test(
+      'this device checks with the database when told it was voted out',
+      () async {
+        harness.memberships.add({
+          'action': 'removed',
+          'room_code': 'ROOM22',
+          'user_id': 'alice',
+        });
+        await pumpEventQueue();
 
-      expect(harness.removedCalls, 1);
+        expect(harness.removedCalls, 1);
+      },
+    );
+  });
+
+  group('the vote prompt', () {
+    Future<_Harness> pumpRoom(WidgetTester tester) async {
+      final harness = _Harness();
+      // The ProviderScope disposes the notifier; only the streams are ours.
+      addTearDown(() async {
+        await harness.proposals.close();
+        await harness.memberships.close();
+      });
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            memberRemovalProvider.overrideWith((ref) => harness.notifier),
+          ],
+          child: MaterialApp(
+            home: Consumer(
+              builder: (context, ref, _) {
+                listenForMemberRemovalVotes(context, ref);
+                return const Scaffold(body: Text('ROOM'));
+              },
+            ),
+          ),
+        ),
+      );
+      return harness;
+    }
+
+    testWidgets('shows the latest count as others vote', (tester) async {
+      final harness = await pumpRoom(tester);
+      harness.proposals.add(
+        _proposal(voter: 'bob', target: 'carol', votes: 1, needed: 3),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining('2 more votes needed.'), findsOneWidget);
+
+      harness.proposals.add(
+        _proposal(voter: 'dave', target: 'carol', votes: 2, needed: 3),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining('1 more vote needed.'), findsOneWidget);
+      expect(find.text('Remove Carol?'), findsOneWidget, reason: 'one prompt');
+    });
+
+    testWidgets('closing it from the corner counts as "not now"', (
+      tester,
+    ) async {
+      final harness = await pumpRoom(tester);
+      harness.proposals.add(_proposal(voter: 'bob', target: 'carol'));
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pump();
+      expect(find.text('Remove Carol?'), findsNothing);
+
+      harness.proposals.add(_proposal(voter: 'dave', target: 'carol'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Remove Carol?'), findsNothing);
+      expect(harness.notifier.state, isEmpty);
     });
   });
 }
@@ -156,6 +226,8 @@ Map<String, dynamic> _proposal({
   required String voter,
   required String target,
   String room = 'ROOM22',
+  int votes = 1,
+  int needed = 2,
 }) {
   String name(String id) => id[0].toUpperCase() + id.substring(1);
   return MemberRemovalProposal(
@@ -164,8 +236,8 @@ Map<String, dynamic> _proposal({
     targetNickname: name(target),
     voterUserId: voter,
     voterNickname: name(voter),
-    votes: 1,
-    needed: 2,
+    votes: votes,
+    needed: needed,
   ).toWire();
 }
 

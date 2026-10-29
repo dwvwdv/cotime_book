@@ -741,10 +741,13 @@ void main() {
       expect(notifier.state.members, hasLength(2));
 
       service.members = [testMember(roomId: 'room-a')];
+      final readsBefore = service.roomReads;
       final result = await notifier.voteToRemoveMember('user-b');
       await Future<void>.delayed(Duration.zero);
 
       expect(service.voteTargets, ['user-b']);
+      // A removed host hands the room over: the room is read again too.
+      expect(service.roomReads, readsBefore + 1);
       expect(result?.status, MemberRemovalStatus.removed);
       expect(notifier.state.members.map((member) => member.nickname), [
         'Alice',

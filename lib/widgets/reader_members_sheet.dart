@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/theme.dart';
@@ -29,15 +31,29 @@ class ReaderMembersSheet extends ConsumerStatefulWidget {
 }
 
 class _ReaderMembersSheetState extends ConsumerState<ReaderMembersSheet> {
+  StreamSubscription<Map<String, dynamic>>? _membershipChanges;
+
   @override
   void initState() {
     super.initState();
     // The reader does not keep the roster fresh the way the lobby does, and
-    // this is where someone looks for who is holding the room up.
-    Future<void>.microtask(() async {
+    // this is where someone looks for who is holding the room up. While the
+    // sheet is open, someone voted out (or arriving) changes it too.
+    Future<void>.microtask(() {
       if (!mounted) return;
-      await ref.read(roomProvider.notifier).refreshMembers();
+      final rooms = ref.read(roomProvider.notifier);
+      unawaited(rooms.refreshMembers());
+      _membershipChanges = ref
+          .read(realtimeServiceProvider)
+          .broadcastStream('membership_changed')
+          .listen((_) => unawaited(rooms.refreshMembers()));
     });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_membershipChanges?.cancel());
+    super.dispose();
   }
 
   @override
@@ -47,13 +63,17 @@ class _ReaderMembersSheetState extends ConsumerState<ReaderMembersSheet> {
     final members = ref.watch(roomProvider.select((state) => state.members));
     final currentUserId = ref.watch(authProvider.select((auth) => auth.userId));
     final onlineIds = {for (final user in users) user['user_id']};
+    // Off the channel, Presence is empty or stale and everyone would read as
+    // not connected — inviting a vote against someone who is reading.
+    final connected = presenceState.isConnected;
     final notConnected = [
-      for (final member in members)
-        if (!onlineIds.contains(member.userId) &&
-            member.userId != currentUserId)
-          member,
+      if (connected)
+        for (final member in members)
+          if (!onlineIds.contains(member.userId) &&
+              member.userId != currentUserId)
+            member,
     ];
-    final onAskToLeave = widget.onAskToLeave;
+    final onAskToLeave = connected ? widget.onAskToLeave : null;
 
     return Column(
       mainAxisSize: MainAxisSize.min,

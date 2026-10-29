@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cotime_book/models/room_member.dart';
 import 'package:cotime_book/providers/auth_provider.dart';
 import 'package:cotime_book/providers/presence_provider.dart';
@@ -12,20 +14,42 @@ import 'package:flutter_test/flutter_test.dart';
 class _FakePresenceNotifier extends PresenceNotifier {
   _FakePresenceNotifier() : super(RealtimeService());
 
-  void emit(List<Map<String, dynamic>> users) {
-    state = state.copyWith(onlineUsers: users);
+  void emit(
+    List<Map<String, dynamic>> users, {
+    RealtimeConnectionStatus status = RealtimeConnectionStatus.connected,
+  }) {
+    state = state.copyWith(onlineUsers: users, connectionStatus: status);
   }
 }
 
 class _Roster extends RoomNotifier {
+  int refreshes = 0;
+
   _Roster(List<RoomMember> members) : super(RoomService()) {
+    state = state.copyWith(members: members);
+  }
+
+  void setMembers(List<RoomMember> members) {
     state = state.copyWith(members: members);
   }
 
   @override
   Future<void> refreshMembers({
     List<Map<String, dynamic>>? presenceUsers,
-  }) async {}
+  }) async {
+    refreshes++;
+  }
+}
+
+/// Lets a test deliver `membership_changed` to whoever listens.
+class _Realtime extends RealtimeService {
+  final membership = StreamController<Map<String, dynamic>>.broadcast();
+
+  @override
+  Stream<Map<String, dynamic>> broadcastStream(String event) =>
+      event == 'membership_changed'
+      ? membership.stream
+      : super.broadcastStream(event);
 }
 
 class _SignedInAuth extends AuthNotifier {
@@ -53,22 +77,25 @@ void main() {
     ]);
     final asked = <String>[];
 
-    await tester.pumpWidget(ProviderScope(
-      overrides: [
-        presenceProvider.overrideWith((ref) => presence),
-        authProvider.overrideWith((ref) => _SignedInAuth()),
-        roomProvider.overrideWith(
-          (ref) => _Roster([_member('alice', 'Alice'), _member('bob', 'Bob')]),
-        ),
-      ],
-      child: MaterialApp(
-        home: Scaffold(
-          body: ReaderMembersSheet(
-            onAskToLeave: (userId, nickname) => asked.add(userId),
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          presenceProvider.overrideWith((ref) => presence),
+          authProvider.overrideWith((ref) => _SignedInAuth()),
+          roomProvider.overrideWith(
+            (ref) =>
+                _Roster([_member('alice', 'Alice'), _member('bob', 'Bob')]),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: ReaderMembersSheet(
+              onAskToLeave: (userId, nickname) => asked.add(userId),
+            ),
           ),
         ),
       ),
-    ));
+    );
     await tester.pump();
 
     expect(find.text('Bob'), findsOneWidget);
@@ -79,17 +106,86 @@ void main() {
     expect(asked, ['bob']);
   });
 
-  testWidgets('the members panel follows people coming and going while open',
-      (tester) async {
+  testWidgets('off the channel nobody is offered as not connected', (
+    tester,
+  ) async {
+    // Presence empties while this device reconnects; a co-reader shown as
+    // "Not connected" then would invite a vote against someone reading.
+    final presence = _FakePresenceNotifier();
+    presence.emit(const [], status: RealtimeConnectionStatus.reconnecting);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          presenceProvider.overrideWith((ref) => presence),
+          authProvider.overrideWith((ref) => _SignedInAuth()),
+          roomProvider.overrideWith(
+            (ref) =>
+                _Roster([_member('alice', 'Alice'), _member('bob', 'Bob')]),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(body: ReaderMembersSheet(onAskToLeave: (_, _) {})),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Reconnecting to the room...'), findsOneWidget);
+    expect(find.text('Not connected'), findsNothing);
+    expect(find.byTooltip('Ask Bob to leave'), findsNothing);
+  });
+
+  testWidgets('the open sheet re-reads the roster when membership changes', (
+    tester,
+  ) async {
+    final presence = _FakePresenceNotifier();
+    presence.emit([
+      {'user_id': 'alice', 'nickname': 'Alice', 'is_reading': true},
+    ]);
+    final roster = _Roster([_member('alice', 'Alice'), _member('bob', 'Bob')]);
+    final realtime = _Realtime();
+    addTearDown(realtime.membership.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          presenceProvider.overrideWith((ref) => presence),
+          authProvider.overrideWith((ref) => _SignedInAuth()),
+          realtimeServiceProvider.overrideWithValue(realtime),
+          roomProvider.overrideWith((ref) => roster),
+        ],
+        child: MaterialApp(
+          home: Scaffold(body: ReaderMembersSheet(onAskToLeave: (_, _) {})),
+        ),
+      ),
+    );
+    await tester.pump();
+    final opened = roster.refreshes;
+
+    realtime.membership.add({'action': 'removed', 'user_id': 'bob'});
+    await tester.pump();
+    expect(roster.refreshes, opened + 1);
+
+    roster.setMembers([_member('alice', 'Alice')]);
+    await tester.pump();
+    expect(find.text('Bob'), findsNothing);
+  });
+
+  testWidgets('the members panel follows people coming and going while open', (
+    tester,
+  ) async {
     final presence = _FakePresenceNotifier();
     presence.emit([
       {'user_id': 'alice', 'nickname': 'Alice', 'is_reading': true},
     ]);
 
-    await tester.pumpWidget(ProviderScope(
-      overrides: [presenceProvider.overrideWith((ref) => presence)],
-      child: const MaterialApp(home: Scaffold(body: ReaderMembersSheet())),
-    ));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [presenceProvider.overrideWith((ref) => presence)],
+        child: const MaterialApp(home: Scaffold(body: ReaderMembersSheet())),
+      ),
+    );
 
     expect(find.text('Alice'), findsOneWidget);
     expect(find.text('Bob'), findsNothing);
