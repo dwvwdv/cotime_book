@@ -5,7 +5,8 @@
 改到「會出貨到使用者手上的東西」時使用此流程：
 
 - `lib/`、`assets/`、`android/` 的任何功能調整或 bug 修復
-- 依賴升級（`pubspec.yaml` 的 dependencies）
+- 依賴升級（`pubspec.yaml` 的 dependencies，或只動 `pubspec.lock`：`flutter pub upgrade` 產生的
+  lockfile diff 要一起提交，CI 與發版都照 lockfile 建置，見 GitHub issue #50）
 - 會改變房間行為的 Supabase migration（舊版 App 會連到同一個正式庫，見 GitHub issue #33）
 
 ⚠️ **每次功能調整或修復都必須更新版本號。**
