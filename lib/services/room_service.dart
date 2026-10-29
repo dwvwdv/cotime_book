@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../models/member_removal.dart';
 import '../models/room.dart';
 import '../models/room_member.dart';
 import 'supabase_service.dart';
@@ -227,6 +228,29 @@ class RoomService {
         },
       ).single();
       return Room.fromJson(roomData);
+    } on PostgrestException catch (error) {
+      if (error.code == '42501' || error.code == 'P0002') {
+        throw const RoomSessionRevokedException(
+          'This room membership is inactive or has expired.',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// Votes [targetUserId] out of the room; the database counts the votes.
+  Future<MemberRemovalVote> voteToRemoveMember({
+    required String roomId,
+    required String targetUserId,
+  }) async {
+    try {
+      final result = await _database.rpc(
+        'vote_remove_member',
+        params: {'p_room_id': roomId, 'p_target_user_id': targetUserId},
+      );
+      return MemberRemovalVote.fromJson(
+        Map<String, dynamic>.from(result as Map),
+      );
     } on PostgrestException catch (error) {
       if (error.code == '42501' || error.code == 'P0002') {
         throw const RoomSessionRevokedException(

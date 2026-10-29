@@ -93,7 +93,8 @@ class RealtimePageSyncTransport implements PageSyncTransport {
 ///   without them would leave them on another page when they reconnect, so
 ///   for [defaultReconnectGrace] nobody turns and the bar says who it is
 ///   waiting for. Leaving on purpose (to the lobby, or the room) is
-///   announced and never holds anyone up.
+///   announced and never holds anyone up, and neither does a reader the
+///   room voted out ([removalMemory]).
 /// * **Ad breaks are the room's, not each device's.** Every
 ///   [AdConfig.pageTurnsPerAd]th shared page is an ad break for everyone on
 ///   it, so the ads come up together. A reader whose ad is up holds the room
@@ -123,6 +124,15 @@ class PageSyncService {
   /// How long an announced departure outweighs Presence, which is rate
   /// limited and may still show the reader for a while.
   static const departureMemory = Duration(seconds: 45);
+
+  /// How long a reader the room voted out is left out of the room, whatever
+  /// Presence says. The point of removing someone is that the room stops
+  /// waiting for them, but their Presence can outlast the vote: a sleeping
+  /// device's until the server times its socket out, and an app that does
+  /// not know about removal (protocol < 5) until its next heartbeat, every
+  /// [RoomNotifier.heartbeatInterval], finds the membership gone. Coming back
+  /// (a position query, or a join) ends it early.
+  static const removalMemory = Duration(minutes: 6);
 
   /// How long a failure stays on screen before the bar returns to idle.
   ///
@@ -181,8 +191,9 @@ class PageSyncService {
   /// Readers who vanished from Presence while reading: user id → when.
   final Map<String, DateTime> _awaySince = {};
 
-  /// Readers who said they left: user id → when.
-  final Map<String, DateTime> _departedAt = {};
+  /// Readers who said they left, or were voted out: user id → until when
+  /// that outweighs Presence.
+  final Map<String, DateTime> _departedUntil = {};
   Timer? _awayTimer;
   Timer? _announceTimer;
   bool _wasSelfPresent = false;
@@ -798,7 +809,8 @@ class PageSyncService {
     if (request == null) return;
 
     if (request.requestedByUserId != _currentUserId) {
-      if (!_isReading(request.requestedByUserId, users)) {
+      if (!_isReading(request.requestedByUserId, users) ||
+          _hasDeparted(request.requestedByUserId)) {
         _finishRequest(
           request,
           error: '${request.requestedByNickname} left the book',
@@ -1207,7 +1219,7 @@ class PageSyncService {
     // The asker may be from the lobby's past; it is also back, so it is no
     // longer away.
     final userId = payload['user_id'];
-    if (userId is String) _departedAt.remove(userId);
+    if (userId is String) _departedUntil.remove(userId);
     unawaited(_announcePosition());
   }
 
@@ -1225,27 +1237,33 @@ class PageSyncService {
 
   void _onMembership(Map<String, dynamic> payload) {
     final userId = payload['user_id'];
-    if (_disposed ||
-        payload['action'] != 'leaving' ||
-        userId is! String ||
-        userId == _currentUserId) {
-      return;
+    if (_disposed || userId is! String || userId == _currentUserId) return;
+    switch (payload['action']) {
+      case 'leaving':
+        _markDeparted(userId);
+      case 'removed':
+        // Voted out: the room stops waiting for them now, not after the
+        // reconnect grace, and goes on without them in a turn already asked.
+        _markDeparted(userId, memory: removalMemory);
+        _onPresence(const {});
+      case 'joined':
+        // Back in the room (after a removal, say): theirs again to answer.
+        _departedUntil.remove(userId);
     }
-    _markDeparted(userId);
   }
 
-  void _markDeparted(String userId) {
-    _departedAt[userId] = _clock();
+  void _markDeparted(String userId, {Duration memory = departureMemory}) {
+    _departedUntil[userId] = _clock().add(memory);
     _knownReaders.remove(userId);
     if (_awaySince.remove(userId) != null) _refreshAway();
     if (_othersInAd.remove(userId) != null) _refreshAdBreak();
   }
 
   bool _hasDeparted(String userId) {
-    final at = _departedAt[userId];
-    if (at == null) return false;
-    if (_clock().difference(at) < departureMemory) return true;
-    _departedAt.remove(userId);
+    final until = _departedUntil[userId];
+    if (until == null) return false;
+    if (_clock().isBefore(until)) return true;
+    _departedUntil.remove(userId);
     return false;
   }
 

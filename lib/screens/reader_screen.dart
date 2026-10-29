@@ -22,6 +22,7 @@ import '../services/shared_page_renderer.dart';
 import '../widgets/ad_break_cover.dart';
 import '../widgets/jump_preview.dart';
 import '../widgets/layout_report_sheet.dart';
+import '../widgets/member_removal.dart';
 import '../widgets/page_counter.dart';
 import '../widgets/page_turn_input.dart';
 import '../widgets/reader_safe_area.dart';
@@ -856,6 +857,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final prefs = ref.watch(readingPreferencesProvider);
     final textSize = ref.watch(roomProvider.select(_roomTextSize));
 
+    listenForMemberRemovalVotes(context, ref);
+
     if (bookState.bookFile == null || !_positionKnown) {
       // Without a way back this state is a dead end: the reader route has no
       // navigation stack to pop, so hardware back leaves the app instead.
@@ -1517,7 +1520,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     unawaited(
       showPaperDialog<void>(
         context: context,
-        builder: (_) => const ReaderMembersSheet(),
+        builder: (sheetContext) => ReaderMembersSheet(
+          onAskToLeave: (userId, nickname) => unawaited(
+            askMemberToLeave(
+              sheetContext,
+              ref,
+              userId: userId,
+              nickname: nickname,
+            ),
+          ),
+        ),
       ),
     );
   }

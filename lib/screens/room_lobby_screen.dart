@@ -16,6 +16,7 @@ import '../services/presence_merge.dart';
 import '../services/realtime_service.dart';
 import '../widgets/library_browser.dart';
 import '../widgets/member_list.dart';
+import '../widgets/member_removal.dart';
 import '../widgets/paper.dart';
 import '../widgets/room_code_display.dart';
 import '../widgets/transfer_progress_widget.dart';
@@ -299,6 +300,8 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     final authState = ref.watch(authProvider);
     final room = roomState.currentRoom;
 
+    listenForMemberRemovalVotes(context, ref);
+
     // Keep member online/hasBook status in sync with presence on every update
     ref.listen<PresenceState>(presenceProvider, (previous, next) {
       final notifier = ref.read(roomProvider.notifier);
@@ -423,6 +426,14 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                                 presenceState.onlineUsers,
                               ),
                               shrinkWrap: true,
+                              onAskToLeave: (member) => unawaited(
+                                askMemberToLeave(
+                                  context,
+                                  ref,
+                                  userId: member.userId,
+                                  nickname: member.nickname,
+                                ),
+                              ),
                             ),
                           ],
                         ),

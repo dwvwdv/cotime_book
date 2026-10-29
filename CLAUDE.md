@@ -142,6 +142,8 @@ supabase/
      版本 3 是全房廣告時段（GH-63）：舊版跟得上（自己計數播廣告、廣告時段發起的翻頁被拒），所以 `minCompatibleRoomProtocol` 仍是 2。
      版本 4 是跳頁：舊版收到 `direction: jump` 會丟掉、不回應，但跟得上 commit，所以仍相容；
      房內有讀者的 App 低於 `AppConstants.pageJumpProtocol` 時，requester 直接不發出跳頁請求。
+     版本 5 是表決請離（`member_removal_vote` 與 `membership_changed` 的 `removed`，見第 4 點）：
+     舊版忽略兩者、照舊等完重連寬限，所以仍相容。
      只新增可被忽略的欄位不用改。版號只能往上加。舊版（v1.0.5 以前）不送這兩個欄位，算成 0，
      與目前的版本相容。只提示、不把對方排除在共識之外。
 
@@ -152,12 +154,20 @@ supabase/
    lobby 一進入就重讀名單，之後定時對帳——**不要只靠訊號**（Presence 事件、
    `membership_changed`）更新名單，訊號會遺失（見 issue #15）。
 
-4. **房間成員只能透過 `create_room` / `join_room` / `leave_room` 三個 RPC 變動。**
+4. **房間成員只能透過 `create_room` / `join_room` / `leave_room` / `vote_remove_member` 四個 RPC 變動。**
    不要恢復對 `cotime_book.room_members` 的直接 DELETE 權限；RPC 會在 room 母列上
    序列化並行的離開、過期成員驅逐與 host 轉移。
    已關閉（或租約過期）的房間，曾在房內的人可以用 `join_room` 重新啟用——
    依據是 `cotime_book_private.room_participants`（由 `room_members` 的 insert trigger 記錄）。
    其他人一律得到與「房號不存在」相同的 `P0002`，不要讓錯誤訊息洩漏房間是否存在（見 issue #R）。
+   **請離是表決，不是房主權限**——要被請離的常常正是關掉 App 的房主。票只在資料庫算
+   （`cotime_book_private.member_removal_votes`，App 讀不到）：近 12 分鐘有心跳的其他成員過半數，
+   票 5 分鐘有效、且只算在對方（與投票者）這次加入之後投的。達標就走 `remove_membership_locked`，
+   和離開一樣會轉移 host；不是封鎖，被請離的人能再加入。完成那一票的 App 廣播
+   `membership_changed`（`action: removed`、`user_id` 是被請離的人），還差票時廣播
+   `member_removal_vote` 讓其他人被詢問（`MemberRemovalNotifier`）。這兩則訊號都可能遺失：
+   被請離的裝置靠下一次心跳或 channel 被拒發現（GH-36 的路徑），`PageSyncService` 收到 `removed`
+   後在 `removalMemory` 內不再等那個人——Presence 可能比表決活得久（睡著的裝置、舊版 App）。
 
 5. **Realtime 連線會斷，而且 library 不一定會自己接回來。** 裝置在讀一頁時休眠是常態。
    `RealtimeService` 有 watchdog 會重建壞掉的 channel（見 issue #17）。
