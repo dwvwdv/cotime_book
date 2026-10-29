@@ -113,12 +113,12 @@ void main() {
       () async {
         final elsewhere = AdConsent(FakeConsentPlatform());
         await elsewhere.gather();
-        expect(elsewhere.privacyOptionsRequired, isFalse);
+        expect(elsewhere.privacyOptionsRequired.value, isFalse);
 
         final platform = FakeConsentPlatform()..optionsRequired = true;
         final inEurope = AdConsent(platform);
         await inEurope.gather();
-        expect(inEurope.privacyOptionsRequired, isTrue);
+        expect(inEurope.privacyOptionsRequired.value, isTrue);
 
         platform.onPrivacyForm = () async => throw Exception('not shown');
         await inEurope.showPrivacyOptions();

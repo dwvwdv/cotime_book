@@ -244,7 +244,8 @@ supabase/
      **同意（UMP，GH-58）**：歐洲經濟區、英國、瑞士要先經 Google 的同意訊息才能要廣告。`AdConsent.gather()`
      每次開 App 問一次、所有廣告位置共用；`canRequestAds()` 為 false 時連 `MobileAds.initialize()` 都不呼叫，
      `preload()` 在 SDK 起來前一律不發請求。查詢逾時或訊息顯示失敗就當作沒廣告，不能擋開書與存檔。
-     Google 要求能改答覆，所以 `privacyOptionsRequired` 時閱讀設定有「Ad Privacy Choices」。
+     Google 要求能改答覆，所以 `privacyOptionsRequired` 時，每個會播廣告的流程（閱讀設定、TXT 轉檔工具）
+     都有 `AdPrivacyChoices`；新增廣告位置時也要放。
      訊息本身在 AdMob 後台的「隱私權與訊息」設定，沒發布時那些地區就沒有廣告。
    - **viewer 周圍的 chrome 必須固定高度。** 任何改變 `EpubViewer` 尺寸的東西都會讓
      epub.js 重新分頁、改掉本機 CFI（見 issue #13）；

@@ -14,17 +14,20 @@ class _FakePresenceNotifier extends PresenceNotifier {
 }
 
 void main() {
-  testWidgets('the members panel follows people coming and going while open',
-      (tester) async {
+  testWidgets('the members panel follows people coming and going while open', (
+    tester,
+  ) async {
     final presence = _FakePresenceNotifier();
     presence.emit([
       {'user_id': 'alice', 'nickname': 'Alice', 'is_reading': true},
     ]);
 
-    await tester.pumpWidget(ProviderScope(
-      overrides: [presenceProvider.overrideWith((ref) => presence)],
-      child: const MaterialApp(home: Scaffold(body: ReaderMembersSheet())),
-    ));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [presenceProvider.overrideWith((ref) => presence)],
+        child: const MaterialApp(home: Scaffold(body: ReaderMembersSheet())),
+      ),
+    );
 
     expect(find.text('Alice'), findsOneWidget);
     expect(find.text('Bob'), findsNothing);

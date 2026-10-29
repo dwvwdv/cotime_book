@@ -50,9 +50,11 @@ void main() {
           .toRadixString(16)
           .padLeft(6, '0');
 
-      expect(rules['html, body, body *'], {
-        'background-color': 'transparent !important',
-      }, reason: '${theme.name}: the colour behind the WebView must show');
+      expect(
+        rules['html, body, body *'],
+        {'background-color': 'transparent !important'},
+        reason: '${theme.name}: the colour behind the WebView must show',
+      );
       expect(rules['body'], {'color': '#$hex !important'});
       expect(rules['body *'], {'color': 'inherit !important'});
       expect(prefs.displaySettings.theme!.customCss, rules);
@@ -133,36 +135,40 @@ void main() {
       expect(prefs.volumeKeysTurnPages, isFalse);
     });
 
-    test('the reader opens on the remembered size, not the default first',
-        () async {
-      // The type size is published in Presence as part of the page fit, and
-      // Presence updates are rate limited (issue #18): starting on the default
-      // and then switching would cost the room a second update for nothing.
-      SharedPreferences.setMockInitialValues({'reading_font_size': 24.0});
-      final container = await launch();
-      final seen = <double>[];
-      container.listen<ReadingPreferences>(
-        readingPreferencesProvider,
-        (_, next) => seen.add(next.fontSize),
-        fireImmediately: true,
-      );
-      await pumpEventQueue();
+    test(
+      'the reader opens on the remembered size, not the default first',
+      () async {
+        // The type size is published in Presence as part of the page fit, and
+        // Presence updates are rate limited (issue #18): starting on the default
+        // and then switching would cost the room a second update for nothing.
+        SharedPreferences.setMockInitialValues({'reading_font_size': 24.0});
+        final container = await launch();
+        final seen = <double>[];
+        container.listen<ReadingPreferences>(
+          readingPreferencesProvider,
+          (_, next) => seen.add(next.fontSize),
+          fireImmediately: true,
+        );
+        await pumpEventQueue();
 
-      expect(seen, [24]);
-    });
+        expect(seen, [24]);
+      },
+    );
 
-    test('values this version cannot use fall back to their defaults',
-        () async {
-      SharedPreferences.setMockInitialValues({
-        'reading_theme': 'neon',
-        'reading_font_size': 'large',
-        'volume_keys_turn_pages': 'yes',
-      });
-      final prefs = (await launch()).read(readingPreferencesProvider);
-      expect(prefs.theme, ReadingTheme.day);
-      expect(prefs.fontSize, ReadingPreferences.defaultFontSize);
-      expect(prefs.volumeKeysTurnPages, isFalse);
-    });
+    test(
+      'values this version cannot use fall back to their defaults',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'reading_theme': 'neon',
+          'reading_font_size': 'large',
+          'volume_keys_turn_pages': 'yes',
+        });
+        final prefs = (await launch()).read(readingPreferencesProvider);
+        expect(prefs.theme, ReadingTheme.day);
+        expect(prefs.fontSize, ReadingPreferences.defaultFontSize);
+        expect(prefs.volumeKeysTurnPages, isFalse);
+      },
+    );
 
     test('a saved size out of range is brought back into it', () async {
       // The room reads at the largest size anyone picked, so a size no button
@@ -179,9 +185,7 @@ void main() {
         ReadingPreferences.minFontSize,
       );
 
-      SharedPreferences.setMockInitialValues({
-        'reading_font_size': double.nan,
-      });
+      SharedPreferences.setMockInitialValues({'reading_font_size': double.nan});
       expect(
         (await launch()).read(readingPreferencesProvider).fontSize,
         ReadingPreferences.defaultFontSize,

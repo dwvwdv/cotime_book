@@ -1091,7 +1091,10 @@ void main() {
         isTrue,
       );
       // Apps from before the field existed.
-      expect(presenceSpeaksProtocol({}, AppConstants.pageJumpProtocol), isFalse);
+      expect(
+        presenceSpeaksProtocol({}, AppConstants.pageJumpProtocol),
+        isFalse,
+      );
 
       // The old device is the one in the book; the new one in the lobby is
       // never asked, so nobody would answer.
@@ -1114,12 +1117,17 @@ void main() {
       // app in the lobby must not stand in for the old one in the book.
       final oldInBookNotReady = mergePresenceUsers([
         {...meta(3, reading: true), 'reader_ready': false},
-        {...meta(AppConstants.pageJumpProtocol, reading: false),
-          'reader_ready': true},
+        {
+          ...meta(AppConstants.pageJumpProtocol, reading: false),
+          'reader_ready': true,
+        },
       ]).single;
       expect(oldInBookNotReady['reader_ready'], isTrue);
       expect(
-        presenceSpeaksProtocol(oldInBookNotReady, AppConstants.pageJumpProtocol),
+        presenceSpeaksProtocol(
+          oldInBookNotReady,
+          AppConstants.pageJumpProtocol,
+        ),
         isFalse,
       );
       final newInBook = mergePresenceUsers([
@@ -1460,34 +1468,37 @@ void main() {
       expect(alice.holdsExpired, 0);
     });
 
-    test('catching up on a page from an announcement starts no break', () async {
-      // Regression: a reader back after missing the commit reached the break
-      // page late, showed an ad, and covered the page everyone else had been
-      // reading since their own break ended.
-      final room = FakeRoom();
-      final alice = room.join(
-        'alice',
-        'Alice',
-        adBreakEvery: 2,
-        positionAnnounceInterval: const Duration(milliseconds: 20),
-      );
-      final bob = room.join('bob', 'Bob', adBreakEvery: 2, showsAd: true);
-      addTearDown(room.dispose);
-      await flush();
-      await turnPages(room, alice, 1);
+    test(
+      'catching up on a page from an announcement starts no break',
+      () async {
+        // Regression: a reader back after missing the commit reached the break
+        // page late, showed an ad, and covered the page everyone else had been
+        // reading since their own break ended.
+        final room = FakeRoom();
+        final alice = room.join(
+          'alice',
+          'Alice',
+          adBreakEvery: 2,
+          positionAnnounceInterval: const Duration(milliseconds: 20),
+        );
+        final bob = room.join('bob', 'Bob', adBreakEvery: 2, showsAd: true);
+        addTearDown(room.dispose);
+        await flush();
+        await turnPages(room, alice, 1);
 
-      room.dropEvents.add(PageSyncService.commitEvent);
-      await turnPages(room, alice, 1);
-      expect(alice.service.position.seq, 2);
-      expect(bob.service.position.seq, 1);
-      room.dropEvents.clear();
+        room.dropEvents.add(PageSyncService.commitEvent);
+        await turnPages(room, alice, 1);
+        expect(alice.service.position.seq, 2);
+        expect(bob.service.position.seq, 1);
+        room.dropEvents.clear();
 
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-      await flush();
-      expect(bob.service.position, alice.service.position);
-      expect(bob.adBreaks, isEmpty);
-      expect(alice.service.currentState.adBreak, isFalse);
-    });
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        await flush();
+        expect(bob.service.position, alice.service.position);
+        expect(bob.adBreaks, isEmpty);
+        expect(alice.service.currentState.adBreak, isFalse);
+      },
+    );
 
     test('leaving the book under an ad releases the room', () async {
       final room = FakeRoom();

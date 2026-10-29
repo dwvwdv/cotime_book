@@ -166,7 +166,8 @@ class AppTheme {
             (states) => states.contains(WidgetState.disabled) ? paper : ink,
           ),
           foregroundColor: WidgetStateProperty.resolveWith(
-            (states) => states.contains(WidgetState.disabled) ? inkFaint : paper,
+            (states) =>
+                states.contains(WidgetState.disabled) ? inkFaint : paper,
           ),
           side: WidgetStateProperty.resolveWith(
             (states) => BorderSide(
@@ -269,7 +270,9 @@ class AppTheme {
         modalElevation: 0,
         modalBarrierColor: Color(0x00000000),
         showDragHandle: false,
-        shape: Border(top: BorderSide(color: ink, width: heavyRuleWidth)),
+        shape: Border(
+          top: BorderSide(color: ink, width: heavyRuleWidth),
+        ),
       ),
       dialogTheme: const DialogThemeData(
         backgroundColor: paper,

@@ -46,24 +46,30 @@ void main() {
       expect(codes, ['BBBBBB', 'AAAAAA']);
     });
 
-    test('going back to a room moves it to the top without a duplicate', () async {
-      final rooms = notifierFor(await relaunch());
-      rooms.record(testRoom(code: 'AAAAAA'));
-      rooms.record(testRoom(code: 'BBBBBB'));
-      rooms.record(testRoom(code: 'AAAAAA'));
+    test(
+      'going back to a room moves it to the top without a duplicate',
+      () async {
+        final rooms = notifierFor(await relaunch());
+        rooms.record(testRoom(code: 'AAAAAA'));
+        rooms.record(testRoom(code: 'BBBBBB'));
+        rooms.record(testRoom(code: 'AAAAAA'));
 
-      expect(rooms.state.map((r) => r.code), ['AAAAAA', 'BBBBBB']);
-    });
+        expect(rooms.state.map((r) => r.code), ['AAAAAA', 'BBBBBB']);
+      },
+    );
 
-    test('keep the book title when a visit starts before the book is set', () async {
-      final rooms = notifierFor(await relaunch());
-      rooms.record(
-        testRoom(code: 'AAAAAA').copyWith(currentBookTitle: 'Moby-Dick'),
-      );
-      rooms.record(testRoom(code: 'AAAAAA'));
+    test(
+      'keep the book title when a visit starts before the book is set',
+      () async {
+        final rooms = notifierFor(await relaunch());
+        rooms.record(
+          testRoom(code: 'AAAAAA').copyWith(currentBookTitle: 'Moby-Dick'),
+        );
+        rooms.record(testRoom(code: 'AAAAAA'));
 
-      expect(rooms.state.single.bookTitle, 'Moby-Dick');
-    });
+        expect(rooms.state.single.bookTitle, 'Moby-Dick');
+      },
+    );
 
     test('only the most recent few are kept', () async {
       final rooms = notifierFor(await relaunch());
@@ -92,10 +98,7 @@ void main() {
             '[{"code":"AAAAAA","last_visited_at":"2026-10-01T09:00:00Z"},'
             '{"code":42},"junk"]',
       });
-      expect(
-        (await relaunch()).recentRooms.map((r) => r.code),
-        ['AAAAAA'],
-      );
+      expect((await relaunch()).recentRooms.map((r) => r.code), ['AAAAAA']);
 
       SharedPreferences.setMockInitialValues({'recent_rooms': 'not json'});
       expect((await relaunch()).recentRooms, isEmpty);

@@ -53,9 +53,7 @@ void main() {
       );
 
       // Simulate user-c disconnecting
-      final updated = request.copyWith(
-        requiredUserIds: {'user-a', 'user-b'},
-      );
+      final updated = request.copyWith(requiredUserIds: {'user-a', 'user-b'});
 
       expect(updated.requiredUserIds.length, 2);
 
@@ -120,10 +118,10 @@ void main() {
       // A book from this device leaves the column out: the database clears a
       // stale path itself, and sharing keeps working against a database that
       // does not have the column yet (GH-28).
-      expect(
-        roomBookUpdate(bookTitle: 'Notes', bookHash: 'abc'),
-        {'current_book_title': 'Notes', 'current_book_hash': 'abc'},
-      );
+      expect(roomBookUpdate(bookTitle: 'Notes', bookHash: 'abc'), {
+        'current_book_title': 'Notes',
+        'current_book_hash': 'abc',
+      });
       expect(
         roomBookUpdate(
           bookTitle: 'Moby Dick',
@@ -192,24 +190,36 @@ void main() {
     test('fileSizeFormatted returns correct format', () {
       expect(
         const BookMetadata(
-          id: '1', title: 'Test', author: 'A',
-          fileName: 'test.epub', fileSizeBytes: 500, fileHash: 'h',
+          id: '1',
+          title: 'Test',
+          author: 'A',
+          fileName: 'test.epub',
+          fileSizeBytes: 500,
+          fileHash: 'h',
         ).fileSizeFormatted,
         '500 B',
       );
 
       expect(
         const BookMetadata(
-          id: '1', title: 'Test', author: 'A',
-          fileName: 'test.epub', fileSizeBytes: 2048, fileHash: 'h',
+          id: '1',
+          title: 'Test',
+          author: 'A',
+          fileName: 'test.epub',
+          fileSizeBytes: 2048,
+          fileHash: 'h',
         ).fileSizeFormatted,
         '2.0 KB',
       );
 
       expect(
         const BookMetadata(
-          id: '1', title: 'Test', author: 'A',
-          fileName: 'test.epub', fileSizeBytes: 5242880, fileHash: 'h',
+          id: '1',
+          title: 'Test',
+          author: 'A',
+          fileName: 'test.epub',
+          fileSizeBytes: 5242880,
+          fileHash: 'h',
         ).fileSizeFormatted,
         '5.0 MB',
       );

@@ -45,11 +45,12 @@ class AdConsent {
   AdConsent(this._platform, {this.updateTimeout = const Duration(seconds: 15)});
 
   Future<bool>? _gathered;
-  bool _privacyOptionsRequired = false;
+  final ValueNotifier<bool> _privacyOptionsRequired = ValueNotifier(false);
 
   /// The user has to be able to change their answer: offer
-  /// [showPrivacyOptions]. Known once [gather] is done.
-  bool get privacyOptionsRequired => _privacyOptionsRequired;
+  /// [showPrivacyOptions] wherever an ad can be shown. Known once [gather]
+  /// is done, which may be after a screen offering it was built.
+  ValueListenable<bool> get privacyOptionsRequired => _privacyOptionsRequired;
 
   /// Brings the user's answer up to date, showing Google's message when it
   /// is needed. True when ads may be requested. Asked once per start, as
@@ -93,7 +94,7 @@ class AdConsent {
 
   Future<void> _readPrivacyOptionsRequired() async {
     try {
-      _privacyOptionsRequired = await _platform.privacyOptionsRequired();
+      _privacyOptionsRequired.value = await _platform.privacyOptionsRequired();
     } catch (error) {
       debugPrint('Ad privacy options unknown: $error');
     }
