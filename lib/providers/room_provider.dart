@@ -8,6 +8,7 @@ import '../providers/page_sync_provider.dart';
 import '../providers/presence_provider.dart';
 import '../services/room_service.dart';
 import '../services/supabase_service.dart';
+import '../l10n/l10n.dart';
 
 final roomServiceProvider = Provider<RoomService>((ref) => RoomService());
 
@@ -388,7 +389,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
         if (_isCurrentRoomSession(room.id, roomSessionGeneration)) {
           await _revokeSession(
             room.id,
-            'This room membership is inactive or has expired.',
+            appStrings.membershipInactive,
             roomSessionGeneration,
           );
         }
@@ -630,14 +631,10 @@ class RoomNotifier extends StateNotifier<RoomState> {
   }
 
   /// Shown when this device finds it is no longer in the room it was in.
-  static const removedFromRoomMessage =
-      'You are no longer in this room. It may have closed, or you left it on '
-      'another device.';
+  static String get removedFromRoomMessage => appStrings.removedFromRoom;
 
   /// Shown when the others in the room voted this device out.
-  static const removedByVoteMessage =
-      'The other readers removed you from this room. You can join again '
-      'with the room code.';
+  static String get removedByVoteMessage => appStrings.removedByVote;
 
   /// Realtime refused this room's channel. That happens when the membership
   /// is gone — left on another device, evicted after a long sleep, the room

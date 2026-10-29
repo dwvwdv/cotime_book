@@ -63,6 +63,7 @@ void main() {
       'pubspec.yaml',
       'pubspec.lock',
       'analysis_options.yaml',
+      'l10n.yaml',
       '.github/workflows/release-apk.yml',
     ]) {
       expect(_covered(filters, path), isTrue,

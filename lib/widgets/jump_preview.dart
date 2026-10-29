@@ -13,6 +13,7 @@ import '../services/shared_page_renderer.dart';
 import 'book_contents.dart';
 import 'page_turn_input.dart';
 import 'paper.dart';
+import '../l10n/l10n.dart';
 
 /// Where the room should go, as picked in the [JumpPreview].
 class JumpTarget {
@@ -438,10 +439,7 @@ class _JumpPreviewState extends State<JumpPreview> {
     if (!mounted || cfi == null || cfi.isEmpty) {
       if (mounted) {
         _stopMoving();
-        showPaperMessage(
-          context,
-          'Still working out the length of the book. Try again in a moment.',
-        );
+        showPaperMessage(context, context.l10n.stillWorkingOutLength);
       }
       return;
     }
@@ -567,12 +565,15 @@ class _JumpPreviewState extends State<JumpPreview> {
       child: Row(
         children: [
           IconButton(
-            tooltip: 'Close',
+            tooltip: context.l10n.close,
             color: ink,
             onPressed: widget.onCancel,
             icon: const Icon(Icons.close),
           ),
-          Text('Page', style: AppTheme.body.copyWith(color: ink)),
+          Text(
+            context.l10n.jumpPageLabel,
+            style: AppTheme.body.copyWith(color: ink),
+          ),
           const SizedBox(width: 6),
           SizedBox(
             width: 56,
@@ -633,7 +634,7 @@ class _JumpPreviewState extends State<JumpPreview> {
             child: Text(
               // Words, not a spinner: e-ink.
               !_ready
-                  ? 'Loading...'
+                  ? context.l10n.loading
                   : [
                       '/ ${info?.pages ?? '–'}',
                       // Where the slider will go, until it has gone there.
@@ -662,7 +663,9 @@ class _JumpPreviewState extends State<JumpPreview> {
               ),
             ),
             child: Text(
-              _isHere && _settled && !_typedPagePending ? 'Here' : 'Go',
+              _isHere && _settled && !_typedPagePending
+                  ? context.l10n.jumpHere
+                  : context.l10n.go,
             ),
           ),
         ],
@@ -689,7 +692,7 @@ class _JumpPreviewState extends State<JumpPreview> {
               color: paper,
               child: Center(
                 child: Text(
-                  'Loading...',
+                  context.l10n.loading,
                   style: AppTheme.body.copyWith(color: ink),
                 ),
               ),
@@ -739,7 +742,7 @@ class _JumpPreviewState extends State<JumpPreview> {
         children: [
           IconButton(
             style: iconStyle,
-            tooltip: 'Contents',
+            tooltip: context.l10n.contents,
             onPressed: _ready && _chapters.isNotEmpty
                 ? () => unawaited(_showContents())
                 : null,
@@ -747,7 +750,7 @@ class _JumpPreviewState extends State<JumpPreview> {
           ),
           IconButton(
             style: iconStyle,
-            tooltip: 'Previous page',
+            tooltip: context.l10n.previousPage,
             onPressed: _ready ? () => _turn(PageTurnDirection.previous) : null,
             icon: const Icon(Icons.chevron_left),
           ),
@@ -765,7 +768,7 @@ class _JumpPreviewState extends State<JumpPreview> {
                 trackHeight: 3,
               ),
               child: Semantics(
-                label: 'Position in the book',
+                label: context.l10n.positionInBook,
                 child: Slider(
                   value: _sliderValue.clamp(0.0, 1.0),
                   onChanged: _ready
@@ -788,7 +791,7 @@ class _JumpPreviewState extends State<JumpPreview> {
           ),
           IconButton(
             style: iconStyle,
-            tooltip: 'Next page',
+            tooltip: context.l10n.nextPage,
             onPressed: _ready ? () => _turn(PageTurnDirection.next) : null,
             icon: const Icon(Icons.chevron_right),
           ),

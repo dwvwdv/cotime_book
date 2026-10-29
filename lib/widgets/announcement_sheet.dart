@@ -4,6 +4,7 @@ import '../config/theme.dart';
 import '../models/announcement.dart';
 import '../services/announcement_service.dart';
 import 'paper.dart';
+import '../l10n/l10n.dart';
 
 /// Opens the announcements in a sheet.
 Future<void> showAnnouncementSheet({
@@ -57,7 +58,7 @@ class _AnnouncementListState extends State<AnnouncementList> {
     } catch (error) {
       debugPrint('Unable to load the announcements: $error');
       if (!mounted || generation != _loadGeneration) return;
-      setState(() => _error = 'The announcements could not be loaded.');
+      setState(() => _error = context.l10n.announcementsLoadFailed);
     }
   }
 
@@ -66,7 +67,7 @@ class _AnnouncementListState extends State<AnnouncementList> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text('News', style: AppTheme.title),
+        Text(context.l10n.news, style: AppTheme.title),
         const SizedBox(height: 12),
         const Divider(thickness: AppTheme.heavyRuleWidth),
         Expanded(child: _buildBody()),
@@ -81,22 +82,22 @@ class _AnnouncementListState extends State<AnnouncementList> {
         children: [
           PaperNotice(message: _error!, icon: Icons.wifi_off),
           const SizedBox(height: 8),
-          TextButton(onPressed: _load, child: const Text('Try Again')),
+          TextButton(onPressed: _load, child: Text(context.l10n.tryAgain)),
         ],
       );
     }
     final announcements = _announcements;
     if (announcements == null) {
       // Text, not a spinner: e-ink.
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 20),
-        child: Text('Loading...', style: AppTheme.body),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        child: Text(context.l10n.loading, style: AppTheme.body),
       );
     }
     if (announcements.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 20),
-        child: Text('No announcements yet.', style: AppTheme.body),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        child: Text(context.l10n.noAnnouncements, style: AppTheme.body),
       );
     }
     return ListView.separated(

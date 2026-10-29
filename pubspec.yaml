@@ -1,7 +1,7 @@
 name: cotime_book
 description: 頁間（CoTime Book）- 遠程同步看書工具
 publish_to: 'none'
-version: 1.0.26+30
+version: 1.0.27+31
 
 environment:
   sdk: ^3.8.0
@@ -9,6 +9,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # The interface in English and Traditional Chinese (lib/l10n, l10n.yaml).
+  # intl is pinned by flutter_localizations; `any` takes that version.
+  flutter_localizations:
+    sdk: flutter
+  intl: any
 
   # State Management
   flutter_riverpod: ^2.6.1
@@ -82,6 +87,8 @@ flutter_launcher_icons:
 
 flutter:
   uses-material-design: true
+  # Generates lib/l10n/app_localizations*.dart from the ARB files on pub get.
+  generate: true
 
   assets:
     - assets/icon/

@@ -4,7 +4,6 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../config/app_constants.dart';
 import '../config/theme.dart';
 import '../models/room_member.dart';
 import '../models/transfer_state.dart';
@@ -21,6 +20,7 @@ import '../widgets/paper.dart';
 import '../widgets/room_code_display.dart';
 import '../widgets/transfer_progress_widget.dart';
 import 'room_removed.dart';
+import '../l10n/l10n.dart';
 
 class RoomLobbyScreen extends ConsumerStatefulWidget {
   /// How often the lobby re-reads the member list on its own.
@@ -76,12 +76,14 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       final roomState = ref.read(roomProvider);
       final room = roomState.currentRoom;
       if (room == null) {
-        throw StateError('This room is not available on this device.');
+        throw StateError(appStrings.roomNotOnDevice);
       }
       if (room.code.toUpperCase() != widget.roomCode.toUpperCase()) {
         throw StateError(
-          'Room link ${widget.roomCode.toUpperCase()} does not match your '
-          'active room ${room.code}.',
+          appStrings.roomLinkMismatch(
+            widget.roomCode.toUpperCase(),
+            room.code,
+          ),
         );
       }
 
@@ -136,7 +138,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
           );
           final roomNotifier = ref.read(roomProvider.notifier);
           roomNotifier.onBookSharedReceived(
-            bookTitle: bookTitle ?? 'Unknown',
+            bookTitle: bookTitle ?? appStrings.unknownBook,
             bookHash: bookHash,
             libraryPath: libraryPath is String ? libraryPath : null,
           );
@@ -149,7 +151,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       _roomClosedSub = realtimeService.broadcastStream('room_closed').listen((
         _,
       ) {
-        if (mounted) _leaveRoom(reason: 'This room has been closed.');
+        if (mounted) _leaveRoom(reason: appStrings.roomClosed);
       });
 
       _membershipChangedSub = realtimeService
@@ -238,9 +240,9 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       if (authState.isAuthenticated) return authState;
       if (authState.error != null) throw StateError(authState.error!);
       await Future<void>.delayed(const Duration(milliseconds: 100));
-      if (!mounted) throw StateError('Room initialization was cancelled.');
+      if (!mounted) throw StateError(appStrings.roomInitCancelled);
     }
-    throw StateError('Authentication timed out. Please return home and retry.');
+    throw StateError(appStrings.authTimedOut);
   }
 
   @override
@@ -329,9 +331,9 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     if (_isInitializing) {
       // A static line rather than a spinner: on e-ink a spinner is a panel
       // refresh every frame for as long as the room takes to join.
-      return const Scaffold(
+      return Scaffold(
         body: Center(
-          child: Text('Opening the room...', style: AppTheme.title),
+          child: Text(context.l10n.openingRoom, style: AppTheme.title),
         ),
       );
     }
@@ -341,7 +343,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
         room.code.toUpperCase() == widget.roomCode.toUpperCase();
     if (_initError != null || !routeMatchesRoom) {
       return _buildRouteError(
-        _initError ?? 'This room is no longer available.',
+        _initError ?? context.l10n.roomNoLongerAvailable,
       );
     }
     final activeRoom = room;
@@ -368,11 +370,11 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Room Lobby'),
+          title: Text(context.l10n.roomLobby),
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             onPressed: _isLeaving ? null : () => _leaveRoom(),
-            tooltip: 'Leave room',
+            tooltip: context.l10n.leaveRoomTooltip,
           ),
         ),
         body: SafeArea(
@@ -397,8 +399,8 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            const Text(
-                              'ROOM CODE',
+                            Text(
+                              context.l10n.roomCodeOverline,
                               style: AppTheme.overline,
                               textAlign: TextAlign.center,
                             ),
@@ -409,9 +411,11 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                             const SizedBox(height: 24),
 
                             SectionHeader(
-                              label: 'Members',
+                              label: context.l10n.members,
                               trailing: Text(
-                                '${presenceState.onlineCount} online',
+                                context.l10n.onlineCount(
+                                  presenceState.onlineCount,
+                                ),
                                 style: const TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w700,
@@ -469,8 +473,8 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                                     icon: const Icon(Icons.upload_file),
                                     label: Text(
                                       bookState.isLoading
-                                          ? 'Loading...'
-                                          : 'Share Book',
+                                          ? context.l10n.loading
+                                          : context.l10n.shareBook,
                                     ),
                                   ),
                                 ),
@@ -484,7 +488,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                                     icon: const Icon(
                                       Icons.local_library_outlined,
                                     ),
-                                    label: const Text('Library'),
+                                    label: Text(context.l10n.library),
                                   ),
                                 ),
                               ],
@@ -499,8 +503,8 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                               icon: const Icon(Icons.auto_stories_outlined),
                               label: Text(
                                 lobby.isHostStart
-                                    ? 'Start Reading'
-                                    : 'Join Reading',
+                                    ? context.l10n.startReading
+                                    : context.l10n.joinReading,
                               ),
                             ),
                             // A disabled button with no reason reads as broken.
@@ -535,8 +539,8 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
                             if (presenceState.connectionStatus ==
                                 RealtimeConnectionStatus.reconnecting) ...[
                               const SizedBox(height: 8),
-                              const PaperNotice(
-                                message: 'Reconnecting to the room...',
+                              PaperNotice(
+                                message: context.l10n.reconnectingToRoom,
                                 icon: Icons.sync,
                               ),
                             ] else if (presenceState.error != null) ...[
@@ -581,7 +585,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     final currentRoom = ref.read(roomProvider).currentRoom;
     final currentUserId = ref.read(authProvider).userId;
     if (currentRoom == null || currentRoom.hostUserId != currentUserId) {
-      _showError('Only the room host can start reading.');
+      _showError(context.l10n.onlyHostCanStart);
       return;
     }
     try {
@@ -592,7 +596,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       // Broadcast is configured with self=true; the listener navigates the
       // host too, so there is one path into the reader.
     } catch (error) {
-      if (mounted) _showError('Unable to start reading: $error');
+      if (mounted) _showError(context.l10n.unableToStartReading('$error'));
     }
   }
 
@@ -607,8 +611,8 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
         !ref.read(bookProvider.notifier).hasBook(bookHash)) {
       _showError(
         fromHost
-            ? 'Reading has started. You can join as soon as the book arrives.'
-            : 'The book is not on this device yet.',
+            ? context.l10n.readingStartedWaitForBook
+            : context.l10n.bookNotOnDevice,
       );
       return;
     }
@@ -618,7 +622,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
 
   Widget _buildRouteError(String message) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Room unavailable')),
+      appBar: AppBar(title: Text(context.l10n.roomUnavailable)),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -635,7 +639,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
               const SizedBox(height: 24),
               ElevatedButton(
                 onPressed: () => context.goNamed('home'),
-                child: const Text('Return Home'),
+                child: Text(context.l10n.returnHome),
               ),
             ],
           ),
@@ -659,12 +663,12 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
     try {
       await ref.read(roomProvider.notifier).leaveRoom();
     } catch (error) {
-      errors.add('room membership: $error');
+      errors.add(appStrings.cleanupRoomMembership('$error'));
     }
     try {
       await ref.read(presenceProvider.notifier).leaveRoom();
     } catch (error) {
-      errors.add('realtime presence: $error');
+      errors.add(appStrings.cleanupRealtimePresence('$error'));
     }
     await ref.read(bookProvider.notifier).reset();
 
@@ -672,7 +676,7 @@ class _RoomLobbyScreenState extends ConsumerState<RoomLobbyScreen> {
       final message = [
         if (reason != null) reason,
         if (errors.isNotEmpty)
-          'Room cleanup needs attention: ${errors.join('; ')}',
+          context.l10n.roomCleanupNeedsAttention(errors.join('; ')),
       ].join('\n');
       if (message.isNotEmpty) _showError(message);
       context.goNamed('home');
@@ -732,7 +736,7 @@ class _BookCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  isReady ? 'Ready to read' : 'Receiving book...',
+                  isReady ? context.l10n.readyToRead : context.l10n.receivingBook,
                   style: AppTheme.caption,
                 ),
               ],
@@ -828,15 +832,21 @@ class LobbyReadiness {
     }
     behind.sort();
     ahead.sort();
+    final strings = appStrings;
     final lines = [
       // The one this reader can act on comes first.
       if (ahead.isNotEmpty)
-        'Your app is out of date: ${ahead.join(', ')} '
-            '${ahead.length == 1 ? 'is' : 'are'} on a newer version. Update '
-            '${AppConstants.appNameEnglish} to read together.',
+        strings.appOutOfDate(
+          ahead.join(strings.listSeparator),
+          ahead.length,
+          strings.appName,
+        ),
       if (behind.isNotEmpty)
-        '${behind.join(', ')} ${behind.length == 1 ? 'needs' : 'need'} to '
-            'update ${AppConstants.appNameEnglish} to read together.',
+        strings.othersNeedUpdate(
+          behind.join(strings.listSeparator),
+          behind.length,
+          strings.appName,
+        ),
     ];
     return lines.isEmpty ? null : lines.join('\n');
   }
@@ -863,29 +873,29 @@ class LobbyReadiness {
         canOpenReader: false,
         isHostStart: isHostStart,
         hint: isHost
-            ? 'Share a book to start reading.'
-            : 'Waiting for someone to share a book.',
+            ? appStrings.shareBookToStart
+            : appStrings.waitingForBookShare,
       );
     }
     if (!hasLocalBook) {
       return LobbyReadiness(
         canOpenReader: false,
         isHostStart: isHostStart,
-        hint: 'The book is on its way to this device.',
+        hint: appStrings.bookOnItsWay,
       );
     }
     if (!isConnected) {
       return LobbyReadiness(
         canOpenReader: false,
         isHostStart: isHostStart,
-        hint: 'Connecting to the room...',
+        hint: appStrings.connectingToRoom,
       );
     }
     if (!isHost && !someoneReading) {
-      return const LobbyReadiness(
+      return LobbyReadiness(
         canOpenReader: false,
         isHostStart: false,
-        hint: 'The host starts the reading session.',
+        hint: appStrings.hostStartsSession,
       );
     }
 
@@ -909,9 +919,10 @@ class LobbyReadiness {
       isHostStart: isHostStart,
       hint: stillReceiving.isEmpty
           ? null
-          : '${stillReceiving.join(', ')} '
-                '${stillReceiving.length == 1 ? 'is' : 'are'} still receiving '
-                'the book and can join when it arrives.',
+          : appStrings.stillReceivingBook(
+              stillReceiving.join(appStrings.listSeparator),
+              stillReceiving.length,
+            ),
     );
   }
 }

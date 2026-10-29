@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../config/theme.dart';
+import '../l10n/l10n.dart';
 
 /// Shows a message without the slide-in, which on e-ink is a dozen partial
 /// refreshes and a ghost of the bar left behind on the way out.
@@ -81,7 +82,7 @@ class PaperDialog extends StatelessWidget {
             Align(
               alignment: Alignment.centerRight,
               child: IconButton(
-                tooltip: 'Close',
+                tooltip: context.l10n.close,
                 iconSize: 30,
                 style: IconButton.styleFrom(
                   minimumSize: const Size.square(closeButtonSize),
@@ -176,7 +177,7 @@ class PaperNotice extends StatelessWidget {
             IconButton(
               onPressed: onDismiss,
               icon: const Icon(Icons.close, size: 20),
-              tooltip: 'Dismiss',
+              tooltip: context.l10n.dismiss,
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints.tightFor(width: 32, height: 24),

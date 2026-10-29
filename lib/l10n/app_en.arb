@@ -1,0 +1,886 @@
+{
+  "@@locale": "en",
+  "appName": "CoTime Book",
+  "@appName": {
+    "description": "The app name in the window and task switcher."
+  },
+  "mastheadTagline": "Read together, anywhere",
+  "pressBackAgainToExit": "Press back again to exit",
+  "activeRoom": "Active room",
+  "continueAction": "Continue",
+  "leaving": "Leaving...",
+  "leaveRoom": "Leave Room",
+  "nickname": "Nickname",
+  "nicknameHint": "What should others call you?",
+  "back": "Back",
+  "joining": "Joining...",
+  "joinRoom": "Join Room",
+  "creating": "Creating...",
+  "createRoom": "Create Room",
+  "supabaseNotConfigured": "Supabase not configured.\nRun with --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...",
+  "connected": "Connected",
+  "connecting": "Connecting...",
+  "tapToConnect": "Tap to connect",
+  "enterNickname": "Please enter a nickname",
+  "leaveBeforeCreating": "Leave the active room before creating another one.",
+  "enterValidRoomCode": "Please enter a valid 6-character room code",
+  "leaveBeforeJoining": "Leave the active room before joining another one.",
+  "cleanupRoomMembership": "room membership: {error}",
+  "@cleanupRoomMembership": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "cleanupRealtimePresence": "realtime presence: {error}",
+  "@cleanupRealtimePresence": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "roomCleanupNeedsAttention": "Room cleanup needs attention: {errors}",
+  "@roomCleanupNeedsAttention": {
+    "placeholders": {
+      "errors": {
+        "type": "String"
+      }
+    }
+  },
+  "txtToEpub": "TXT to EPUB",
+  "moreApps": "More Apps",
+  "news": "News",
+  "txtConvertIntro": "Make an EPUB from TXT files and read it here to check the text and chapters. Save it once it looks right, then share the saved EPUB in a room.",
+  "pickTxtFiles": "Pick TXT Files",
+  "converted": "Converted",
+  "read": "Read",
+  "saving": "Saving...",
+  "saveAgain": "Save Again",
+  "saveEpub": "Save EPUB",
+  "savedShareInRoom": "Saved. In a room, tap Share Book and pick this file.",
+  "convertOtherFiles": "Convert Other Files",
+  "opening": "Opening...",
+  "reading": "Reading...",
+  "converting": "Converting...",
+  "pickOnlyTxt": "Pick only TXT files. An EPUB needs no converting: share it in a room as it is.",
+  "txtSourcesTooLarge": "{count, plural, =1{This file is} other{These files are}} {size}. A book can be made of at most {limit} of text.",
+  "@txtSourcesTooLarge": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "size": {
+        "type": "String"
+      },
+      "limit": {
+        "type": "String"
+      }
+    }
+  },
+  "convertedBookTooLarge": "The book came out at {size}. Books can be at most {limit}.",
+  "@convertedBookTooLarge": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      },
+      "limit": {
+        "type": "String"
+      }
+    }
+  },
+  "couldNotSaveEpub": "Could not save the EPUB: {error}",
+  "@couldNotSaveEpub": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "roomNotOnDevice": "This room is not available on this device.",
+  "roomLinkMismatch": "Room link {link} does not match your active room {code}.",
+  "@roomLinkMismatch": {
+    "placeholders": {
+      "link": {
+        "type": "String"
+      },
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "unknownBook": "Unknown",
+  "roomClosed": "This room has been closed.",
+  "roomInitCancelled": "Room initialization was cancelled.",
+  "authTimedOut": "Authentication timed out. Please return home and retry.",
+  "openingRoom": "Opening the room...",
+  "roomNoLongerAvailable": "This room is no longer available.",
+  "roomLobby": "Room Lobby",
+  "leaveRoomTooltip": "Leave room",
+  "roomCodeOverline": "ROOM CODE",
+  "members": "Members",
+  "onlineCount": "{count} online",
+  "@onlineCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "loading": "Loading...",
+  "shareBook": "Share Book",
+  "library": "Library",
+  "startReading": "Start Reading",
+  "joinReading": "Join Reading",
+  "reconnectingToRoom": "Reconnecting to the room...",
+  "onlyHostCanStart": "Only the room host can start reading.",
+  "unableToStartReading": "Unable to start reading: {error}",
+  "@unableToStartReading": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "readingStartedWaitForBook": "Reading has started. You can join as soon as the book arrives.",
+  "bookNotOnDevice": "The book is not on this device yet.",
+  "roomUnavailable": "Room unavailable",
+  "returnHome": "Return Home",
+  "readyToRead": "Ready to read",
+  "receivingBook": "Receiving book...",
+  "appOutOfDate": "Your app is out of date: {names} {count, plural, =1{is} other{are}} on a newer version. Update {appName} to read together.",
+  "@appOutOfDate": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      },
+      "appName": {
+        "type": "String"
+      }
+    }
+  },
+  "othersNeedUpdate": "{names} {count, plural, =1{needs} other{need}} to update {appName} to read together.",
+  "@othersNeedUpdate": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      },
+      "appName": {
+        "type": "String"
+      }
+    }
+  },
+  "shareBookToStart": "Share a book to start reading.",
+  "waitingForBookShare": "Waiting for someone to share a book.",
+  "bookOnItsWay": "The book is on its way to this device.",
+  "connectingToRoom": "Connecting to the room...",
+  "hostStartsSession": "The host starts the reading session.",
+  "stillReceivingBook": "{names} {count, plural, =1{is} other{are}} still receiving the book and can join when it arrives.",
+  "@stillReceivingBook": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "listSeparator": ", ",
+  "@listSeparator": {
+    "description": "Joins names in a list."
+  },
+  "themePaper": "Paper",
+  "themeNight": "Night",
+  "themeSepia": "Sepia",
+  "couldNotChangeTextSize": "Couldn't change the room's text size. Try again in a moment.",
+  "reader": "Reader",
+  "openingBook": "Opening the book...",
+  "noBookLoaded": "No book loaded",
+  "backToLobby": "Back to Lobby",
+  "leaveReading": "Leave reading",
+  "readingSettingsTooltip": "Reading settings",
+  "readingSettings": "Reading Settings",
+  "settingsPage": "Page",
+  "settingsTextSize": "Text size",
+  "textSizeTakesSeconds": "A new text size takes a few seconds to show: the book is laid out again on every reader's screen. Wait for the page to change before tapping again or turning.",
+  "onlyISetTextSize": "Only I set the text size",
+  "onlyISetTextSizeHint": "Turn off to let everyone pick a size. The room then reads at the largest size anyone picked.",
+  "settingsTurningPages": "Turning pages",
+  "volumeKeysTurnPages": "Volume keys turn pages",
+  "volumeKeysTurnPagesHint": "For e-readers whose page buttons act as volume keys.",
+  "tapZonesHint": "Tap the left third of the page to go back, anywhere else to go forward. Page Up/Down and arrow keys work too.",
+  "settingsTroubleshooting": "Troubleshooting",
+  "pageLayoutReport": "Page Layout Report",
+  "themeOptionLabel": "{theme} theme",
+  "@themeOptionLabel": {
+    "placeholders": {
+      "theme": {
+        "type": "String"
+      }
+    }
+  },
+  "youSetTextSize": "You set the text size for everyone in this room.",
+  "hostSetsTextSize": "The host sets the text size in this room.",
+  "everyoneSeesSamePage": "Everyone sees the same page: it fits the smallest screen in the room, at the largest text size anyone picked.",
+  "anotherReaderPickedSize": "Another reader picked {size}, so the room reads at {size}. {shared}",
+  "@anotherReaderPickedSize": {
+    "placeholders": {
+      "size": {
+        "type": "int"
+      },
+      "shared": {
+        "type": "String"
+      }
+    }
+  },
+  "roomMembers": "Room members",
+  "waitingForReconnect": "Waiting for {names} to reconnect...",
+  "@waitingForReconnect": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "adBreakEllipsis": "Ad break...",
+  "adBreakWaitingFor": "Ad break: waiting for {names}...",
+  "@adBreakWaitingFor": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "readersReady": "{count} readers ready",
+  "@readersReady": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "synced": "Synced",
+  "waitingForNames": "Waiting for {names}...",
+  "@waitingForNames": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "wait": "Wait",
+  "go": "Go",
+  "turn": "Turn",
+  "waitingForOthersToConfirm": "Waiting for others to confirm... {confirmed}/{required}",
+  "@waitingForOthersToConfirm": {
+    "placeholders": {
+      "confirmed": {
+        "type": "int"
+      },
+      "required": {
+        "type": "int"
+      }
+    }
+  },
+  "jumpingToPage": "Jumping to the page...",
+  "turningPage": "Turning page...",
+  "unknownMember": "Unknown",
+  "wantsNextPage": "{who} wants to go to next page",
+  "@wantsNextPage": {
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "wantsPreviousPage": "{who} wants to go to previous page",
+  "@wantsPreviousPage": {
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "wantsJumpElsewhere": "{who} wants to jump to another page",
+  "@wantsJumpElsewhere": {
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "wantsJumpToPage": "{who} wants to jump to page {page}",
+  "@wantsJumpToPage": {
+    "placeholders": {
+      "who": {
+        "type": "String"
+      },
+      "page": {
+        "type": "String"
+      }
+    }
+  },
+  "wantsJumpToPageWithProgress": "{who} wants to jump to page {page} ({progress})",
+  "@wantsJumpToPageWithProgress": {
+    "placeholders": {
+      "who": {
+        "type": "String"
+      },
+      "page": {
+        "type": "String"
+      },
+      "progress": {
+        "type": "String"
+      }
+    }
+  },
+  "askToLeaveTooltip": "Ask {nickname} to leave",
+  "@askToLeaveTooltip": {
+    "placeholders": {
+      "nickname": {
+        "type": "String"
+      }
+    }
+  },
+  "askToLeaveTitle": "Ask {nickname} to leave?",
+  "@askToLeaveTitle": {
+    "placeholders": {
+      "nickname": {
+        "type": "String"
+      }
+    }
+  },
+  "askToLeaveMessage": "{nickname} will be taken out of the room, and nobody waits for them to turn the page. They can join again with the room code.\n\nIf others are here too, more than half of you have to agree.",
+  "@askToLeaveMessage": {
+    "placeholders": {
+      "nickname": {
+        "type": "String"
+      }
+    }
+  },
+  "askToLeave": "Ask to leave",
+  "removeMemberTitle": "Remove {nickname}?",
+  "@removeMemberTitle": {
+    "placeholders": {
+      "nickname": {
+        "type": "String"
+      }
+    }
+  },
+  "voteIsOver": "This vote is over.",
+  "close": "Close",
+  "removalVoteMessage": "{voter} asked {target} to leave the room, so nobody waits for them to turn the page. {target} can join again with the room code.",
+  "@removalVoteMessage": {
+    "placeholders": {
+      "voter": {
+        "type": "String"
+      },
+      "target": {
+        "type": "String"
+      }
+    }
+  },
+  "moreVotesNeeded": "{count, plural, =1{1 more vote needed.} other{{count} more votes needed.}}",
+  "@moreVotesNeeded": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "agree": "Agree",
+  "notNow": "Not now",
+  "couldNotAskToLeave": "Could not ask {nickname} to leave. Try again.",
+  "@couldNotAskToLeave": {
+    "placeholders": {
+      "nickname": {
+        "type": "String"
+      }
+    }
+  },
+  "memberRemoved": "{nickname} was removed from the room.",
+  "@memberRemoved": {
+    "placeholders": {
+      "nickname": {
+        "type": "String"
+      }
+    }
+  },
+  "memberGone": "{nickname} is no longer in the room.",
+  "@memberGone": {
+    "placeholders": {
+      "nickname": {
+        "type": "String"
+      }
+    }
+  },
+  "voteIn": "{count, plural, =1{Your vote is in. 1 more vote needed to remove {nickname}.} other{Your vote is in. {count} more votes needed to remove {nickname}.}}",
+  "@voteIn": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "nickname": {
+        "type": "String"
+      }
+    }
+  },
+  "cancel": "Cancel",
+  "noMembersYet": "No members yet",
+  "needsAppUpdate": "Needs app update",
+  "newerAppUpdateYours": "Newer app — update yours",
+  "youSuffix": "  (You)",
+  "online": "Online",
+  "awayNotConnected": "Away — not connected",
+  "hasBook": "Has book",
+  "noBook": "No book",
+  "membersOnline": "{count} Members Online",
+  "@membersOnline": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "statusReading": "Reading",
+  "statusLeftReader": "Left the reader",
+  "statusNotConnected": "Not connected",
+  "adBreakPageOpensWhenBack": "The page opens when every reader is back.",
+  "adBreakWaitingForAd": "Waiting for {names} to finish an ad...",
+  "@adBreakWaitingForAd": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "adBreak": "Ad break",
+  "ads": "Ads",
+  "adPrivacyChoices": "Ad Privacy Choices",
+  "adPrivacyChoicesHint": "Change what you agreed to for the ads in this app.",
+  "announcementsLoadFailed": "The announcements could not be loaded.",
+  "tryAgain": "Try Again",
+  "noAnnouncements": "No announcements yet.",
+  "contents": "Contents",
+  "contentsEntries": "{count, plural, =1{1 entry} other{{count} entries}}",
+  "@contentsEntries": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "noContents": "This book has no contents.",
+  "untitled": "(untitled)",
+  "stillWorkingOutLength": "Still working out the length of the book. Try again in a moment.",
+  "jumpPageLabel": "Page",
+  "jumpHere": "Here",
+  "previousPage": "Previous page",
+  "nextPage": "Next page",
+  "positionInBook": "Position in the book",
+  "reportRateLimited": "Too many reports in the last hour. Copy this one instead.",
+  "reportSendFailed": "Couldn't send the report. Try again, or copy it instead.",
+  "pageLayoutReportTitle": "Page layout report",
+  "pageLayoutReportIntro": "If pages are cut off or a turn skips ahead, send this right after it happens. It holds how this screen laid out the page and where you are in the book, never the book's text.",
+  "reportNoteHint": "What went wrong? (optional)",
+  "reportSent": "Sent. Report ID: {id}",
+  "@reportSent": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "sending": "Sending...",
+  "sendReport": "Send Report",
+  "reportCopied": "Report copied",
+  "copyReport": "Copy Report",
+  "languageChineseTraditional": "Chinese (Traditional)",
+  "languageChineseSimplified": "Chinese (Simplified)",
+  "languageChinese": "Chinese",
+  "languageEnglish": "English",
+  "languageJapanese": "Japanese",
+  "languageKorean": "Korean",
+  "languageFrench": "French",
+  "languageGerman": "German",
+  "languageSpanish": "Spanish",
+  "languageItalian": "Italian",
+  "languagePortuguese": "Portuguese",
+  "languageRussian": "Russian",
+  "languageLatin": "Latin",
+  "languageGreek": "Greek",
+  "languageDutch": "Dutch",
+  "languageVietnamese": "Vietnamese",
+  "languageThai": "Thai",
+  "libraryOpenFailed": "The library could not be opened.",
+  "libraryNoteLoadFailed": "The note could not be loaded.",
+  "publicLibrary": "Public Library",
+  "aboutTheseBooks": "About these books",
+  "searchByTitleOrAuthor": "Search by title or author",
+  "clearSearch": "Clear search",
+  "books": "Books",
+  "bookCount": "{count, plural, =1{1 book} other{{count} books}}",
+  "@bookCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "shownOfBooks": "{shown} of {total}",
+  "@shownOfBooks": {
+    "placeholders": {
+      "shown": {
+        "type": "int"
+      },
+      "total": {
+        "type": "String"
+      }
+    }
+  },
+  "loadingLibrary": "Loading the library...",
+  "libraryEmpty": "The library is empty for now.",
+  "noBooksMatch": "No books match.",
+  "clearSearchAndFilters": "Clear Search and Filters",
+  "filters": "Filters",
+  "tags": "Tags",
+  "booksWithAnyTag": "Books with any of them",
+  "language": "Language",
+  "all": "All",
+  "noNoteYet": "No note has been written yet.",
+  "aboutTheseBooksOverline": "ABOUT THESE BOOKS",
+  "getItOnGooglePlay": "Get it on Google Play",
+  "googlePlayCouldNotOpen": "Google Play could not be opened on this device. The link:",
+  "goToPage": "Go to page",
+  "pageCounterLabel": "Page {page} of {pages} in this chapter",
+  "@pageCounterLabel": {
+    "placeholders": {
+      "page": {
+        "type": "int"
+      },
+      "pages": {
+        "type": "int"
+      }
+    }
+  },
+  "pageCounterProgress": ", {progress} of the book",
+  "@pageCounterProgress": {
+    "placeholders": {
+      "progress": {
+        "type": "String"
+      }
+    }
+  },
+  "pageCounterGoTo": ". Go to page",
+  "dismiss": "Dismiss",
+  "recentRooms": "Recent rooms",
+  "noBookYet": "No book yet",
+  "recentRoomSubtitle": "{book} · {visit}",
+  "@recentRoomSubtitle": {
+    "placeholders": {
+      "book": {
+        "type": "String"
+      },
+      "visit": {
+        "type": "String"
+      }
+    }
+  },
+  "removeFromRecentRooms": "Remove {code} from recent rooms",
+  "@removeFromRecentRooms": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "today": "Today",
+  "yesterday": "Yesterday",
+  "daysAgo": "{days} days ago",
+  "@daysAgo": {
+    "placeholders": {
+      "days": {
+        "type": "int"
+      }
+    }
+  },
+  "roomCodeSemantics": "Room code {code}. Tap to copy.",
+  "@roomCodeSemantics": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "roomCodeCopied": "Room code copied",
+  "tapToCopy": "Tap to copy",
+  "roomCode": "Room code",
+  "waitingForTheBook": "Waiting for the book",
+  "sendingBook": "Sending book...",
+  "bookSent": "Book sent",
+  "bookReceived": "Book received",
+  "missedPartsWillAsk": "Anyone who missed part of it will ask for the rest.",
+  "readyToReadSentence": "Ready to read.",
+  "makeBookFromTxt": "Make a book from TXT",
+  "txtFilesBecomeOneEpub": "These {count} files become one EPUB, in this order. You can read it before saving it.",
+  "@txtFilesBecomeOneEpub": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "txtFileBecomesEpub": "This file becomes an EPUB. You can read it before saving it.",
+  "title": "Title",
+  "authorOptional": "Author (optional)",
+  "files": "Files",
+  "file": "File",
+  "splitByLength": "Split by length",
+  "noChaptersFound": "No chapters found",
+  "chapterCount": "{count, plural, =1{1 chapter} other{{count} chapters}}",
+  "@chapterCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "splitIntoChapters": "Split into chapters",
+  "splitIntoChaptersHint": "Turn off if lines that are not chapter titles were taken for them. The book is then split by length.",
+  "makeEpub": "Make EPUB",
+  "noTextInEncoding": "No text in this encoding; it will be skipped",
+  "characterCount": "{count} characters",
+  "@characterCount": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "splitByLengthWithCharacters": "Split by length · {characters}",
+  "@splitByLengthWithCharacters": {
+    "placeholders": {
+      "characters": {
+        "type": "String"
+      }
+    }
+  },
+  "noChapterHeadingsWithCharacters": "No chapter headings, split by length · {characters}",
+  "@noChapterHeadingsWithCharacters": {
+    "placeholders": {
+      "characters": {
+        "type": "String"
+      }
+    }
+  },
+  "chaptersWithCharacters": "{chapters} · {characters}",
+  "@chaptersWithCharacters": {
+    "placeholders": {
+      "chapters": {
+        "type": "String"
+      },
+      "characters": {
+        "type": "String"
+      }
+    }
+  },
+  "textEncoding": "Text encoding",
+  "encodingLabel": "Encoding: {encoding}",
+  "@encodingLabel": {
+    "placeholders": {
+      "encoding": {
+        "type": "String"
+      }
+    }
+  },
+  "moveUp": "Move up",
+  "moveDown": "Move down",
+  "previous": "Previous",
+  "next": "Next",
+  "onlyYouSeeThis": "Only you see this · {percent}%",
+  "@onlyYouSeeThis": {
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
+  },
+  "pageNotFound": "Page not found: {uri}",
+  "@pageNotFound": {
+    "placeholders": {
+      "uri": {
+        "type": "String"
+      }
+    }
+  },
+  "invalidRoomLink": "Invalid room link",
+  "joinFromHomeFirst": "Join this room from Home before opening this page.",
+  "notEpub": "Only EPUB books can be shared. Make a TXT file into one with \"TXT to EPUB\" on the home screen first.",
+  "libraryDownloadFailed": "Could not get \"{title}\" from the library: {error}",
+  "@libraryDownloadFailed": {
+    "placeholders": {
+      "title": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "bookFileEmpty": "The book file is empty",
+  "bookTooLarge": "This book is {size}. Books can be at most {limit}.",
+  "@bookTooLarge": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      },
+      "limit": {
+        "type": "String"
+      }
+    }
+  },
+  "membershipInactive": "This room membership is inactive or has expired.",
+  "roomStateChanged": "Room state changed before the update could finish",
+  "roomNoLongerAvailableCode": "Room {code} is no longer available.",
+  "@roomNoLongerAvailableCode": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "roomUpdatedByAnotherClient": "Room state was updated by another client",
+  "notAuthenticated": "Not authenticated",
+  "removedFromRoom": "You are no longer in this room. It may have closed, or you left it on another device.",
+  "removedByVote": "The other readers removed you from this room. You can join again with the room code.",
+  "bookStillLoading": "The book is still loading",
+  "reconnectingTryAgain": "Reconnecting to the room — try again in a moment",
+  "stillConnecting": "Still connecting to the room",
+  "waitingForReconnectShort": "Waiting for {names} to reconnect",
+  "@waitingForReconnectShort": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "waitingForAdBreak": "Waiting for the ad break to finish",
+  "waitingForAdShort": "Waiting for {names} to finish an ad",
+  "@waitingForAdShort": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "couldNotReachReaders": "Could not reach the other readers",
+  "couldNotSendAnswer": "Could not send your answer. Try again.",
+  "turnRequestExpired": "The page turn request expired",
+  "turnTimedOutWaitingFor": "Page turn timed out waiting for {names}",
+  "@turnTimedOutWaitingFor": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "othersNeedAppUpdate": "{names} {count, plural, =1{needs} other{need}} to update the app to read together",
+  "@othersNeedAppUpdate": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "updateAppToReadWith": "Update the app to read with {names}",
+  "@updateAppToReadWith": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "sentenceSeparator": ". ",
+  "@sentenceSeparator": {
+    "description": "Joins sentences of one message."
+  },
+  "cancelTimeout": "Page turn timed out waiting for the other readers",
+  "cancelOutOfSync": "Readers were on different pages. Synced — try again",
+  "cancelRequesterLeft": "Page turn cancelled: the requester left",
+  "cancelSuperseded": "Another page turn went first",
+  "cancelTurnFailed": "The page did not move — this may be the start or end of the book",
+  "cancelJumpFailed": "Could not go to that page — try again",
+  "cancelRequesterBusy": "Page turn cancelled: the page was still loading",
+  "cancelReaderDisconnected": "Page turn paused: a reader is reconnecting",
+  "cancelAdBreak": "Page turn paused: the ad break is not over yet",
+  "readerAskedToWait": "A reader asked to wait on this page",
+  "nicknameAskedToWait": "{nickname} asked to wait on this page",
+  "@nicknameAskedToWait": {
+    "placeholders": {
+      "nickname": {
+        "type": "String"
+      }
+    }
+  },
+  "turnCancelled": "Page turn cancelled",
+  "othersNeedUpdateToJump": "{names} {count, plural, =1{needs} other{need}} to update the app to jump to a page",
+  "@othersNeedUpdateToJump": {
+    "placeholders": {
+      "names": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "waitingForTheBookEllipsis": "Waiting for the book...",
+  "bookArrivedDamaged": "The book arrived damaged. Asking again...",
+  "downloadingFromLibrary": "Downloading the book from the library...",
+  "gettingBookFrom": "Getting the book from {nickname}...",
+  "@gettingBookFrom": {
+    "placeholders": {
+      "nickname": {
+        "type": "String"
+      }
+    }
+  },
+  "waitingForHolder": "Waiting for someone with the book to come online...",
+  "askingForBook": "Asking {nickname} for the book...",
+  "@askingForBook": {
+    "placeholders": {
+      "nickname": {
+        "type": "String"
+      }
+    }
+  },
+  "anotherReader": "another reader",
+  "aReader": "A reader",
+  "switchLanguage": "中文",
+  "@switchLanguage": {
+    "description": "The language toggle on Home: names the other language, in that language."
+  },
+  "switchLanguageTooltip": "Switch to Chinese",
+  "txtNeedsTitle": "The book needs a title.",
+  "txtPickAtLeastOne": "Pick at least one TXT file.",
+  "txtNoText": "These files have no text in them.",
+  "cannotReadFile": "Cannot read {fileName}",
+  "@cannotReadFile": {
+    "placeholders": {
+      "fileName": {
+        "type": "String"
+      }
+    }
+  }
+}

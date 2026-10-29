@@ -17,6 +17,8 @@ on:
       - 'pubspec.yaml'
       - 'pubspec.lock'
       - 'analysis_options.yaml'
+      # gen_l10n 的設定：改了它，lib/l10n 生成出來的程式碼就不同。
+      - 'l10n.yaml'
       - '.github/**'
 
   # ⚠️ 上面的 branches 過濾配上預設的 `opened / synchronize / reopened`，會漏掉

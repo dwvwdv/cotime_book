@@ -11,6 +11,7 @@ import '../config/app_constants.dart';
 import '../services/txt_book.dart';
 import 'ads_provider.dart';
 import 'book_provider.dart' show formatMegabytes, readPickedFile;
+import '../l10n/l10n.dart';
 
 /// Shows the reader the TXT files about to become a book; null backs out.
 typedef TxtImportConfirm =
@@ -32,7 +33,7 @@ Future<void> _nothingBeforeSave() async {}
 
 Future<String?> exportWithSaveDialog(String fileName, Uint8List bytes) async {
   final path = await FilePicker.platform.saveFile(
-    dialogTitle: 'Save EPUB',
+    dialogTitle: appStrings.saveEpub,
     fileName: fileName,
     type: FileType.custom,
     allowedExtensions: ['epub'],
@@ -58,6 +59,13 @@ String epubFileNameFor(String title) {
   return '${safe.isEmpty ? 'book' : safe}.epub';
 }
 
+/// Why a book could not be made, in the reader's language.
+String describeTxtBookProblem(TxtBookProblem problem) => switch (problem) {
+  TxtBookProblem.noTitle => appStrings.txtNeedsTitle,
+  TxtBookProblem.noFiles => appStrings.txtPickAtLeastOne,
+  TxtBookProblem.noText => appStrings.txtNoText,
+};
+
 /// The EPUB a TXT conversion made, on this device only.
 class ConvertedBook {
   final File file;
@@ -78,6 +86,10 @@ class ConvertedBook {
 class TxtConvertState {
   /// What is being done, for the button that is busy: null when idle.
   final String? busy;
+
+  /// The busy step is saving [book]. A flag rather than a look at [busy]:
+  /// that is display text, in the reader's language.
+  final bool isSaving;
   final ConvertedBook? book;
 
   /// [book] has been saved where the reader chose.
@@ -86,6 +98,7 @@ class TxtConvertState {
 
   const TxtConvertState({
     this.busy,
+    this.isSaving = false,
     this.book,
     this.isSaved = false,
     this.error,
@@ -128,7 +141,7 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
   Future<void> pickAndConvert({required TxtImportConfirm confirm}) async {
     if (state.isBusy) return;
     final generation = ++_generation;
-    _setBusy('Opening...');
+    _setBusy(appStrings.opening);
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -143,10 +156,7 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
       }
       // Some file managers ignore the filter.
       if (!result.files.every((f) => f.name.toLowerCase().endsWith('.txt'))) {
-        throw const FormatException(
-          'Pick only TXT files. An EPUB needs no converting: share it in a '
-          'room as it is.',
-        );
+        throw FormatException(appStrings.pickOnlyTxt);
       }
       final sources = [
         for (final file in result.files)
@@ -154,6 +164,8 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
       ];
       if (!_isCurrent(generation)) return;
       await _convert(sources, confirm, generation);
+    } on TxtBookException catch (e) {
+      _fail(generation, describeTxtBookProblem(e.problem));
     } on FormatException catch (e) {
       _fail(generation, e.message);
     } catch (e) {
@@ -173,6 +185,8 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
     final generation = ++_generation;
     try {
       await _convert(sources, confirm, generation);
+    } on TxtBookException catch (e) {
+      _fail(generation, describeTxtBookProblem(e.problem));
     } on FormatException catch (e) {
       _fail(generation, e.message);
     } catch (e) {
@@ -185,13 +199,15 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
     TxtImportConfirm confirm,
     int generation,
   ) async {
-    _setBusy('Reading...');
+    _setBusy(appStrings.reading);
     final total = sources.fold<int>(0, (n, s) => n + s.bytes.length);
     if (total > AppConstants.maxFileSize) {
       throw FormatException(
-        '${sources.length == 1 ? 'This file is' : 'These files are'} '
-        '${formatMegabytes(total)}. A book can be made of at most '
-        '${formatMegabytes(AppConstants.maxFileSize)} of text.',
+        appStrings.txtSourcesTooLarge(
+          sources.length,
+          formatMegabytes(total),
+          formatMegabytes(AppConstants.maxFileSize),
+        ),
       );
     }
     final ordered = [...sources]
@@ -217,13 +233,15 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
       return;
     }
 
-    _setBusy('Converting...');
+    _setBusy(appStrings.converting);
     final bytes = await buildTxtEpubInBackground(request);
     if (!_isCurrent(generation)) return;
     if (bytes.length > AppConstants.maxFileSize) {
       throw FormatException(
-        'The book came out at ${formatMegabytes(bytes.length)}. Books can be '
-        'at most ${formatMegabytes(AppConstants.maxFileSize)}.',
+        appStrings.convertedBookTooLarge(
+          formatMegabytes(bytes.length),
+          formatMegabytes(AppConstants.maxFileSize),
+        ),
       );
     }
 
@@ -257,7 +275,7 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
     final book = state.book;
     if (book == null || state.isBusy) return;
     final generation = ++_generation;
-    _setBusy('Saving...');
+    _setBusy(appStrings.saving, saving: true);
     try {
       await _beforeSave();
     } catch (_) {
@@ -272,7 +290,7 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
         isSaved: state.isSaved || path != null,
       );
     } catch (e) {
-      _fail(generation, 'Could not save the EPUB: $e');
+      _fail(generation, appStrings.couldNotSaveEpub('$e'));
     }
   }
 
@@ -298,9 +316,10 @@ class TxtConvertNotifier extends StateNotifier<TxtConvertState> {
 
   bool _isCurrent(int generation) => mounted && generation == _generation;
 
-  void _setBusy(String what) {
+  void _setBusy(String what, {bool saving = false}) {
     state = TxtConvertState(
       busy: what,
+      isSaving: saving,
       book: state.book,
       isSaved: state.isSaved,
     );

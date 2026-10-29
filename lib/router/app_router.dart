@@ -7,6 +7,7 @@ import '../screens/room_lobby_screen.dart';
 import '../screens/reader_screen.dart';
 import '../screens/room_removed.dart';
 import '../screens/txt_convert_screen.dart';
+import '../l10n/l10n.dart';
 
 class AppRouter {
   static final router = GoRouter(
@@ -50,8 +51,9 @@ class AppRouter {
         },
       ),
     ],
-    errorBuilder: (context, state) =>
-        Scaffold(body: Center(child: Text('Page not found: ${state.uri}'))),
+    errorBuilder: (context, state) => Scaffold(
+      body: Center(child: Text(context.l10n.pageNotFound('${state.uri}'))),
+    ),
   );
 
   static bool _isRoomCode(String value) {
@@ -60,11 +62,11 @@ class AppRouter {
 
   static Widget _invalidRoomCodeScreen(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Invalid room link')),
+      appBar: AppBar(title: Text(context.l10n.invalidRoomLink)),
       body: Center(
         child: ElevatedButton(
           onPressed: () => context.goNamed('home'),
-          child: const Text('Return Home'),
+          child: Text(context.l10n.returnHome),
         ),
       ),
     );
@@ -93,21 +95,18 @@ class _ActiveRoomGuard extends ConsumerWidget {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Room unavailable')),
+      appBar: AppBar(title: Text(context.l10n.roomUnavailable)),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                'Join this room from Home before opening this page.',
-                textAlign: TextAlign.center,
-              ),
+              Text(context.l10n.joinFromHomeFirst, textAlign: TextAlign.center),
               const SizedBox(height: 20),
               ElevatedButton(
                 onPressed: () => context.goNamed('home'),
-                child: const Text('Return Home'),
+                child: Text(context.l10n.returnHome),
               ),
             ],
           ),

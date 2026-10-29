@@ -8,6 +8,7 @@ import '../providers/presence_provider.dart';
 import '../providers/room_provider.dart';
 import '../services/presence_merge.dart';
 import 'member_removal.dart';
+import '../l10n/l10n.dart';
 
 /// Who is in the room while reading, and who has stepped back to the lobby.
 ///
@@ -81,8 +82,8 @@ class _ReaderMembersSheetState extends ConsumerState<ReaderMembersSheet> {
       children: [
         Text(
           presenceState.isReconnecting
-              ? 'Reconnecting to the room...'
-              : '${presenceState.onlineCount} Members Online',
+              ? context.l10n.reconnectingToRoom
+              : context.l10n.membersOnline(presenceState.onlineCount),
           style: AppTheme.title,
         ),
         const SizedBox(height: 12),
@@ -93,7 +94,8 @@ class _ReaderMembersSheetState extends ConsumerState<ReaderMembersSheet> {
             children: [
               for (final user in users)
                 _MemberRow(
-                  nickname: user['nickname'] as String? ?? 'Unknown',
+                  nickname:
+                      user['nickname'] as String? ?? context.l10n.unknownMember,
                   status: user['is_reading'] == true
                       ? _MemberStatus.reading
                       : _MemberStatus.outOfReader,
@@ -105,7 +107,8 @@ class _ReaderMembersSheetState extends ConsumerState<ReaderMembersSheet> {
                       ? null
                       : () => onAskToLeave(
                           user['user_id'] as String,
-                          user['nickname'] as String? ?? 'Unknown',
+                          user['nickname'] as String? ??
+                              context.l10n.unknownMember,
                         ),
                 ),
               for (final member in notConnected)
@@ -175,17 +178,17 @@ class _MemberRow extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(switch (status) {
-                _MemberStatus.reading => 'Reading',
-                _MemberStatus.outOfReader => 'Left the reader',
-                _MemberStatus.notConnected => 'Not connected',
+                _MemberStatus.reading => context.l10n.statusReading,
+                _MemberStatus.outOfReader => context.l10n.statusLeftReader,
+                _MemberStatus.notConnected => context.l10n.statusNotConnected,
               }, style: AppTheme.caption),
               // Their page turns and this reader's never reach each other, so
               // waiting on them is waiting forever (GH-33). Bold, not a colour.
               if (version != ProtocolCompatibility.compatible)
                 Text(
                   version == ProtocolCompatibility.older
-                      ? 'Needs app update'
-                      : 'Newer app — update yours',
+                      ? context.l10n.needsAppUpdate
+                      : context.l10n.newerAppUpdateYours,
                   style: AppTheme.caption.copyWith(
                     fontWeight: FontWeight.w700,
                     color: AppTheme.ink,

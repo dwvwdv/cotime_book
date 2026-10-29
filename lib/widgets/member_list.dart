@@ -5,6 +5,7 @@ import '../models/room_member.dart';
 import '../services/presence_merge.dart';
 import 'member_removal.dart';
 import 'user_avatar.dart';
+import '../l10n/l10n.dart';
 
 class MemberList extends StatelessWidget {
   final List<RoomMember> members;
@@ -46,13 +47,13 @@ class MemberList extends StatelessWidget {
   Widget build(BuildContext context) {
     final members = ordered(this.members);
     if (members.isEmpty) {
-      const empty = Text('No members yet', style: AppTheme.caption);
+      final empty = Text(context.l10n.noMembersYet, style: AppTheme.caption);
       return shrinkWrap
-          ? const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
+          ? Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
               child: Center(child: empty),
             )
-          : const Center(child: empty);
+          : Center(child: empty);
     }
 
     // In an Expanded slot the list must scroll on its own: a shrink-wrapped,
@@ -69,8 +70,8 @@ class MemberList extends StatelessWidget {
         final isMe = member.userId == currentUserId;
         final version = member.isOnline ? appVersions[member.userId] : null;
         final versionLabel = switch (version) {
-          ProtocolCompatibility.older => 'Needs app update',
-          ProtocolCompatibility.newer => 'Newer app — update yours',
+          ProtocolCompatibility.older => context.l10n.needsAppUpdate,
+          ProtocolCompatibility.newer => context.l10n.newerAppUpdateYours,
           _ => null,
         };
 
@@ -92,9 +93,9 @@ class MemberList extends StatelessWidget {
                         text: member.nickname,
                         children: [
                           if (isMe)
-                            const TextSpan(
-                              text: '  (You)',
-                              style: TextStyle(
+                            TextSpan(
+                              text: context.l10n.youSuffix,
+                              style: const TextStyle(
                                 fontWeight: FontWeight.w400,
                                 color: AppTheme.inkMuted,
                                 fontSize: 14,
@@ -111,7 +112,9 @@ class MemberList extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      member.isOnline ? 'Online' : 'Away — not connected',
+                      member.isOnline
+                          ? context.l10n.online
+                          : context.l10n.awayNotConnected,
                       style: AppTheme.caption,
                     ),
                     // Bold ink, not a colour: on e-ink red is just gray.
@@ -170,7 +173,7 @@ class _BookTag extends StatelessWidget {
           ),
           const SizedBox(width: 4),
           Text(
-            hasBook ? 'Has book' : 'No book',
+            hasBook ? context.l10n.hasBook : context.l10n.noBook,
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w700,

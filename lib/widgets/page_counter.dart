@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../config/theme.dart';
 import '../models/page_info.dart';
+import '../l10n/l10n.dart';
 
 /// The page in its chapter, and how far into the book: "3 / 12" over "45%".
 ///
@@ -60,10 +61,12 @@ class PageCounter extends StatelessWidget {
             ],
           );
     final label = info == null
-        ? 'Go to page'
-        : 'Page ${info.page} of ${info.pages} in this chapter'
-              '${progress == null ? '' : ', $progress of the book'}'
-              '${onTap == null ? '' : '. Go to page'}';
+        ? context.l10n.goToPage
+        : [
+            context.l10n.pageCounterLabel(info.page, info.pages),
+            if (progress != null) context.l10n.pageCounterProgress(progress),
+            if (onTap != null) context.l10n.pageCounterGoTo,
+          ].join();
     return SizedBox(
       width: width,
       child: onTap == null

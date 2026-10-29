@@ -3,6 +3,7 @@ import 'package:flutter_epub_viewer/flutter_epub_viewer.dart';
 
 import '../config/theme.dart';
 import 'paper.dart';
+import '../l10n/l10n.dart';
 
 /// The book's table of contents, nested chapters indented under their part.
 /// Where a TXT conversion that took prose for headings shows first.
@@ -28,16 +29,16 @@ class BookContents extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SectionHeader(
-          label: 'Contents',
+          label: context.l10n.contents,
           trailing: Text(
-            rows.length == 1 ? '1 entry' : '${rows.length} entries',
+            context.l10n.contentsEntries(rows.length),
             style: AppTheme.caption,
           ),
         ),
         if (rows.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 16),
-            child: Text('This book has no contents.', style: AppTheme.caption),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Text(context.l10n.noContents, style: AppTheme.caption),
           )
         else
           Flexible(
@@ -55,7 +56,7 @@ class BookContents extends StatelessWidget {
                       border: Border(bottom: AppTheme.rule),
                     ),
                     child: Text(
-                      title.isEmpty ? '(untitled)' : title,
+                      title.isEmpty ? context.l10n.untitled : title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: AppTheme.body,

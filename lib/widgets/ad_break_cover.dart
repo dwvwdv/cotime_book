@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../config/theme.dart';
+import '../l10n/l10n.dart';
 
 /// Covers the page the room just reached while its ad break is on.
 ///
@@ -24,8 +25,10 @@ class AdBreakCover extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final detail = readersInAd.isEmpty
-        ? 'The page opens when every reader is back.'
-        : 'Waiting for ${readersInAd.join(', ')} to finish an ad...';
+        ? context.l10n.adBreakPageOpensWhenBack
+        : context.l10n.adBreakWaitingForAd(
+            readersInAd.join(context.l10n.listSeparator),
+          );
     // Taps on the cover are not page turns: nobody turns during the break.
     return AbsorbPointer(
       child: ColoredBox(
@@ -37,7 +40,7 @@ class AdBreakCover extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Ad break',
+                  context.l10n.adBreak,
                   style: AppTheme.title.copyWith(color: ink),
                   textAlign: TextAlign.center,
                 ),

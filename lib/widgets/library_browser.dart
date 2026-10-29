@@ -5,6 +5,7 @@ import '../config/theme.dart';
 import '../models/library_book.dart';
 import '../services/library_service.dart';
 import 'paper.dart';
+import '../l10n/l10n.dart';
 
 /// Opens the public library in a sheet. Resolves with the book the reader
 /// picked, or null when they closed it.
@@ -94,7 +95,7 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
     } catch (error) {
       debugPrint('Unable to list the library: $error');
       if (!mounted || generation != _loadGeneration) return;
-      setState(() => _error = 'The library could not be opened.');
+      setState(() => _error = context.l10n.libraryOpenFailed);
     }
   }
 
@@ -113,7 +114,7 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
     } catch (error) {
       debugPrint('Unable to read the library notice: $error');
       if (!mounted || generation != _noticeGeneration) return;
-      setState(() => _noticeError = 'The note could not be loaded.');
+      setState(() => _noticeError = context.l10n.libraryNoteLoadFailed);
     }
   }
 
@@ -174,12 +175,12 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
       children: [
         Row(
           children: [
-            const Expanded(
-              child: Text('Public Library', style: AppTheme.title),
+            Expanded(
+              child: Text(context.l10n.publicLibrary, style: AppTheme.title),
             ),
             _ToggleIconButton(
               icon: Icons.help_outline,
-              tooltip: 'About these books',
+              tooltip: context.l10n.aboutTheseBooks,
               open: _showNotice,
               onPressed: _toggleNotice,
             ),
@@ -199,12 +200,12 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
                   enabled: books != null,
                   textInputAction: TextInputAction.search,
                   decoration: InputDecoration(
-                    hintText: 'Search by title or author',
+                    hintText: context.l10n.searchByTitleOrAuthor,
                     prefixIcon: const Icon(Icons.search),
                     suffixIcon: _filter.query.isEmpty
                         ? null
                         : IconButton(
-                            tooltip: 'Clear search',
+                            tooltip: context.l10n.clearSearch,
                             icon: const Icon(Icons.close),
                             onPressed: () {
                               _searchController.clear();
@@ -262,14 +263,16 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
                   ),
                 SliverToBoxAdapter(
                   child: SectionHeader(
-                    label: 'Books',
+                    label: context.l10n.books,
                     trailing: books == null || shown == null
                         ? null
                         : Text(
                             _filter.isEmpty
-                                ? _countLabel(books.length)
-                                : '${shown.length} of '
-                                      '${_countLabel(books.length)}',
+                                ? context.l10n.bookCount(books.length)
+                                : context.l10n.shownOfBooks(
+                                    shown.length,
+                                    context.l10n.bookCount(books.length),
+                                  ),
                             style: AppTheme.caption,
                           ),
                   ),
@@ -282,9 +285,6 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
       ],
     );
   }
-
-  static String _countLabel(int count) =>
-      '$count ${count == 1 ? 'book' : 'books'}';
 
   Widget _buildBooks(
     BuildContext context,
@@ -301,7 +301,7 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
             children: [
               PaperNotice(message: _error!, icon: Icons.wifi_off),
               const SizedBox(height: 8),
-              TextButton(onPressed: _load, child: const Text('Try Again')),
+              TextButton(onPressed: _load, child: Text(context.l10n.tryAgain)),
             ],
           ),
         ),
@@ -309,18 +309,18 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
     }
     if (books == null || shown == null) {
       // Text, not a spinner: e-ink.
-      return const SliverToBoxAdapter(
+      return SliverToBoxAdapter(
         child: Padding(
-          padding: EdgeInsets.symmetric(vertical: 20),
-          child: Text('Loading the library...', style: AppTheme.body),
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          child: Text(context.l10n.loadingLibrary, style: AppTheme.body),
         ),
       );
     }
     if (books.isEmpty) {
-      return const SliverToBoxAdapter(
+      return SliverToBoxAdapter(
         child: Padding(
-          padding: EdgeInsets.symmetric(vertical: 20),
-          child: Text('The library is empty for now.', style: AppTheme.body),
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          child: Text(context.l10n.libraryEmpty, style: AppTheme.body),
         ),
       );
     }
@@ -333,11 +333,11 @@ class _LibraryBrowserState extends State<LibraryBrowser> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('No books match.', style: AppTheme.body),
+              Text(context.l10n.noBooksMatch, style: AppTheme.body),
               const SizedBox(height: 8),
               TextButton(
                 onPressed: _clearFilters,
-                child: const Text('Clear Search and Filters'),
+                child: Text(context.l10n.clearSearchAndFilters),
               ),
             ],
           ),
@@ -405,7 +405,7 @@ class _FilterButton extends StatelessWidget {
       button: true,
       toggled: open,
       child: Tooltip(
-        message: 'Filters',
+        message: context.l10n.filters,
         child: InkWell(
           onTap: onPressed,
           borderRadius: BorderRadius.circular(AppTheme.radius),
@@ -471,8 +471,10 @@ class _FilterPanel extends StatelessWidget {
             // Any number at once; the label says how they combine, since
             // a reader could as well expect a wider shelf.
             _FilterGroup(
-              label: 'Tags',
-              hint: selectedTags.length > 1 ? 'Books with any of them' : null,
+              label: context.l10n.tags,
+              hint: selectedTags.length > 1
+                  ? context.l10n.booksWithAnyTag
+                  : null,
               options: tags,
               isSelected: selectedTags.contains,
               onAll: onAllTags,
@@ -482,7 +484,7 @@ class _FilterPanel extends StatelessWidget {
             const SizedBox(height: 12),
           if (languages.isNotEmpty)
             _FilterGroup(
-              label: 'Language',
+              label: context.l10n.language,
               options: languages,
               isSelected: (option) => option == language,
               onAll: () => onLanguage(null),
@@ -535,7 +537,11 @@ class _FilterGroup extends StatelessWidget {
           spacing: 8,
           runSpacing: 8,
           children: [
-            _FilterChoice(label: 'All', selected: !anySelected, onTap: onAll),
+            _FilterChoice(
+              label: context.l10n.all,
+              selected: !anySelected,
+              onTap: onAll,
+            ),
             for (final option in options)
               _FilterChoice(
                 label: option,
@@ -871,7 +877,7 @@ class _NoticePanel extends StatelessWidget {
     final Widget content;
     if (notice != null) {
       content = SelectableText(
-        notice!.isEmpty ? 'No note has been written yet.' : notice!,
+        notice!.isEmpty ? context.l10n.noNoteYet : notice!,
         style: AppTheme.body.copyWith(height: 1.5),
       );
     } else if (error != null) {
@@ -880,12 +886,12 @@ class _NoticePanel extends StatelessWidget {
         children: [
           PaperNotice(message: error!, icon: Icons.wifi_off),
           const SizedBox(height: 8),
-          TextButton(onPressed: onRetry, child: const Text('Try Again')),
+          TextButton(onPressed: onRetry, child: Text(context.l10n.tryAgain)),
         ],
       );
     } else {
       // Text, not a spinner: e-ink.
-      content = const Text('Loading...', style: AppTheme.body);
+      content = Text(context.l10n.loading, style: AppTheme.body);
     }
     return Container(
       key: const Key('library-notice'),
@@ -897,7 +903,7 @@ class _NoticePanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('ABOUT THESE BOOKS', style: AppTheme.overline),
+          Text(context.l10n.aboutTheseBooksOverline, style: AppTheme.overline),
           const SizedBox(height: 8),
           content,
         ],

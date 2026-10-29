@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../config/theme.dart';
 import '../services/layout_report_service.dart';
 import 'paper.dart';
+import '../l10n/l10n.dart';
 
 /// The reader's page layout, for a bug report from a real device.
 ///
@@ -147,17 +148,11 @@ class _LayoutReportSheetState extends State<LayoutReportSheet> {
       if (mounted) setState(() => _sentId = id);
     } on LayoutReportRateLimitedException {
       if (mounted) {
-        showPaperMessage(
-          context,
-          'Too many reports in the last hour. Copy this one instead.',
-        );
+        showPaperMessage(context, context.l10n.reportRateLimited);
       }
     } catch (_) {
       if (mounted) {
-        showPaperMessage(
-          context,
-          "Couldn't send the report. Try again, or copy it instead.",
-        );
+        showPaperMessage(context, context.l10n.reportSendFailed);
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -175,23 +170,16 @@ class _LayoutReportSheetState extends State<LayoutReportSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Page layout report', style: AppTheme.title),
+          Text(context.l10n.pageLayoutReportTitle, style: AppTheme.title),
           const SizedBox(height: 8),
-          const Text(
-            'If pages are cut off or a turn skips ahead, send this right after '
-            'it happens. It holds how this screen laid out the page and where '
-            'you are in the book, never the book\'s text.',
-            style: AppTheme.caption,
-          ),
+          Text(context.l10n.pageLayoutReportIntro, style: AppTheme.caption),
           const SizedBox(height: 12),
           TextField(
             controller: _note,
             enabled: sentId == null && !_sending,
             maxLines: 2,
             maxLength: 500,
-            decoration: const InputDecoration(
-              hintText: 'What went wrong? (optional)',
-            ),
+            decoration: InputDecoration(hintText: context.l10n.reportNoteHint),
           ),
           const SizedBox(height: 8),
           ConstrainedBox(
@@ -212,7 +200,7 @@ class _LayoutReportSheetState extends State<LayoutReportSheet> {
             // The id is the reader's handle on the report, so it is shown, not
             // flashed in a message.
             SelectableText(
-              'Sent. Report ID: ${sentId.split('-').first}',
+              context.l10n.reportSent(sentId.split('-').first),
               textAlign: TextAlign.center,
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
@@ -222,17 +210,21 @@ class _LayoutReportSheetState extends State<LayoutReportSheet> {
               onPressed: _sending ? null : _send,
               icon: const Icon(Icons.send),
               // Words, not a spinner: e-ink.
-              label: Text(_sending ? 'Sending...' : 'Send Report'),
+              label: Text(
+                _sending ? context.l10n.sending : context.l10n.sendReport,
+              ),
             ),
             const SizedBox(height: 8),
           ],
           OutlinedButton.icon(
             onPressed: () async {
               await Clipboard.setData(ClipboardData(text: _text));
-              if (context.mounted) showPaperMessage(context, 'Report copied');
+              if (context.mounted) {
+                showPaperMessage(context, context.l10n.reportCopied);
+              }
             },
             icon: const Icon(Icons.copy),
-            label: const Text('Copy Report'),
+            label: Text(context.l10n.copyReport),
           ),
         ],
       ),

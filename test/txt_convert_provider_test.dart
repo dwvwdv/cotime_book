@@ -8,6 +8,7 @@ import 'package:cotime_book/config/app_constants.dart';
 import 'package:cotime_book/providers/txt_convert_provider.dart';
 import 'package:cotime_book/services/txt_book.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:cotime_book/l10n/l10n.dart';
 
 TxtSource txt(String name, String text) =>
     TxtSource(fileName: name, bytes: Uint8List.fromList(utf8.encode(text)));
@@ -138,6 +139,7 @@ void main() {
     expect(adsShown, 1);
     expect(exported, isEmpty, reason: 'the ad is still on screen');
     expect(tool.state.busy, 'Saving...');
+    expect(tool.state.isSaving, isTrue);
 
     ad.complete();
     await saving;
@@ -206,6 +208,21 @@ void main() {
       tool.state.error,
       'This file is 40.0 MB. A book can be made of at most 40.0 MB of text.',
     );
+  });
+
+  // The book is built in a background isolate, which does not know the
+  // language picked on Home: the reason comes back as a code.
+  test('a book with no text is refused in the reader\'s language', () async {
+    addTearDown(() => useAppStringsOf(appLocales.first));
+    useAppStringsOf(appLocales.last);
+    final tool = converter();
+
+    await tool.convert([
+      txt('空白.txt', '\n　　\n'),
+    ], confirm: (draft) async => everything(draft));
+
+    expect(tool.state.book, isNull);
+    expect(tool.state.error, '這些檔案裡沒有文字。');
   });
 
   test('converting another book replaces the first and its file', () async {

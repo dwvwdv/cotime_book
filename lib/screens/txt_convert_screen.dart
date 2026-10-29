@@ -8,6 +8,7 @@ import '../widgets/ad_privacy_choices.dart';
 import '../widgets/paper.dart';
 import '../widgets/txt_import_sheet.dart';
 import 'book_preview_screen.dart';
+import '../l10n/l10n.dart';
 
 typedef OpenConvertedBook =
     void Function(BuildContext context, ConvertedBook book);
@@ -42,8 +43,10 @@ class TxtConvertScreen extends ConsumerWidget {
       },
     );
 
+    final isSaving = state.isSaving;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('TXT to EPUB')),
+      appBar: AppBar(title: Text(context.l10n.txtToEpub)),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -51,21 +54,16 @@ class TxtConvertScreen extends ConsumerWidget {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(28, 24, 28, 28),
               children: [
-                const Text(
-                  'Make an EPUB from TXT files and read it here to check '
-                  'the text and chapters. Save it once it looks right, then '
-                  'share the saved EPUB in a room.',
-                  style: AppTheme.body,
-                ),
+                Text(context.l10n.txtConvertIntro, style: AppTheme.body),
                 const SizedBox(height: 24),
                 if (book == null)
                   ElevatedButton.icon(
                     onPressed: state.isBusy ? null : pick,
                     icon: const Icon(Icons.description_outlined),
-                    label: Text(state.busy ?? 'Pick TXT Files'),
+                    label: Text(state.busy ?? context.l10n.pickTxtFiles),
                   )
                 else ...[
-                  const SectionHeader(label: 'Converted'),
+                  SectionHeader(label: context.l10n.converted),
                   const SizedBox(height: 12),
                   Text(book.title, style: AppTheme.title),
                   if (book.author != null) ...[
@@ -83,27 +81,25 @@ class TxtConvertScreen extends ConsumerWidget {
                         ? null
                         : () => openBook(context, book),
                     icon: const Icon(Icons.menu_book_outlined),
-                    label: const Text('Read'),
+                    label: Text(context.l10n.read),
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton.icon(
                     onPressed: state.isBusy ? null : notifier.saveBook,
                     icon: const Icon(Icons.save_alt),
                     label: Text(
-                      state.busy == 'Saving...'
-                          ? 'Saving...'
+                      isSaving
+                          ? context.l10n.saving
                           : state.isSaved
-                          ? 'Save Again'
-                          : 'Save EPUB',
+                          ? context.l10n.saveAgain
+                          : context.l10n.saveEpub,
                     ),
                   ),
                   if (state.isSaved) ...[
                     const SizedBox(height: 12),
-                    const PaperNotice(
+                    PaperNotice(
                       icon: Icons.check,
-                      message:
-                          'Saved. In a room, tap Share Book and pick this '
-                          'file.',
+                      message: context.l10n.savedShareInRoom,
                     ),
                   ],
                   const SizedBox(height: 24),
@@ -111,9 +107,9 @@ class TxtConvertScreen extends ConsumerWidget {
                     // The book above stays until another one is made.
                     onPressed: state.isBusy ? null : pick,
                     child: Text(
-                      state.isBusy && state.busy != 'Saving...'
+                      state.isBusy && !isSaving
                           ? state.busy!
-                          : 'Convert Other Files',
+                          : context.l10n.convertOtherFiles,
                     ),
                   ),
                 ],

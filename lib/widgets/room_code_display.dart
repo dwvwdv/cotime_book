@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../config/theme.dart';
 import 'paper.dart';
+import '../l10n/l10n.dart';
 
 /// The room code set in separate cells, so it can be read aloud or copied by
 /// hand across the room without miscounting characters.
@@ -14,13 +15,13 @@ class RoomCodeDisplay extends StatelessWidget {
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
-      label: 'Room code $code. Tap to copy.',
+      label: context.l10n.roomCodeSemantics(code),
       child: InkWell(
         onTap: () {
           Clipboard.setData(ClipboardData(text: code));
           showPaperMessage(
             context,
-            'Room code copied',
+            context.l10n.roomCodeCopied,
             duration: const Duration(seconds: 2),
           );
         },
@@ -62,12 +63,12 @@ class RoomCodeDisplay extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 8),
-              const Row(
+              Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.copy, size: 16, color: AppTheme.inkMuted),
-                  SizedBox(width: 6),
-                  Text('Tap to copy', style: AppTheme.caption),
+                  const Icon(Icons.copy, size: 16, color: AppTheme.inkMuted),
+                  const SizedBox(width: 6),
+                  Text(context.l10n.tapToCopy, style: AppTheme.caption),
                 ],
               ),
             ],

@@ -19,6 +19,8 @@ import '../widgets/more_apps_sheet.dart';
 import '../widgets/paper.dart';
 import '../widgets/recent_rooms_list.dart';
 import '../widgets/room_code_input.dart';
+import '../l10n/l10n.dart';
+import '../providers/app_locale_provider.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -66,7 +68,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           _lastBackPress = now;
           showPaperMessage(
             context,
-            'Press back again to exit',
+            context.l10n.pressBackAgainToExit,
             duration: const Duration(seconds: 2),
           );
         } else {
@@ -84,15 +86,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 480),
                     child: ListView(
-                      padding: const EdgeInsets.fromLTRB(28, 48, 28, 28),
+                      padding: const EdgeInsets.fromLTRB(28, 8, 28, 28),
                       children: [
+                        // Part of the list, not laid over it: scrolled
+                        // content would pass under a button with no
+                        // background, and a tap there would switch the
+                        // language. It takes the room the top padding had.
+                        const Align(
+                          alignment: Alignment.centerRight,
+                          child: _LanguageToggle(),
+                        ),
                         const Masthead(),
                         const SizedBox(height: 28),
                         const Divider(thickness: AppTheme.heavyRuleWidth),
                         const SizedBox(height: 28),
 
                         if (roomState.currentRoom != null) ...[
-                          const SectionHeader(label: 'Active room'),
+                          SectionHeader(label: context.l10n.activeRoom),
                           const SizedBox(height: 14),
                           Text(
                             roomState.currentRoom!.code,
@@ -112,7 +122,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                                 roomState.currentRoom!.code,
                                           },
                                         ),
-                                  child: const Text('Continue'),
+                                  child: Text(context.l10n.continueAction),
                                 ),
                               ),
                               const SizedBox(width: 12),
@@ -125,8 +135,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                   // keeps an e-ink panel refreshing until it stops.
                                   child: Text(
                                     _isLeavingRoom
-                                        ? 'Leaving...'
-                                        : 'Leave Room',
+                                        ? context.l10n.leaving
+                                        : context.l10n.leaveRoom,
                                   ),
                                 ),
                               ),
@@ -138,10 +148,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         if (!roomState.isInRoom) ...[
                           TextField(
                             controller: _nicknameController,
-                            decoration: const InputDecoration(
-                              labelText: 'Nickname',
-                              hintText: 'What should others call you?',
-                              prefixIcon: Icon(Icons.person_outline),
+                            decoration: InputDecoration(
+                              labelText: context.l10n.nickname,
+                              hintText: context.l10n.nicknameHint,
+                              prefixIcon: const Icon(Icons.person_outline),
                             ),
                             style: AppTheme.body,
                             maxLength: 20,
@@ -167,7 +177,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                         : () => setState(
                                             () => _isJoinMode = false,
                                           ),
-                                    child: const Text('Back'),
+                                    child: Text(context.l10n.back),
                                   ),
                                 ),
                                 const SizedBox(width: 12),
@@ -178,8 +188,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                         : _joinRoom,
                                     child: Text(
                                       roomState.isLoading
-                                          ? 'Joining...'
-                                          : 'Join Room',
+                                          ? context.l10n.joining
+                                          : context.l10n.joinRoom,
                                     ),
                                   ),
                                 ),
@@ -193,8 +203,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               icon: const Icon(Icons.add),
                               label: Text(
                                 roomState.isLoading
-                                    ? 'Creating...'
-                                    : 'Create Room',
+                                    ? context.l10n.creating
+                                    : context.l10n.createRoom,
                               ),
                             ),
                             const SizedBox(height: 12),
@@ -203,7 +213,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                   ? null
                                   : () => setState(() => _isJoinMode = true),
                               icon: const Icon(Icons.login),
-                              label: const Text('Join Room'),
+                              label: Text(context.l10n.joinRoom),
                             ),
                             if (recentRooms.isNotEmpty) ...[
                               const SizedBox(height: 36),
@@ -231,18 +241,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
                         // Auth status
                         if (!SupabaseConfig.isConfigured)
-                          const Text(
-                            'Supabase not configured.\n'
-                            'Run with --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...',
-                            style: TextStyle(
+                          Text(
+                            context.l10n.supabaseNotConfigured,
+                            style: const TextStyle(
                               color: AppTheme.inkMuted,
                               fontSize: 12,
                             ),
                             textAlign: TextAlign.center,
                           )
                         else if (authState.isAuthenticated)
-                          const Text(
-                            'Connected',
+                          Text(
+                            context.l10n.connected,
                             style: AppTheme.caption,
                             textAlign: TextAlign.center,
                           )
@@ -258,8 +267,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                     },
                               child: Text(
                                 authState.isLoading
-                                    ? 'Connecting...'
-                                    : 'Tap to connect',
+                                    ? context.l10n.connecting
+                                    : context.l10n.tapToConnect,
                               ),
                             ),
                           ),
@@ -279,7 +288,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   String? _validateNickname() {
     final nickname = _nicknameController.text.trim();
     if (nickname.isEmpty) {
-      _showError('Please enter a nickname');
+      _showError(context.l10n.enterNickname);
       return null;
     }
     return nickname;
@@ -287,7 +296,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> _createRoom() async {
     final room = await _enterRoom(
-      'Leave the active room before creating another one.',
+      context.l10n.leaveBeforeCreating,
       (nickname) => ref.read(roomProvider.notifier).createRoom(nickname),
     );
     if (room != null) _goToLobby(room);
@@ -296,11 +305,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Future<void> _joinRoom() async {
     final code = _roomCodeController.text.trim();
     if (code.length != 6) {
-      _showError('Please enter a valid 6-character room code');
+      _showError(context.l10n.enterValidRoomCode);
       return;
     }
     final room = await _enterRoom(
-      'Leave the active room before joining another one.',
+      context.l10n.leaveBeforeJoining,
       (nickname) => ref.read(roomProvider.notifier).joinRoom(code, nickname),
     );
     if (room != null && mounted) _goToLobby(room);
@@ -308,16 +317,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> _openRecentRoom(RecentRoom recent) async {
     var gone = false;
-    final room = await _enterRoom(
-      'Leave the active room before joining another one.',
-      (nickname) async {
-        final result = await ref
-            .read(roomProvider.notifier)
-            .rejoinRoom(recent.code, nickname);
-        gone = result.gone;
-        return result.room;
-      },
-    );
+    final room = await _enterRoom(context.l10n.leaveBeforeJoining, (
+      nickname,
+    ) async {
+      final result = await ref
+          .read(roomProvider.notifier)
+          .rejoinRoom(recent.code, nickname);
+      gone = result.gone;
+      return result.room;
+    });
     if (!mounted) return;
     if (gone) {
       // A closed room would have been reopened, so this one has been deleted
@@ -366,19 +374,41 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     try {
       await ref.read(roomProvider.notifier).leaveRoom();
     } catch (error) {
-      errors.add('room membership: $error');
+      errors.add(appStrings.cleanupRoomMembership('$error'));
     }
     try {
       await ref.read(presenceProvider.notifier).leaveRoom();
     } catch (error) {
-      errors.add('realtime presence: $error');
+      errors.add(appStrings.cleanupRealtimePresence('$error'));
     }
     await ref.read(bookProvider.notifier).reset();
     if (!mounted) return;
     setState(() => _isLeavingRoom = false);
     if (errors.isNotEmpty) {
-      _showError('Room cleanup needs attention: ${errors.join('; ')}');
+      _showError(context.l10n.roomCleanupNeedsAttention(errors.join('; ')));
     }
+  }
+}
+
+
+/// Switches the interface between English and Chinese, from whichever is on
+/// screen. Named in the other language, as a language picker is: someone who
+/// cannot read the current one still finds their own.
+class _LanguageToggle extends ConsumerWidget {
+  const _LanguageToggle();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return TextButton.icon(
+      onPressed: () => ref
+          .read(appLocaleProvider.notifier)
+          .toggle(Localizations.localeOf(context)),
+      icon: const Icon(Icons.translate, size: 20),
+      label: Text(
+        context.l10n.switchLanguage,
+        semanticsLabel: context.l10n.switchLanguageTooltip,
+      ),
+    );
   }
 }
 
@@ -412,7 +442,7 @@ class _ToolsBar extends ConsumerWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16),
             ),
             icon: const Icon(Icons.swap_horiz),
-            label: const Text('TXT to EPUB'),
+            label: Text(context.l10n.txtToEpub),
           ),
           const SizedBox(width: 8),
           // Shrinks rather than wraps where even that does not fit (a
@@ -433,7 +463,7 @@ class _ToolsBar extends ConsumerWidget {
                       openLink: ref.read(externalLinkProvider),
                     ),
                     style: _compact,
-                    child: const Text('More Apps'),
+                    child: Text(context.l10n.moreApps),
                   ),
                   // The megaphone alone: a label beside it would crowd the
                   // bar. The tooltip still names it for screen readers.
@@ -442,7 +472,7 @@ class _ToolsBar extends ConsumerWidget {
                       context: context,
                       announcements: ref.read(announcementServiceProvider),
                     ),
-                    tooltip: 'News',
+                    tooltip: context.l10n.news,
                     icon: const Icon(Icons.campaign_outlined),
                   ),
                 ],

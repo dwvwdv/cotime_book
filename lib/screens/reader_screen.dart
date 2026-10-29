@@ -30,6 +30,7 @@ import '../widgets/reader_safe_area.dart';
 import '../widgets/paper.dart';
 import '../widgets/reader_members_sheet.dart';
 import '../widgets/sync_status_bar.dart';
+import '../l10n/l10n.dart';
 
 /// The book, kept on the room's shared page.
 ///
@@ -300,10 +301,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               }),
         );
       } else if (!quiet) {
-        showPaperMessage(
-          context,
-          "Couldn't change the room's text size. Try again in a moment.",
-        );
+        showPaperMessage(context, context.l10n.couldNotChangeTextSize);
       }
       return saved;
     } finally {
@@ -870,20 +868,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           if (!didPop) _leaveReader();
         },
         child: Scaffold(
-          appBar: AppBar(title: const Text('Reader')),
+          appBar: AppBar(title: Text(context.l10n.reader)),
           body: Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 // Words, not a spinner: e-ink.
                 Text(
-                  hasBook ? 'Opening the book...' : 'No book loaded',
+                  hasBook
+                      ? context.l10n.openingBook
+                      : context.l10n.noBookLoaded,
                   style: AppTheme.title,
                 ),
                 const SizedBox(height: 16),
                 ElevatedButton(
                   onPressed: _leaveReader,
-                  child: const Text('Back to Lobby'),
+                  child: Text(context.l10n.backToLobby),
                 ),
               ],
             ),
@@ -1191,7 +1191,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             style: iconStyle,
             icon: const Icon(Icons.arrow_back),
             onPressed: _leaving ? null : _leaveReader,
-            tooltip: 'Leave reading',
+            tooltip: context.l10n.leaveReading,
           ),
           const Spacer(),
           OutlinedButton(
@@ -1217,7 +1217,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 syncState.currentRequest == null && _viewerLoaded && !_leaving
                 ? _showReadingSettings
                 : null,
-            tooltip: 'Reading settings',
+            tooltip: context.l10n.readingSettingsTooltip,
           ),
           PageCounter(
             info: _pageInfo,
@@ -1261,9 +1261,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('Reading Settings', style: AppTheme.title),
+                  Text(context.l10n.readingSettings, style: AppTheme.title),
                   const SizedBox(height: 20),
-                  const SectionHeader(label: 'Page'),
+                  SectionHeader(label: context.l10n.settingsPage),
                   const SizedBox(height: 14),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -1285,7 +1285,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                     ],
                   ),
                   const SizedBox(height: 24),
-                  const SectionHeader(label: 'Text size'),
+                  SectionHeader(label: context.l10n.settingsTextSize),
                   const SizedBox(height: 12),
                   ValueListenableBuilder<bool>(
                     valueListenable: _textSizeSaving,
@@ -1295,6 +1295,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                   const SizedBox(height: 8),
                   Text(
                     _textSizeNote(
+                      context.l10n,
                       textSize: textSize,
                       ownFontSize: prefs.fontSize.round(),
                       othersFontSize: _largestFontSizeOfOthers(
@@ -1307,10 +1308,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                   // A new size is laid out on every reader's screen, which
                   // takes seconds on an e-reader; without a word about it the
                   // tap looks ignored and gets tapped again.
-                  const Text(
-                    'A new text size takes a few seconds to show: the book is '
-                    'laid out again on every reader\'s screen. Wait for the '
-                    'page to change before tapping again or turning.',
+                  Text(
+                    context.l10n.textSizeTakesSeconds,
                     style: AppTheme.caption,
                   ),
                   if (textSize.isHost)
@@ -1318,13 +1317,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       valueListenable: _textSizeSaving,
                       builder: (context, saving, _) => SwitchListTile(
                         contentPadding: EdgeInsets.zero,
-                        title: const Text(
-                          'Only I set the text size',
-                          style: TextStyle(fontWeight: FontWeight.w700),
+                        title: Text(
+                          context.l10n.onlyISetTextSize,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
-                        subtitle: const Text(
-                          'Turn off to let everyone pick a size. The room '
-                          'then reads at the largest size anyone picked.',
+                        subtitle: Text(
+                          context.l10n.onlyISetTextSizeHint,
                           style: AppTheme.caption,
                         ),
                         value: textSize.locked,
@@ -1342,16 +1340,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       ),
                     ),
                   const SizedBox(height: 24),
-                  const SectionHeader(label: 'Turning pages'),
+                  SectionHeader(label: context.l10n.settingsTurningPages),
                   const SizedBox(height: 4),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text(
-                      'Volume keys turn pages',
-                      style: TextStyle(fontWeight: FontWeight.w700),
+                    title: Text(
+                      context.l10n.volumeKeysTurnPages,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    subtitle: const Text(
-                      'For e-readers whose page buttons act as volume keys.',
+                    subtitle: Text(
+                      context.l10n.volumeKeysTurnPagesHint,
                       style: AppTheme.caption,
                     ),
                     value: prefs.volumeKeysTurnPages,
@@ -1359,23 +1357,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                         .read(readingPreferencesProvider.notifier)
                         .setVolumeKeysTurnPages(enabled),
                   ),
-                  const Text(
-                    'Tap the left third of the page to go back, anywhere else '
-                    'to go forward. Page Up/Down and arrow keys work too.',
-                    style: AppTheme.caption,
-                  ),
+                  Text(context.l10n.tapZonesHint, style: AppTheme.caption),
                   AdPrivacyChoices(
                     onOpen: () => Navigator.of(sheetContext).pop(),
                   ),
                   const SizedBox(height: 24),
-                  const SectionHeader(label: 'Troubleshooting'),
+                  SectionHeader(label: context.l10n.settingsTroubleshooting),
                   const SizedBox(height: 12),
                   OutlinedButton(
                     onPressed: () {
                       Navigator.of(sheetContext).pop();
                       unawaited(_showLayoutReport());
                     },
-                    child: const Text('Page Layout Report'),
+                    child: Text(context.l10n.pageLayoutReport),
                   ),
                 ],
               ),
@@ -1407,7 +1401,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         Expanded(
           child: Text(
             // Words, not a spinner: e-ink.
-            saving ? 'Saving...' : '$shown',
+            saving ? context.l10n.saving : '$shown',
             textAlign: TextAlign.center,
             style: AppTheme.title,
           ),
@@ -1591,7 +1585,7 @@ class _ThemeOption extends StatelessWidget {
     return Semantics(
       button: true,
       selected: isSelected,
-      label: '${preview.themeLabel} theme',
+      label: context.l10n.themeOptionLabel(preview.themeLabel),
       child: InkWell(
         onTap: onTap,
         child: Padding(
@@ -1643,22 +1637,18 @@ RoomTextSize _roomTextSize(RoomState state) =>
 
 /// Who sets the size, and why the text may be larger than the size this
 /// reader picked.
-String _textSizeNote({
+String _textSizeNote(
+  AppLocalizations l10n, {
   required RoomTextSize textSize,
   required int ownFontSize,
   required int? othersFontSize,
 }) {
   if (textSize.locked) {
-    return textSize.isHost
-        ? 'You set the text size for everyone in this room.'
-        : 'The host sets the text size in this room.';
+    return textSize.isHost ? l10n.youSetTextSize : l10n.hostSetsTextSize;
   }
-  const shared =
-      'Everyone sees the same page: it fits the smallest screen in the '
-      'room, at the largest text size anyone picked.';
+  final shared = l10n.everyoneSeesSamePage;
   if (othersFontSize != null && othersFontSize > ownFontSize) {
-    return 'Another reader picked $othersFontSize, so the room reads at '
-        '$othersFontSize. $shared';
+    return l10n.anotherReaderPickedSize(othersFontSize, shared);
   }
   return shared;
 }

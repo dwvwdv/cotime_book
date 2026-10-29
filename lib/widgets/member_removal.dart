@@ -7,6 +7,7 @@ import '../config/theme.dart';
 import '../models/member_removal.dart';
 import '../providers/member_removal_provider.dart';
 import 'paper.dart';
+import '../l10n/l10n.dart';
 
 /// The button on a member's row that starts a vote to remove them.
 class AskToLeaveButton extends StatelessWidget {
@@ -22,7 +23,7 @@ class AskToLeaveButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IconButton(
-      tooltip: 'Ask $nickname to leave',
+      tooltip: context.l10n.askToLeaveTooltip(nickname),
       iconSize: 24,
       style: IconButton.styleFrom(minimumSize: const Size.square(48)),
       icon: const Icon(Icons.person_remove_outlined, color: AppTheme.ink),
@@ -42,12 +43,9 @@ Future<void> askMemberToLeave(
   final confirmed = await showPaperDialog<bool>(
     context: context,
     builder: (dialogContext) => _RemovalQuestion(
-      title: 'Ask $nickname to leave?',
-      message:
-          '$nickname will be taken out of the room, and nobody waits for '
-          'them to turn the page. They can join again with the room code.'
-          '\n\nIf others are here too, more than half of you have to agree.',
-      confirmLabel: 'Ask to leave',
+      title: dialogContext.l10n.askToLeaveTitle(nickname),
+      message: dialogContext.l10n.askToLeaveMessage(nickname),
+      confirmLabel: dialogContext.l10n.askToLeave,
       onConfirm: () => Navigator.of(dialogContext).pop(true),
       onCancel: () => Navigator.of(dialogContext).pop(false),
     ),
@@ -108,25 +106,25 @@ class MemberRemovalPrompt extends ConsumerWidget {
             .firstOrNull,
       ),
     );
+    final l10n = context.l10n;
     final target = proposal.targetNickname;
     if (latest == null) {
       return _RemovalQuestion(
-        title: 'Remove $target?',
-        message: 'This vote is over.',
+        title: l10n.removeMemberTitle(target),
+        message: l10n.voteIsOver,
         onCancel: () => Navigator.of(context).pop(),
-        cancelLabel: 'Close',
+        cancelLabel: l10n.close,
       );
     }
     final remaining = latest.remaining;
     return _RemovalQuestion(
-      title: 'Remove $target?',
-      message:
-          '${latest.voterNickname} asked $target to leave the room, so '
-          'nobody waits for them to turn the page. $target can join again '
-          'with the room code.'
-          '${remaining > 0 ? '\n\n${MemberRemovalVote.moreVotes(remaining)} needed.' : ''}',
-      confirmLabel: 'Agree',
-      cancelLabel: 'Not now',
+      title: l10n.removeMemberTitle(target),
+      message: [
+        l10n.removalVoteMessage(latest.voterNickname, target),
+        if (remaining > 0) l10n.moreVotesNeeded(remaining),
+      ].join('\n\n'),
+      confirmLabel: l10n.agree,
+      cancelLabel: l10n.notNow,
       onConfirm: () {
         // Read before the pop: this prompt's context is gone after it.
         final messenger = ScaffoldMessenger.maybeOf(context);
@@ -161,7 +159,7 @@ Future<void> _vote(
     );
     if (result != null) message = describeRemovalVote(result, nickname);
   } catch (_) {
-    message = 'Could not ask $nickname to leave. Try again.';
+    message = appStrings.couldNotAskToLeave(nickname);
   }
   if (message == null || messenger == null) return;
   showPaperMessageOn(messenger, message, duration: const Duration(seconds: 6));
@@ -170,11 +168,9 @@ Future<void> _vote(
 /// What a vote did, for the reader who cast it.
 String describeRemovalVote(MemberRemovalVote vote, String nickname) {
   return switch (vote.status) {
-    MemberRemovalStatus.removed => '$nickname was removed from the room.',
-    MemberRemovalStatus.gone => '$nickname is no longer in the room.',
-    MemberRemovalStatus.voting =>
-      'Your vote is in. ${MemberRemovalVote.moreVotes(vote.remaining)} '
-          'needed to remove $nickname.',
+    MemberRemovalStatus.removed => appStrings.memberRemoved(nickname),
+    MemberRemovalStatus.gone => appStrings.memberGone(nickname),
+    MemberRemovalStatus.voting => appStrings.voteIn(vote.remaining, nickname),
   };
 }
 
@@ -182,7 +178,7 @@ class _RemovalQuestion extends StatelessWidget {
   final String title;
   final String message;
   final String? confirmLabel;
-  final String cancelLabel;
+  final String? cancelLabel;
   final VoidCallback? onConfirm;
   final VoidCallback onCancel;
 
@@ -192,7 +188,7 @@ class _RemovalQuestion extends StatelessWidget {
     required this.onCancel,
     this.confirmLabel,
     this.onConfirm,
-    this.cancelLabel = 'Cancel',
+    this.cancelLabel,
   });
 
   @override
@@ -211,7 +207,10 @@ class _RemovalQuestion extends StatelessWidget {
             FilledButton(onPressed: onConfirm, child: Text(confirmLabel)),
             const SizedBox(height: 12),
           ],
-          OutlinedButton(onPressed: onCancel, child: Text(cancelLabel)),
+          OutlinedButton(
+            onPressed: onCancel,
+            child: Text(cancelLabel ?? context.l10n.cancel),
+          ),
         ],
       ),
     );

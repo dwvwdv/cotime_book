@@ -8,6 +8,7 @@ import '../models/page_info.dart';
 import '../models/page_sync_state.dart';
 import 'presence_merge.dart';
 import 'realtime_service.dart';
+import '../l10n/l10n.dart';
 
 /// The small Realtime surface used by page synchronization.
 ///
@@ -381,14 +382,14 @@ class PageSyncService {
       return false;
     }
     if (!_viewerReady) {
-      _setError('The book is still loading');
+      _setError(appStrings.bookStillLoading);
       return false;
     }
 
     if (!_transport.isConnected) {
       // The channel is being rebuilt. Presence read now is stale or empty:
       // an empty view would let this reader turn alone without asking anyone.
-      _setError('Reconnecting to the room — try again in a moment');
+      _setError(appStrings.reconnectingTryAgain);
       return false;
     }
     final users = _transport.getOnlineUsers();
@@ -396,21 +397,21 @@ class PageSyncService {
     // Presence is empty until it syncs, and a quorum built from it would be
     // this reader alone.
     if (!_isSelfPresent(users)) {
-      _setError('Still connecting to the room');
+      _setError(appStrings.stillConnecting);
       return false;
     }
     final away = _readersAway();
     if (away.isNotEmpty) {
       // Turning now would leave them on another page when they come back.
-      _setError('Waiting for ${_joinNames(away)} to reconnect');
+      _setError(appStrings.waitingForReconnectShort(_joinNames(away)));
       return false;
     }
     if (_isInAdBreak()) {
       final inAd = _adNames();
       _setError(
         inAd.isEmpty
-            ? 'Waiting for the ad break to finish'
-            : 'Waiting for ${inAd.join(', ')} to finish an ad',
+            ? appStrings.waitingForAdBreak
+            : appStrings.waitingForAdShort(inAd.join(appStrings.listSeparator)),
       );
       return false;
     }
@@ -430,8 +431,7 @@ class PageSyncService {
       if (cannotJump.isNotEmpty) {
         final names = cannotJump.toSet().toList();
         _setError(
-          '${_joinNames(names)} ${names.length == 1 ? 'needs' : 'need'} to '
-          'update the app to jump to a page',
+          appStrings.othersNeedUpdateToJump(_joinNames(names), names.length),
         );
         return false;
       }
@@ -470,7 +470,7 @@ class PageSyncService {
       );
     } catch (_) {
       if (_isCurrent(request)) {
-        _finishRequest(request, error: 'Could not reach the other readers');
+        _finishRequest(request, error: appStrings.couldNotReachReaders);
       }
       return false;
     }
@@ -508,7 +508,7 @@ class PageSyncService {
           PageSyncState(
             status: SyncStatus.confirming,
             currentRequest: request,
-            errorMessage: 'Could not send your answer. Try again.',
+            errorMessage: appStrings.couldNotSendAnswer,
           ),
         );
       }
@@ -837,7 +837,7 @@ class PageSyncService {
     if (dropped.isNotEmpty) {
       _finishRequest(
         request,
-        error: 'Waiting for ${_joinNames(dropped)} to reconnect',
+        error: appStrings.waitingForReconnectShort(_joinNames(dropped)),
       );
       unawaited(_broadcastCancelQuietly(request, 'reader_disconnected'));
       return;
@@ -1001,7 +1001,7 @@ class PageSyncService {
       _othersInAd[userId] = _AdHold(
         nickname is String && nickname.trim().isNotEmpty
             ? nickname.trim()
-            : _knownReaders[userId] ?? 'A reader',
+            : _knownReaders[userId] ?? appStrings.aReader,
         _clock(),
       );
     } else {
@@ -1096,7 +1096,7 @@ class PageSyncService {
     _livenessTimer = Timer(_followerLiveness, () {
       final current = _state.currentRequest;
       if (_disposed || current?.requestId != request.requestId) return;
-      _finishRequest(current!, error: 'The page turn request expired');
+      _finishRequest(current!, error: appStrings.turnRequestExpired);
     });
   }
 
@@ -1300,7 +1300,7 @@ class PageSyncService {
         final nickname = user['nickname'];
         _knownReaders[userId] = nickname is String && nickname.trim().isNotEmpty
             ? nickname.trim()
-            : 'A reader';
+            : appStrings.aReader;
       } else {
         // In the lobby, or the app went to the background: stepped away.
         _knownReaders.remove(userId);
@@ -1349,7 +1349,8 @@ class PageSyncService {
 
   List<String> _awayNames() {
     final names = [
-      for (final userId in _readersAway()) _knownReaders[userId] ?? 'A reader',
+      for (final userId in _readersAway())
+        _knownReaders[userId] ?? appStrings.aReader,
     ]..sort();
     return names;
   }
@@ -1358,7 +1359,7 @@ class PageSyncService {
     final names = [
       for (final value in userIdsOrNames) _knownReaders[value] ?? value,
     ]..sort();
-    return names.join(', ');
+    return names.join(appStrings.listSeparator);
   }
 
   static bool _listEquals(List<String> a, List<String> b) {
@@ -1454,13 +1455,14 @@ class PageSyncService {
     names.sort();
     behind.sort();
     ahead.sort();
+    final strings = appStrings;
+    final separator = strings.listSeparator;
     return [
-      'Page turn timed out waiting for ${names.join(', ')}',
+      strings.turnTimedOutWaitingFor(names.join(separator)),
       if (behind.isNotEmpty)
-        '${behind.join(', ')} ${behind.length == 1 ? 'needs' : 'need'} to '
-            'update the app to read together',
-      if (ahead.isNotEmpty) 'Update the app to read with ${ahead.join(', ')}',
-    ].join('. ');
+        strings.othersNeedAppUpdate(behind.join(separator), behind.length),
+      if (ahead.isNotEmpty) strings.updateAppToReadWith(ahead.join(separator)),
+    ].join(strings.sentenceSeparator);
   }
 
   void _setError(String message) {
@@ -1521,30 +1523,29 @@ class PageSyncService {
 ///
 /// The raw codes are protocol identifiers and stay on the wire.
 String describeCancelReason(String reason) {
-  const messages = <String, String>{
-    'timeout': 'Page turn timed out waiting for the other readers',
-    'out_of_sync': 'Readers were on different pages. Synced — try again',
-    'requester_left': 'Page turn cancelled: the requester left',
-    'superseded': 'Another page turn went first',
-    'turn_failed':
-        'The page did not move — this may be the start or end of the book',
-    'jump_failed': 'Could not go to that page — try again',
-    'requester_busy': 'Page turn cancelled: the page was still loading',
-    'reader_disconnected': 'Page turn paused: a reader is reconnecting',
-    'ad_break': 'Page turn paused: the ad break is not over yet',
+  final strings = appStrings;
+  final known = switch (reason) {
+    'timeout' => strings.cancelTimeout,
+    'out_of_sync' => strings.cancelOutOfSync,
+    'requester_left' => strings.cancelRequesterLeft,
+    'superseded' => strings.cancelSuperseded,
+    'turn_failed' => strings.cancelTurnFailed,
+    'jump_failed' => strings.cancelJumpFailed,
+    'requester_busy' => strings.cancelRequesterBusy,
+    'reader_disconnected' => strings.cancelReaderDisconnected,
+    'ad_break' => strings.cancelAdBreak,
+    _ => null,
   };
-
-  final known = messages[reason];
   if (known != null) return known;
 
   const declinePrefix = 'declined_by_';
   if (reason.startsWith(declinePrefix)) {
     final nickname = reason.substring(declinePrefix.length).trim();
     return nickname.isEmpty
-        ? 'A reader asked to wait on this page'
-        : '$nickname asked to wait on this page';
+        ? strings.readerAskedToWait
+        : strings.nicknameAskedToWait(nickname);
   }
-  return 'Page turn cancelled';
+  return strings.turnCancelled;
 }
 
 class _AdHold {

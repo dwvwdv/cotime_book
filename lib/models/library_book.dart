@@ -1,4 +1,5 @@
 import 'package:collection/collection.dart';
+import '../l10n/l10n.dart';
 
 /// A book in the public library: one EPUB file in the library folder, plus
 /// what the catalog says about it.
@@ -145,36 +146,36 @@ class LibraryBook {
 /// may arrive as `zh-TW` in one row and `zh-Hant` in another; both read as one
 /// name and therefore filter as one language. Unknown tags show as written.
 String describeLanguage(String tag) {
+  final strings = appStrings;
   final parts = tag.trim().replaceAll('_', '-').toLowerCase().split('-');
   final primary = parts.first;
   if (primary == 'zh') {
     if (parts.any((part) => const {'hant', 'tw', 'hk', 'mo'}.contains(part))) {
-      return 'Chinese (Traditional)';
+      return strings.languageChineseTraditional;
     }
     if (parts.any((part) => const {'hans', 'cn', 'sg'}.contains(part))) {
-      return 'Chinese (Simplified)';
+      return strings.languageChineseSimplified;
     }
-    return 'Chinese';
+    return strings.languageChinese;
   }
-  return _languageNames[primary] ?? tag.trim();
+  return switch (primary) {
+    'en' => strings.languageEnglish,
+    'ja' => strings.languageJapanese,
+    'ko' => strings.languageKorean,
+    'fr' => strings.languageFrench,
+    'de' => strings.languageGerman,
+    'es' => strings.languageSpanish,
+    'it' => strings.languageItalian,
+    'pt' => strings.languagePortuguese,
+    'ru' => strings.languageRussian,
+    'la' => strings.languageLatin,
+    'el' => strings.languageGreek,
+    'nl' => strings.languageDutch,
+    'vi' => strings.languageVietnamese,
+    'th' => strings.languageThai,
+    _ => tag.trim(),
+  };
 }
-
-const _languageNames = {
-  'en': 'English',
-  'ja': 'Japanese',
-  'ko': 'Korean',
-  'fr': 'French',
-  'de': 'German',
-  'es': 'Spanish',
-  'it': 'Italian',
-  'pt': 'Portuguese',
-  'ru': 'Russian',
-  'la': 'Latin',
-  'el': 'Greek',
-  'nl': 'Dutch',
-  'vi': 'Vietnamese',
-  'th': 'Thai',
-};
 
 /// What the library browser is narrowed to. No tags and a null language
 /// mean "all".

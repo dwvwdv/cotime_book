@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../providers/external_link_provider.dart';
 import 'paper.dart';
+import '../l10n/l10n.dart';
 
 /// An app by the same maker, shown under More Apps on the home screen.
 class MakerApp {
@@ -61,7 +62,7 @@ class MoreAppsList extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text('More Apps', style: AppTheme.title),
+        Text(context.l10n.moreApps, style: AppTheme.title),
         const SizedBox(height: 12),
         const Divider(thickness: AppTheme.heavyRuleWidth),
         Flexible(
@@ -136,14 +137,14 @@ class _MakerAppEntryState extends State<_MakerAppEntry> {
           const SizedBox(height: 14),
           OutlinedButton(
             onPressed: _opening ? null : _open,
-            child: Text(_opening ? 'Opening...' : 'Get it on Google Play'),
+            child: Text(
+              _opening ? context.l10n.opening : context.l10n.getItOnGooglePlay,
+            ),
           ),
           if (_couldNotOpen) ...[
             const SizedBox(height: 12),
-            const PaperNotice(
-              message:
-                  'Google Play could not be opened on this device. '
-                  'The link:',
+            PaperNotice(
+              message: context.l10n.googlePlayCouldNotOpen,
               icon: Icons.link_off,
             ),
             const SizedBox(height: 6),
