@@ -356,3 +356,5 @@ Codex 的 code review 規範在根目錄的 [`AGENTS.md`](./AGENTS.md)：什麼�
   它跟著 App 解析出的語系走（`resolveAppLocale`）。**不要翻譯 wire 上的東西**（broadcast 事件、
   cancel reason 代碼、Presence 欄位）、轉出來的 EPUB 內容（轉換要可重現）與排版回報的 key——
   同一房間裡的裝置語言可能不同。比對狀態不要比對顯示用的字串。
+  語言預設跟著系統；首頁右上角的切換鈕（`appLocaleProvider`）在中英之間切換，選擇存在
+  `LocalStore.appLanguage`，之後交給 `MaterialApp.locale`。只做中英兩版。

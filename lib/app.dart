@@ -11,6 +11,7 @@ import 'providers/presence_provider.dart';
 import 'providers/room_provider.dart';
 import 'router/app_router.dart';
 import 'l10n/l10n.dart';
+import 'providers/app_locale_provider.dart';
 
 class CoTimeBookApp extends ConsumerStatefulWidget {
   const CoTimeBookApp({super.key});
@@ -108,6 +109,9 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
       onGenerateTitle: (context) => context.l10n.appName,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: appLocales,
+      // The language picked on Home; null follows the device. Either way it
+      // goes through resolveAppLocale, which moves appStrings along.
+      locale: ref.watch(appLocaleProvider),
       localeListResolutionCallback: (locales, _) => resolveAppLocale(locales),
       theme: AppTheme.paperTheme,
       scrollBehavior: const PaperScrollBehavior(),

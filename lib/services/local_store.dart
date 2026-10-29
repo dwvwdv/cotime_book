@@ -16,6 +16,7 @@ class LocalStore {
   static const _readingThemeKey = 'reading_theme';
   static const _readingFontSizeKey = 'reading_font_size';
   static const _volumeKeysTurnPagesKey = 'volume_keys_turn_pages';
+  static const _appLanguageKey = 'app_language';
 
   final SharedPreferences? _prefs;
   String? _nickname;
@@ -72,6 +73,16 @@ class LocalStore {
     _volumeKeysTurnPagesKey,
     enabled,
     () => _prefs?.setBool(_volumeKeysTurnPagesKey, enabled),
+  );
+
+  /// The interface language picked on Home (a language code), or null to
+  /// follow the device.
+  String? get appLanguage => _read<String>(_appLanguageKey);
+
+  Future<void> saveAppLanguage(String languageCode) => _save(
+    _appLanguageKey,
+    languageCode,
+    () => _prefs?.setString(_appLanguageKey, languageCode),
   );
 
   /// The typed getters of [SharedPreferences] throw on a value of another

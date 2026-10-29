@@ -316,5 +316,7 @@
   "waitingForHolder": "等待有這本書的人上線...",
   "askingForBook": "正在向 {nickname} 要書...",
   "anotherReader": "另一位讀者",
-  "aReader": "一位讀者"
+  "aReader": "一位讀者",
+  "switchLanguage": "English",
+  "switchLanguageTooltip": "切換成英文"
 }

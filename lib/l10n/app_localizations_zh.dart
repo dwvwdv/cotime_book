@@ -1125,4 +1125,10 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get aReader => '一位讀者';
+
+  @override
+  String get switchLanguage => 'English';
+
+  @override
+  String get switchLanguageTooltip => '切換成英文';
 }

@@ -1199,4 +1199,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get aReader => 'A reader';
+
+  @override
+  String get switchLanguage => '中文';
+
+  @override
+  String get switchLanguageTooltip => 'Switch to Chinese';
 }

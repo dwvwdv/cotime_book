@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cotime_book/l10n/l10n.dart';
+import 'package:cotime_book/providers/app_locale_provider.dart';
+import 'package:cotime_book/services/local_store.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -89,6 +91,33 @@ void main() {
       expect(appStrings.reconnectingToRoom, '正在重新連上房間...');
       resolveAppLocale(const [Locale('en', 'US')]);
       expect(appStrings.reconnectingToRoom, 'Reconnecting to the room...');
+    });
+  });
+
+  group('the language picked on Home', () {
+    test('follows the device until one is picked', () {
+      expect(AppLocaleNotifier(LocalStore()).state, isNull);
+    });
+
+    // A language dropped from the app, or a hand-edited file, must not leave
+    // a locale MaterialApp has no strings for.
+    test('ignores a saved language the app does not have', () async {
+      final store = LocalStore();
+      await store.saveAppLanguage('fr');
+      expect(AppLocaleNotifier(store).state, isNull);
+    });
+
+    test('toggles from the language on screen and saves it', () {
+      final store = LocalStore();
+      final notifier = AppLocaleNotifier(store);
+      addTearDown(notifier.dispose);
+
+      notifier.toggle(const Locale('en', 'US'));
+      expect(notifier.state?.languageCode, 'zh');
+      expect(store.appLanguage, 'zh');
+      notifier.toggle(const Locale('zh'));
+      expect(notifier.state?.languageCode, 'en');
+      expect(store.appLanguage, 'en');
     });
   });
 }

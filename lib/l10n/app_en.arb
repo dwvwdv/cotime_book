@@ -866,5 +866,10 @@
     }
   },
   "anotherReader": "another reader",
-  "aReader": "A reader"
+  "aReader": "A reader",
+  "switchLanguage": "中文",
+  "@switchLanguage": {
+    "description": "The language toggle on Home: names the other language, in that language."
+  },
+  "switchLanguageTooltip": "Switch to Chinese"
 }

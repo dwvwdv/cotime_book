@@ -2,6 +2,7 @@ import 'package:cotime_book/config/theme.dart';
 import 'package:cotime_book/l10n/l10n.dart';
 import 'package:cotime_book/models/recent_room.dart';
 import 'package:cotime_book/providers/announcement_provider.dart';
+import 'package:cotime_book/providers/app_locale_provider.dart';
 import 'package:cotime_book/providers/auth_provider.dart';
 import 'package:cotime_book/providers/external_link_provider.dart';
 import 'package:cotime_book/providers/local_store_provider.dart';
@@ -9,6 +10,7 @@ import 'package:cotime_book/providers/room_provider.dart';
 import 'package:cotime_book/screens/home_screen.dart';
 import 'package:cotime_book/services/local_store.dart';
 import 'package:cotime_book/services/room_service.dart';
+import 'package:cotime_book/widgets/masthead.dart';
 import 'package:cotime_book/widgets/recent_rooms_list.dart';
 import 'package:cotime_book/widgets/room_code_input.dart';
 import 'package:flutter/material.dart';
@@ -83,14 +85,17 @@ void main() {
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
-        child: MaterialApp.router(
-          // The app's own buttons, whose padding decides what fits a row.
-          theme: AppTheme.paperTheme,
-          routerConfig: router,
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: appLocales,
-          localeListResolutionCallback: (locales, _) =>
-              resolveAppLocale(locales),
+        child: Consumer(
+          builder: (context, ref, _) => MaterialApp.router(
+            // The app's own buttons, whose padding decides what fits a row.
+            theme: AppTheme.paperTheme,
+            routerConfig: router,
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: appLocales,
+            locale: ref.watch(appLocaleProvider),
+            localeListResolutionCallback: (locales, _) =>
+                resolveAppLocale(locales),
+          ),
         ),
       ),
     );
@@ -212,6 +217,64 @@ void main() {
     );
   });
 
+  group('the language toggle', () {
+    // appStrings is global: later tests in this file read English again.
+    tearDown(() => resolveAppLocale(const [Locale('en', 'US')]));
+
+    testWidgets('switches the interface at once, both ways', (tester) async {
+      await pumpHome(tester);
+      expect(find.text('Create Room'), findsOneWidget);
+
+      await tester.tap(find.text('中文'));
+      await tester.pumpAndSettle();
+      expect(find.text('建立房間'), findsOneWidget);
+      expect(find.text('Create Room'), findsNothing);
+      // Messages made outside the widget tree follow it too.
+      expect(appStrings.createRoom, '建立房間');
+
+      await tester.tap(find.text('English'));
+      await tester.pumpAndSettle();
+      expect(find.text('Create Room'), findsOneWidget);
+      expect(appStrings.createRoom, 'Create Room');
+    });
+
+    testWidgets('is remembered the next time the app opens', (tester) async {
+      await pumpHome(tester);
+      await tester.tap(find.text('中文'));
+      await tester.pumpAndSettle();
+      expect(store.appLanguage, 'zh');
+
+      // A new app on the same preferences, on the same English device.
+      await tester.pumpWidget(const SizedBox());
+      store = LocalStore(await SharedPreferences.getInstance());
+      await pumpHome(tester);
+      expect(find.text('建立房間'), findsOneWidget);
+    });
+
+    testWidgets('sits clear of the masthead in either language', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await pumpHome(tester);
+
+      for (final label in ['中文', 'English']) {
+        final toggle = tester.getRect(
+          find.ancestor(
+            of: find.text(label),
+            matching: find.byWidgetPredicate((widget) => widget is TextButton),
+          ),
+        );
+        final masthead = tester.getRect(find.byType(Masthead));
+        expect(toggle.bottom, lessThanOrEqualTo(masthead.top), reason: label);
+        expect(toggle.right, lessThanOrEqualTo(320), reason: label);
+        await tester.tap(find.text(label));
+        await tester.pumpAndSettle();
+      }
+    });
+  });
+
   group('on a Chinese device', () {
     setUp(() {
       final dispatcher =
@@ -235,6 +298,14 @@ void main() {
       // Text made outside the widget tree (provider state, page sync
       // messages) follows the same language.
       expect(appStrings.createRoom, '建立房間');
+    });
+
+    testWidgets('the toggle switches to English', (tester) async {
+      await pumpHome(tester);
+      await tester.tap(find.text('English'));
+      await tester.pumpAndSettle();
+      expect(find.text('Create Room'), findsOneWidget);
+      expect(store.appLanguage, 'en');
     });
 
     testWidgets('on a small phone the bottom bar stays on one line', (

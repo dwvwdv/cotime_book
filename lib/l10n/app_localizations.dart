@@ -1999,6 +1999,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'A reader'**
   String get aReader;
+
+  /// The language toggle on Home: names the other language, in that language.
+  ///
+  /// In en, this message translates to:
+  /// **'中文'**
+  String get switchLanguage;
+
+  /// No description provided for @switchLanguageTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch to Chinese'**
+  String get switchLanguageTooltip;
 }
 
 class _AppLocalizationsDelegate
