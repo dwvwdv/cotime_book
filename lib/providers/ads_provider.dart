@@ -15,6 +15,9 @@ final adConsentProvider = Provider<AdConsent?>(
 );
 
 InterstitialAds _interstitialAds(Ref ref, String unitId) {
+  // Checked here too, not only through the consent: a test that gives
+  // the consent a fake must not start the real SDK on a desktop host.
+  if (!platformHasInterstitialAds) return const NoInterstitialAds();
   final consent = ref.read(adConsentProvider);
   if (consent == null) return const NoInterstitialAds();
   final ads = AdMobInterstitialAds.forPlatform(unitId);

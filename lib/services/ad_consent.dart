@@ -33,8 +33,9 @@ abstract class ConsentPlatform {
 /// nothing is shown.
 ///
 /// Like the ads themselves, consent never stands in the way: a request or a
-/// message that fails is taken as no ads, never as an error, and the next
-/// start asks again.
+/// message that fails is taken as no ads, never as an error, and is asked
+/// again later in the session — e-readers keep the app alive for days, so
+/// waiting for the next start would mean no ads for days.
 class AdConsent {
   final ConsentPlatform _platform;
 
@@ -42,9 +43,17 @@ class AdConsent {
   /// this session. The answer given before still counts.
   final Duration updateTimeout;
 
-  AdConsent(this._platform, {this.updateTimeout = const Duration(seconds: 15)});
+  /// After an answer that allows no ads, how long before [gather] asks again.
+  final Duration retryAfter;
+
+  AdConsent(
+    this._platform, {
+    this.updateTimeout = const Duration(seconds: 15),
+    this.retryAfter = const Duration(minutes: 1),
+  });
 
   Future<bool>? _gathered;
+  DateTime? _deniedAt;
   final ValueNotifier<bool> _privacyOptionsRequired = ValueNotifier(false);
 
   /// The user has to be able to change their answer: offer
@@ -54,8 +63,31 @@ class AdConsent {
 
   /// Brings the user's answer up to date, showing Google's message when it
   /// is needed. True when ads may be requested. Asked once per start, as
-  /// Google requires; every caller shares that one answer.
-  Future<bool> gather() => _gathered ??= _gather();
+  /// Google requires, and every caller shares that answer — unless it
+  /// allowed no ads (offline, the message failed to show), which is asked
+  /// again after [retryAfter].
+  Future<bool> gather() {
+    final deniedAt = _deniedAt;
+    if (deniedAt != null && DateTime.now().difference(deniedAt) >= retryAfter) {
+      _deniedAt = null;
+      _gathered = null;
+    }
+    return _gathered ??= _gather().then((allowed) {
+      if (!allowed) _deniedAt = DateTime.now();
+      return allowed;
+    });
+  }
+
+  /// Whether ads may be requested now. Google asks for it before every
+  /// request: the user may have changed their answer since [gather].
+  Future<bool> canRequestAds() async {
+    try {
+      return await _platform.canRequestAds();
+    } catch (error) {
+      debugPrint('Ad consent unknown: $error');
+      return false;
+    }
+  }
 
   Future<bool> _gather() async {
     var updated = false;
@@ -74,12 +106,7 @@ class AdConsent {
       }
     }
     await _readPrivacyOptionsRequired();
-    try {
-      return await _platform.canRequestAds();
-    } catch (error) {
-      debugPrint('Ad consent unknown: $error');
-      return false;
-    }
+    return canRequestAds();
   }
 
   /// Lets the user change their answer. Never throws.
@@ -121,22 +148,8 @@ class GoogleConsentPlatform implements ConsentPlatform {
   }
 
   @override
-  Future<void> showFormIfRequired() {
-    final done = Completer<void>();
-    unawaited(
-      ConsentForm.loadAndShowConsentFormIfRequired((error) {
-        if (done.isCompleted) return;
-        if (error == null) {
-          done.complete();
-        } else {
-          done.completeError(_FormFailure(error));
-        }
-      }).catchError((Object error) {
-        if (!done.isCompleted) done.completeError(error);
-      }),
-    );
-    return done.future;
-  }
+  Future<void> showFormIfRequired() =>
+      _form(ConsentForm.loadAndShowConsentFormIfRequired);
 
   @override
   Future<bool> canRequestAds() => ConsentInformation.instance.canRequestAds();
@@ -147,21 +160,17 @@ class GoogleConsentPlatform implements ConsentPlatform {
       PrivacyOptionsRequirementStatus.required;
 
   @override
-  Future<void> showPrivacyOptionsForm() {
-    final done = Completer<void>();
-    unawaited(
-      ConsentForm.showPrivacyOptionsForm((error) {
-        if (done.isCompleted) return;
-        if (error == null) {
-          done.complete();
-        } else {
-          done.completeError(_FormFailure(error));
-        }
-      }).catchError((Object error) {
-        if (!done.isCompleted) done.completeError(error);
-      }),
-    );
-    return done.future;
+  Future<void> showPrivacyOptionsForm() =>
+      _form(ConsentForm.showPrivacyOptionsForm);
+
+  /// Both forms report through the listener, which has run by the time the
+  /// returned future completes.
+  static Future<void> _form(
+    Future<void> Function(OnConsentFormDismissedListener) show,
+  ) async {
+    FormError? failure;
+    await show((error) => failure = error);
+    if (failure != null) throw _FormFailure(failure!);
   }
 }
 
