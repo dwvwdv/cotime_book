@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/transfer_state.dart';
+import '../l10n/l10n.dart';
 
 class TransferProgressWidget extends StatelessWidget {
   /// Progress is drawn in this many whole steps.
@@ -25,7 +26,8 @@ class TransferProgressWidget extends StatelessWidget {
 
     final filled = (transferState.progress.clamp(0.0, 1.0) * segments).floor();
     final showProgress = transferState.status == TransferStatus.transferring;
-    final detail = _detailText;
+    final l10n = context.l10n;
+    final detail = _detailText(l10n);
 
     return Container(
       width: double.infinity,
@@ -45,7 +47,7 @@ class TransferProgressWidget extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  _statusText,
+                  _statusText(l10n),
                   style: const TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 16,
@@ -105,28 +107,28 @@ class TransferProgressWidget extends StatelessWidget {
     }
   }
 
-  String get _statusText {
+  String _statusText(AppLocalizations l10n) {
     switch (transferState.status) {
       case TransferStatus.idle:
         return '';
       case TransferStatus.waiting:
-        return 'Waiting for the book';
+        return l10n.waitingForTheBook;
       case TransferStatus.transferring:
-        return transferState.isSending ? 'Sending book...' : 'Receiving book...';
+        return transferState.isSending ? l10n.sendingBook : l10n.receivingBook;
       case TransferStatus.completed:
-        return transferState.isSending ? 'Book sent' : 'Book received';
+        return transferState.isSending ? l10n.bookSent : l10n.bookReceived;
     }
   }
 
   /// The second line. A receive never fails for good — it keeps asking — so
   /// this says what it is doing rather than reporting an error.
-  String? get _detailText {
+  String? _detailText(AppLocalizations l10n) {
     final message = transferState.message;
     if (message != null) return message;
     if (transferState.status == TransferStatus.completed) {
       return transferState.isSending
-          ? 'Anyone who missed part of it will ask for the rest.'
-          : 'Ready to read.';
+          ? l10n.missedPartsWillAsk
+          : l10n.readyToReadSentence;
     }
     return null;
   }

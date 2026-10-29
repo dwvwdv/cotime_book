@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../config/app_constants.dart';
 import '../config/theme.dart';
+import '../l10n/l10n.dart';
 
 class RoomCodeInput extends StatelessWidget {
   final TextEditingController controller;
@@ -40,7 +41,7 @@ class RoomCodeInput extends StatelessWidget {
         UpperCaseTextFormatter(),
       ],
       decoration: InputDecoration(
-        labelText: 'Room code',
+        labelText: context.l10n.roomCode,
         hintText: 'ABC234',
         hintStyle: const TextStyle(
           color: AppTheme.inkFaint,

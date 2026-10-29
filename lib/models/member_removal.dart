@@ -1,4 +1,5 @@
 import 'dart:math';
+import '../l10n/l10n.dart';
 
 /// How a vote to remove a member came out (`vote_remove_member`).
 enum MemberRemovalStatus {
@@ -37,10 +38,6 @@ class MemberRemovalVote {
   }
 
   int get remaining => max(0, needed - votes);
-
-  /// "1 more vote", "2 more votes".
-  static String moreVotes(int remaining) =>
-      '$remaining more ${remaining == 1 ? 'vote' : 'votes'}';
 
   static int _int(Object? value) => switch (value) {
     final int number => number,
@@ -105,5 +102,7 @@ class MemberRemovalProposal {
   }
 
   static String _name(Object? value) =>
-      value is String && value.trim().isNotEmpty ? value.trim() : 'A reader';
+      value is String && value.trim().isNotEmpty
+      ? value.trim()
+      : appStrings.aReader;
 }

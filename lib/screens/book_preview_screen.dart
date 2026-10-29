@@ -14,6 +14,7 @@ import '../services/shared_page_renderer.dart';
 import '../widgets/book_contents.dart';
 import '../widgets/page_turn_input.dart';
 import '../widgets/paper.dart';
+import '../l10n/l10n.dart';
 
 /// Reads a book on this device alone, with no room and no one to agree with
 /// on a turn: the TXT to EPUB tool's check of what it made.
@@ -234,7 +235,7 @@ class _BookPreviewScreenState extends ConsumerState<BookPreviewScreen> {
                 child: Row(
                   children: [
                     IconButton(
-                      tooltip: 'Close',
+                      tooltip: context.l10n.close,
                       color: ink,
                       onPressed: () => Navigator.of(context).maybePop(),
                       icon: const Icon(Icons.close),
@@ -255,7 +256,7 @@ class _BookPreviewScreenState extends ConsumerState<BookPreviewScreen> {
                       onPressed: _chaptersLoaded
                           ? () => _showContents(prefs)
                           : null,
-                      child: const Text('Contents'),
+                      child: Text(context.l10n.contents),
                     ),
                   ],
                 ),
@@ -282,7 +283,7 @@ class _BookPreviewScreenState extends ConsumerState<BookPreviewScreen> {
                               color: prefs.backgroundColor,
                               child: Center(
                                 child: Text(
-                                  'Loading...',
+                                  context.l10n.loading,
                                   style: AppTheme.body.copyWith(color: ink),
                                 ),
                               ),
@@ -324,11 +325,11 @@ class _BookPreviewScreenState extends ConsumerState<BookPreviewScreen> {
                       onPressed: _ready
                           ? () => _turn(PageTurnDirection.previous)
                           : null,
-                      child: const Text('Previous'),
+                      child: Text(context.l10n.previous),
                     ),
                     Expanded(
                       child: Text(
-                        'Only you see this · ${(_progress * 100).round()}%',
+                        context.l10n.onlyYouSeeThis((_progress * 100).round()),
                         textAlign: TextAlign.center,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -340,7 +341,7 @@ class _BookPreviewScreenState extends ConsumerState<BookPreviewScreen> {
                       onPressed: _ready
                           ? () => _turn(PageTurnDirection.next)
                           : null,
-                      child: const Text('Next'),
+                      child: Text(context.l10n.next),
                     ),
                   ],
                 ),

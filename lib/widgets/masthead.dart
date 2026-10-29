@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../config/app_constants.dart';
 import '../config/theme.dart';
+import '../l10n/l10n.dart';
 
 /// The app's name as the home screen opens with it: 頁間 as a seal beside the
 /// English name, the way a book's title page carries the press's mark.
@@ -16,15 +17,15 @@ class Masthead extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Row(
+    return Row(
       children: [
-        NameSeal(),
-        SizedBox(width: 18),
+        const NameSeal(),
+        const SizedBox(width: 18),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              const Text(
                 AppConstants.appNameEnglish,
                 style: TextStyle(
                   fontFamily: AppTheme.serif,
@@ -34,10 +35,10 @@ class Masthead extends StatelessWidget {
                   color: AppTheme.ink,
                 ),
               ),
-              SizedBox(height: 6),
+              const SizedBox(height: 6),
               Text(
-                'Read together, anywhere',
-                style: TextStyle(
+                context.l10n.mastheadTagline,
+                style: const TextStyle(
                   fontFamily: AppTheme.serif,
                   fontStyle: FontStyle.italic,
                   fontSize: 17,

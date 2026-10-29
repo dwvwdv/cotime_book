@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'config/app_constants.dart';
 import 'config/supabase_config.dart';
 import 'config/theme.dart';
 import 'providers/ads_provider.dart';
@@ -11,6 +10,7 @@ import 'providers/auth_provider.dart';
 import 'providers/presence_provider.dart';
 import 'providers/room_provider.dart';
 import 'router/app_router.dart';
+import 'l10n/l10n.dart';
 
 class CoTimeBookApp extends ConsumerStatefulWidget {
   const CoTimeBookApp({super.key});
@@ -105,7 +105,10 @@ class _CoTimeBookAppState extends ConsumerState<CoTimeBookApp>
       },
     );
     return MaterialApp.router(
-      title: AppConstants.appName,
+      onGenerateTitle: (context) => context.l10n.appName,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: appLocales,
+      localeListResolutionCallback: (locales, _) => resolveAppLocale(locales),
       theme: AppTheme.paperTheme,
       scrollBehavior: const PaperScrollBehavior(),
       routerConfig: AppRouter.router,

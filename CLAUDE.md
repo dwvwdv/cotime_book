@@ -348,3 +348,11 @@ Codex 的 code review 規範在根目錄的 [`AGENTS.md`](./AGENTS.md)：什麼�
   （`_roomSessionGeneration`、`_membersFetchGeneration`、`_lifecycleGeneration`、
   `_receiveGeneration`）。新增非同步路徑時沿用這個模式。
 - PR 的 title、body、review 回覆一律用繁體中文；程式碼、命令與 API 名稱保留原文。
+- **介面有英文與繁體中文兩種語言**（Flutter gen_l10n，設定在 `l10n.yaml`）。字串放在
+  `lib/l10n/app_en.arb`（範本）與 `app_zh.arb`，新增字串時兩份都要寫，`test/l10n_test.dart`
+  會擋下中文缺的 key 或佔位符。`flutter pub get` 會重新產生 `lib/l10n/app_localizations*.dart`，
+  產生出來的檔案有進版控，改了 ARB 要一起提交。widget 裡用 `context.l10n`；在 widget 樹之外組出、
+  之後才顯示的文字（provider 的 state、`PageSyncService` 的錯誤、`LobbyReadiness`）用 `appStrings`，
+  它跟著 App 解析出的語系走（`resolveAppLocale`）。**不要翻譯 wire 上的東西**（broadcast 事件、
+  cancel reason 代碼、Presence 欄位）、轉出來的 EPUB 內容（轉換要可重現）與排版回報的 key——
+  同一房間裡的裝置語言可能不同。比對狀態不要比對顯示用的字串。

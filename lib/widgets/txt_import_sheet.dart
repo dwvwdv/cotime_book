@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../services/txt_book.dart';
 import 'paper.dart';
+import '../l10n/l10n.dart';
 
 typedef TxtReanalyze =
     Future<TxtFileAnalysis> Function(TxtSource source, TxtEncoding encoding);
@@ -142,6 +143,7 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
       (n, row) => n + row.analysis.chapterCount,
     );
     final several = _rows.length > 1;
+    final l10n = context.l10n;
     // All of it scrolls, the buttons included: with the keyboard up for the
     // title, a short screen has less room than the fields alone take.
     return SingleChildScrollView(
@@ -149,14 +151,12 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SectionHeader(label: 'Make a book from TXT'),
+          SectionHeader(label: l10n.makeBookFromTxt),
           const SizedBox(height: 8),
           Text(
             several
-                ? 'These ${_rows.length} files become one EPUB, in this '
-                      'order. You can read it before saving it.'
-                : 'This file becomes an EPUB. You can read it before saving '
-                      'it.',
+                ? l10n.txtFilesBecomeOneEpub(_rows.length)
+                : l10n.txtFileBecomesEpub,
             style: AppTheme.caption,
           ),
           const SizedBox(height: 12),
@@ -164,23 +164,23 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
             key: const ValueKey('txt-title'),
             controller: _title,
             onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(labelText: 'Title'),
+            decoration: InputDecoration(labelText: l10n.title),
           ),
           const SizedBox(height: 8),
           TextField(
             key: const ValueKey('txt-author'),
             controller: _author,
-            decoration: const InputDecoration(labelText: 'Author (optional)'),
+            decoration: InputDecoration(labelText: l10n.authorOptional),
           ),
           const SizedBox(height: 16),
           SectionHeader(
-            label: several ? 'Files' : 'File',
+            label: several ? l10n.files : l10n.file,
             trailing: Text(
               !_findChapters
-                  ? 'Split by length'
+                  ? l10n.splitByLength
                   : chapters == 0
-                  ? 'No chapters found'
-                  : _count(chapters, 'chapter'),
+                  ? l10n.noChaptersFound
+                  : l10n.chapterCount(chapters),
               style: AppTheme.caption,
             ),
           ),
@@ -201,13 +201,12 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
             SwitchListTile(
               key: const ValueKey('txt-find-chapters'),
               contentPadding: EdgeInsets.zero,
-              title: const Text(
-                'Split into chapters',
-                style: TextStyle(fontWeight: FontWeight.w700),
+              title: Text(
+                l10n.splitIntoChapters,
+                style: const TextStyle(fontWeight: FontWeight.w700),
               ),
-              subtitle: const Text(
-                'Turn off if lines that are not chapter titles were taken '
-                'for them. The book is then split by length.',
+              subtitle: Text(
+                l10n.splitIntoChaptersHint,
                 style: AppTheme.caption,
               ),
               value: _findChapters,
@@ -219,7 +218,7 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
               Expanded(
                 child: OutlinedButton(
                   onPressed: widget.onCancel,
-                  child: const Text('Cancel'),
+                  child: Text(l10n.cancel),
                 ),
               ),
               const SizedBox(width: 12),
@@ -228,8 +227,8 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
                   onPressed: _canConvert ? _confirm : null,
                   child: Text(
                     _rows.any((row) => row.isReading)
-                        ? 'Reading...'
-                        : 'Make EPUB',
+                        ? l10n.reading
+                        : l10n.makeEpub,
                   ),
                 ),
               ),
@@ -240,8 +239,6 @@ class _TxtImportSheetState extends State<TxtImportSheet> {
     );
   }
 }
-
-String _count(int n, String noun) => n == 1 ? '1 $noun' : '$n ${noun}s';
 
 class _FileTile extends StatelessWidget {
   final int index;
@@ -263,15 +260,18 @@ class _FileTile extends StatelessWidget {
     required this.onDown,
   });
 
-  String get _summary {
+  String _summary(AppLocalizations l10n) {
     final analysis = row.analysis;
-    if (row.isReading) return 'Reading...';
-    if (analysis.isEmpty) return 'No text in this encoding; it will be skipped';
-    final characters = '${_grouped(analysis.characterCount)} characters';
-    if (!findChapters) return 'Split by length · $characters';
+    if (row.isReading) return l10n.reading;
+    if (analysis.isEmpty) return l10n.noTextInEncoding;
+    final characters = l10n.characterCount(_grouped(analysis.characterCount));
+    if (!findChapters) return l10n.splitByLengthWithCharacters(characters);
     return analysis.chapterCount == 0
-        ? 'No chapter headings, split by length · $characters'
-        : '${_count(analysis.chapterCount, 'chapter')} · $characters';
+        ? l10n.noChapterHeadingsWithCharacters(characters)
+        : l10n.chaptersWithCharacters(
+            l10n.chapterCount(analysis.chapterCount),
+            characters,
+          );
   }
 
   static String _grouped(int n) =>
@@ -304,7 +304,7 @@ class _FileTile extends StatelessWidget {
                   style: AppTheme.body.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 2),
-                Text(_summary, style: AppTheme.caption),
+                Text(_summary(context.l10n), style: AppTheme.caption),
                 const SizedBox(height: 6),
                 // Where a wrong encoding shows: as nonsense.
                 Text(
@@ -315,7 +315,7 @@ class _FileTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 PopupMenuButton<TxtEncoding>(
-                  tooltip: 'Text encoding',
+                  tooltip: context.l10n.textEncoding,
                   popUpAnimationStyle: AnimationStyle.noAnimation,
                   onSelected: onEncoding,
                   itemBuilder: (_) => [
@@ -342,7 +342,7 @@ class _FileTile extends StatelessWidget {
                       ),
                     ),
                     child: Text(
-                      'Encoding: ${row.analysis.encoding.label}',
+                      context.l10n.encodingLabel(row.analysis.encoding.label),
                       style: AppTheme.caption.copyWith(color: AppTheme.ink),
                     ),
                   ),
@@ -354,12 +354,12 @@ class _FileTile extends StatelessWidget {
             Column(
               children: [
                 IconButton(
-                  tooltip: 'Move up',
+                  tooltip: context.l10n.moveUp,
                   onPressed: onUp,
                   icon: const Icon(Icons.arrow_upward),
                 ),
                 IconButton(
-                  tooltip: 'Move down',
+                  tooltip: context.l10n.moveDown,
                   onPressed: onDown,
                   icon: const Icon(Icons.arrow_downward),
                 ),

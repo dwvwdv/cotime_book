@@ -138,6 +138,7 @@ void main() {
     expect(adsShown, 1);
     expect(exported, isEmpty, reason: 'the ad is still on screen');
     expect(tool.state.busy, 'Saving...');
+    expect(tool.state.isSaving, isTrue);
 
     ad.complete();
     await saving;

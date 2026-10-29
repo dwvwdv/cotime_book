@@ -17,6 +17,7 @@ import '../services/supabase_service.dart';
 import '../services/webrtc_peer_wire.dart';
 import 'presence_provider.dart';
 import 'room_provider.dart';
+import '../l10n/l10n.dart';
 
 final epubStorageProvider = Provider<EpubStorageService>((ref) {
   return EpubStorageService();
@@ -50,9 +51,7 @@ final bookPeerLinkFactoryProvider = Provider<BookPeerLinkFactory?>((ref) {
 /// Only EPUB books are shared; see [BookNotifier.pickAndShareBook].
 bool isEpubFileName(String name) => name.toLowerCase().endsWith('.epub');
 
-const notEpubMessage =
-    'Only EPUB books can be shared. Make a TXT file into one with '
-    '"TXT to EPUB" on the home screen first.';
+String get notEpubMessage => appStrings.notEpub;
 
 String formatMegabytes(int bytes) =>
     '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
@@ -312,7 +311,7 @@ class BookNotifier extends StateNotifier<BookState> {
       _failShare(
         generation,
         shareGeneration,
-        'Could not get "${book.title}" from the library: $e',
+        appStrings.libraryDownloadFailed(book.title, '$e'),
       );
       return;
     }
@@ -355,11 +354,13 @@ class BookNotifier extends StateNotifier<BookState> {
     String? libraryPath,
   }) async {
     if (!_isCurrentShare(generation, shareGeneration)) return;
-    if (bytes.isEmpty) throw Exception('The book file is empty');
+    if (bytes.isEmpty) throw Exception(appStrings.bookFileEmpty);
     if (bytes.length > AppConstants.maxFileSize) {
       throw Exception(
-        'This book is ${formatMegabytes(bytes.length)}. Books can be at most '
-        '${formatMegabytes(AppConstants.maxFileSize)}.',
+        appStrings.bookTooLarge(
+          formatMegabytes(bytes.length),
+          formatMegabytes(AppConstants.maxFileSize),
+        ),
       );
     }
 

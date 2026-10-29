@@ -1,4 +1,5 @@
 import 'page_info.dart';
+import '../l10n/l10n.dart';
 
 enum PageTurnDirection {
   next,
@@ -290,7 +291,7 @@ class PageTurnRequest {
       requestedByUserId: requestedByUserId,
       requestedByNickname: json['nickname'] is String
           ? json['nickname'] as String
-          : 'Unknown',
+          : appStrings.unknownMember,
       direction: direction,
       fromEpoch: fromEpoch,
       fromSeq: fromSeq,

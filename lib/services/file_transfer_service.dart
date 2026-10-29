@@ -9,6 +9,7 @@ import '../config/app_constants.dart';
 import '../models/transfer_state.dart';
 import 'presence_merge.dart';
 import 'realtime_service.dart';
+import '../l10n/l10n.dart';
 
 /// The Realtime surface the transfer needs. Injectable for tests.
 abstract interface class BookTransferTransport {
@@ -309,7 +310,7 @@ class FileTransferService {
       TransferState(
         status: TransferStatus.waiting,
         bookHash: hash,
-        message: 'Waiting for the book...',
+        message: appStrings.waitingForTheBookEllipsis,
       ),
     );
     // Give the sharer's push a moment before asking for anything.
@@ -432,7 +433,7 @@ class FileTransferService {
         TransferState(
           status: TransferStatus.waiting,
           bookHash: hash,
-          message: 'The book arrived damaged. Asking again...',
+          message: appStrings.bookArrivedDamaged,
         ),
       );
       _scheduleRepair(Duration.zero);
@@ -446,7 +447,7 @@ class FileTransferService {
         TransferState(
           status: TransferStatus.waiting,
           bookHash: hash,
-          message: 'Downloading the book from the library...',
+          message: appStrings.downloadingFromLibrary,
         ),
       );
     }
@@ -555,7 +556,7 @@ class FileTransferService {
         TransferState(
           status: TransferStatus.waiting,
           bookHash: hash,
-          message: 'Getting the book from ${_nickname(holder)}...',
+          message: appStrings.gettingBookFrom(_nickname(holder)),
         ),
       );
     }
@@ -645,10 +646,7 @@ class FileTransferService {
     if (holders.isEmpty) {
       _waitingForHolder = true;
       _updateState(
-        _receivingState(
-          wanted,
-          message: 'Waiting for someone with the book to come online...',
-        ),
+        _receivingState(wanted, message: appStrings.waitingForHolder),
       );
       // Presence wakes this early when a holder appears.
       _scheduleRepair(_stallTimeout);
@@ -677,7 +675,7 @@ class FileTransferService {
       _receivingState(
         wanted,
         message: _receivedChunks.isEmpty
-            ? 'Asking ${_nickname(holder)} for the book...'
+            ? appStrings.askingForBook(_nickname(holder))
             : null,
       ),
     );
@@ -884,7 +882,7 @@ class FileTransferService {
     final nickname = user['nickname'];
     return nickname is String && nickname.trim().isNotEmpty
         ? nickname.trim()
-        : 'another reader';
+        : appStrings.anotherReader;
   }
 
   int _chunkCount(int totalBytes) =>

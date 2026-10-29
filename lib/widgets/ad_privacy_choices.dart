@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/theme.dart';
 import '../providers/ads_provider.dart';
 import 'paper.dart';
+import '../l10n/l10n.dart';
 
 /// Where the consent asked for on start can be changed (GH-58). Google
 /// requires it wherever the answer is needed — the EEA, the UK and
@@ -30,20 +31,17 @@ class AdPrivacyChoices extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const SizedBox(height: 24),
-            const SectionHeader(label: 'Ads'),
+            SectionHeader(label: context.l10n.ads),
             const SizedBox(height: 12),
             OutlinedButton(
               onPressed: () {
                 onOpen?.call();
                 unawaited(consent.showPrivacyOptions());
               },
-              child: const Text('Ad Privacy Choices'),
+              child: Text(context.l10n.adPrivacyChoices),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Change what you agreed to for the ads in this app.',
-              style: AppTheme.caption,
-            ),
+            Text(context.l10n.adPrivacyChoicesHint, style: AppTheme.caption),
           ],
         );
       },

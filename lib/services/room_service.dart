@@ -4,11 +4,15 @@ import '../models/member_removal.dart';
 import '../models/room.dart';
 import '../models/room_member.dart';
 import 'supabase_service.dart';
+import '../l10n/l10n.dart';
 
 class RoomSessionRevokedException implements Exception {
-  final String message;
+  final String? _message;
 
-  const RoomSessionRevokedException(this.message);
+  /// Without a [message], says the membership is inactive or has expired.
+  const RoomSessionRevokedException([this._message]);
+
+  String get message => _message ?? appStrings.membershipInactive;
 
   @override
   String toString() => message;
@@ -20,7 +24,7 @@ class RoomSessionChangedException implements Exception {
   const RoomSessionChangedException(this.roomId);
 
   @override
-  String toString() => 'Room state changed before the update could finish';
+  String toString() => appStrings.roomStateChanged;
 }
 
 /// The code no longer names a room anyone can enter: it was never issued, or
@@ -31,7 +35,7 @@ class RoomNotFoundException implements Exception {
   const RoomNotFoundException(this.code);
 
   @override
-  String toString() => 'Room $code is no longer available.';
+  String toString() => appStrings.roomNoLongerAvailableCode(code);
 }
 
 class RoomRevisionConflictException implements Exception {
@@ -40,7 +44,7 @@ class RoomRevisionConflictException implements Exception {
   const RoomRevisionConflictException(this.currentRoom);
 
   @override
-  String toString() => 'Room state was updated by another client';
+  String toString() => appStrings.roomUpdatedByAnotherClient;
 }
 
 /// The `rooms` columns written when [bookHash] becomes the room's book.
@@ -64,7 +68,7 @@ class RoomService {
 
   Future<Room> createRoom({required String nickname}) async {
     if (SupabaseService.currentUserId == null) {
-      throw Exception('Not authenticated');
+      throw Exception(appStrings.notAuthenticated);
     }
 
     final roomData = await _database.rpc('create_room', params: {
@@ -80,7 +84,7 @@ class RoomService {
     required String nickname,
   }) async {
     if (SupabaseService.currentUserId == null) {
-      throw Exception('Not authenticated');
+      throw Exception(appStrings.notAuthenticated);
     }
 
     try {
@@ -134,15 +138,11 @@ class RoomService {
           .maybeSingle();
 
       if (updatedMember == null) {
-        throw const RoomSessionRevokedException(
-          'This room membership is inactive or has expired.',
-        );
+        throw const RoomSessionRevokedException();
       }
     } on PostgrestException catch (error) {
       if (error.code == '42501' || error.code == 'P0002') {
-        throw const RoomSessionRevokedException(
-          'This room membership is inactive or has expired.',
-        );
+        throw const RoomSessionRevokedException();
       }
       rethrow;
     }
@@ -177,9 +177,7 @@ class RoomService {
       return Room.fromJson(roomData);
     } on PostgrestException catch (error) {
       if (error.code == '42501' || error.code == 'P0002') {
-        throw const RoomSessionRevokedException(
-          'This room membership is inactive or has expired.',
-        );
+        throw const RoomSessionRevokedException();
       }
       rethrow;
     }
@@ -204,9 +202,7 @@ class RoomService {
       return Room.fromJson(roomData);
     } on PostgrestException catch (error) {
       if (error.code == '42501' || error.code == 'P0002') {
-        throw const RoomSessionRevokedException(
-          'This room membership is inactive or has expired.',
-        );
+        throw const RoomSessionRevokedException();
       }
       rethrow;
     }
@@ -230,9 +226,7 @@ class RoomService {
       return Room.fromJson(roomData);
     } on PostgrestException catch (error) {
       if (error.code == '42501' || error.code == 'P0002') {
-        throw const RoomSessionRevokedException(
-          'This room membership is inactive or has expired.',
-        );
+        throw const RoomSessionRevokedException();
       }
       rethrow;
     }
@@ -253,9 +247,7 @@ class RoomService {
       );
     } on PostgrestException catch (error) {
       if (error.code == '42501' || error.code == 'P0002') {
-        throw const RoomSessionRevokedException(
-          'This room membership is inactive or has expired.',
-        );
+        throw const RoomSessionRevokedException();
       }
       rethrow;
     }
@@ -264,9 +256,7 @@ class RoomService {
   Future<Never> _throwRoomUpdateFailure(String roomId) async {
     final currentRoom = await getRoom(roomId);
     if (currentRoom == null) {
-      throw const RoomSessionRevokedException(
-        'This room membership is inactive or has expired.',
-      );
+      throw const RoomSessionRevokedException();
     }
     throw RoomRevisionConflictException(currentRoom);
   }
@@ -289,9 +279,7 @@ class RoomService {
       return Room.fromJson(roomData);
     } on PostgrestException catch (error) {
       if (error.code == '42501' || error.code == 'P0002') {
-        throw const RoomSessionRevokedException(
-          'This room membership is inactive or has expired.',
-        );
+        throw const RoomSessionRevokedException();
       }
       rethrow;
     }

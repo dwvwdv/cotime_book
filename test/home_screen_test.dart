@@ -1,4 +1,5 @@
 import 'package:cotime_book/config/theme.dart';
+import 'package:cotime_book/l10n/l10n.dart';
 import 'package:cotime_book/models/recent_room.dart';
 import 'package:cotime_book/providers/announcement_provider.dart';
 import 'package:cotime_book/providers/auth_provider.dart';
@@ -45,6 +46,8 @@ void main() {
   });
 
   Future<void> pumpHome(WidgetTester tester) async {
+    // Wired like the app, so the device's languages pick the interface's.
+    // English unless a test sets tester.platformDispatcher.localesTestValue.
     container = ProviderContainer(
       overrides: [
         localStoreProvider.overrideWithValue(store),
@@ -84,6 +87,10 @@ void main() {
           // The app's own buttons, whose padding decides what fits a row.
           theme: AppTheme.paperTheme,
           routerConfig: router,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: appLocales,
+          localeListResolutionCallback: (locales, _) =>
+              resolveAppLocale(locales),
         ),
       ),
     );
@@ -203,6 +210,50 @@ void main() {
       tester.getTopRight(find.byTooltip('News')).dx,
       lessThanOrEqualTo(320),
     );
+  });
+
+  group('on a Chinese device', () {
+    setUp(() {
+      final dispatcher =
+          TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher;
+      dispatcher.localesTestValue = const [Locale('zh', 'TW')];
+      addTearDown(() {
+        dispatcher.clearLocalesTestValue();
+        // appStrings is global: later tests in this file read English again.
+        resolveAppLocale(const [Locale('en', 'US')]);
+      });
+    });
+
+    testWidgets('the interface is in Traditional Chinese', (tester) async {
+      await pumpHome(tester);
+
+      expect(find.text('建立房間'), findsOneWidget);
+      expect(find.text('加入房間'), findsOneWidget);
+      expect(find.text('TXT 轉 EPUB'), findsOneWidget);
+      expect(find.byTooltip('公告'), findsOneWidget);
+      expect(find.text('Create Room'), findsNothing);
+      // Text made outside the widget tree (provider state, page sync
+      // messages) follows the same language.
+      expect(appStrings.createRoom, '建立房間');
+    });
+
+    testWidgets('on a small phone the bottom bar stays on one line', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await pumpHome(tester);
+
+      expect(tester.takeException(), isNull);
+      final line = tester.getCenter(find.text('TXT 轉 EPUB')).dy;
+      expect(tester.getCenter(find.text('更多 App')).dy, closeTo(line, 0.5));
+      expect(tester.getCenter(find.byTooltip('公告')).dy, closeTo(line, 0.5));
+      expect(
+        tester.getTopRight(find.byTooltip('公告')).dx,
+        lessThanOrEqualTo(320),
+      );
+    });
   });
 
   testWidgets('the nickname from last time is already filled in', (

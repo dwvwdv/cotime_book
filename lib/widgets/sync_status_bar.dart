@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/page_sync_state.dart';
+import '../l10n/l10n.dart';
 
 class SyncStatusBar extends StatelessWidget {
   /// Every state renders at exactly this height.
@@ -46,7 +47,7 @@ class SyncStatusBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final onShowMembers = this.onShowMembers;
-    final content = _buildContent();
+    final content = _buildContent(context.l10n);
     return SizedBox(
       height: height,
       width: double.infinity,
@@ -54,7 +55,7 @@ class SyncStatusBar extends StatelessWidget {
           ? content
           : Semantics(
               button: true,
-              label: 'Room members',
+              label: context.l10n.roomMembers,
               // No ripple: e-ink.
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -65,21 +66,21 @@ class SyncStatusBar extends StatelessWidget {
     );
   }
 
-  Widget _buildContent() {
+  Widget _buildContent(AppLocalizations l10n) {
     if (syncState.errorMessage != null) {
       return _buildErrorBar(syncState.errorMessage!);
     }
     switch (syncState.status) {
       case SyncStatus.idle:
-        return _buildIdleBar();
+        return _buildIdleBar(l10n);
       case SyncStatus.requesting:
-        return _buildRequestingBar();
+        return _buildRequestingBar(l10n);
       case SyncStatus.confirming:
-        return _buildConfirmingBar();
+        return _buildConfirmingBar(l10n);
       case SyncStatus.waiting:
-        return _buildWaitingBar();
+        return _buildWaitingBar(l10n);
       case SyncStatus.turning:
-        return _buildTurningBar();
+        return _buildTurningBar(l10n);
     }
   }
 
@@ -104,7 +105,7 @@ class SyncStatusBar extends StatelessWidget {
     fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
   );
 
-  Widget _buildIdleBar() {
+  Widget _buildIdleBar(AppLocalizations l10n) {
     if (!isConnected) {
       // "0 readers ready" during a reconnect reads as everyone having left.
       return _frame(
@@ -113,10 +114,7 @@ class SyncStatusBar extends StatelessWidget {
             Icon(Icons.sync, size: 20, color: ink),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                'Reconnecting to the room...',
-                style: _text(bold: true),
-              ),
+              child: Text(l10n.reconnectingToRoom, style: _text(bold: true)),
             ),
           ],
         ),
@@ -132,7 +130,7 @@ class SyncStatusBar extends StatelessWidget {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Waiting for ${reconnecting.join(', ')} to reconnect...',
+                l10n.waitingForReconnect(reconnecting.join(l10n.listSeparator)),
                 style: _text(bold: true),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -152,8 +150,8 @@ class SyncStatusBar extends StatelessWidget {
             Expanded(
               child: Text(
                 inAd.isEmpty
-                    ? 'Ad break...'
-                    : 'Ad break: waiting for ${inAd.join(', ')}...',
+                    ? l10n.adBreakEllipsis
+                    : l10n.adBreakWaitingFor(inAd.join(l10n.listSeparator)),
                 style: _text(bold: true),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -177,11 +175,11 @@ class SyncStatusBar extends StatelessWidget {
           Icon(Icons.people_outline, size: 20, color: ink),
           const SizedBox(width: 8),
           Expanded(
-            child: Text('$readyReaderCount readers ready', style: _text()),
+            child: Text(l10n.readersReady(readyReaderCount), style: _text()),
           ),
           Icon(Icons.check, size: 18, color: ink),
           const SizedBox(width: 4),
-          Text('Synced', style: _text(bold: true)),
+          Text(l10n.synced, style: _text(bold: true)),
         ],
       ),
     );
@@ -216,12 +214,12 @@ class SyncStatusBar extends StatelessWidget {
     );
   }
 
-  Widget _buildRequestingBar() {
+  Widget _buildRequestingBar(AppLocalizations l10n) {
     final request = syncState.currentRequest;
     if (request == null) return _frame(child: const SizedBox.shrink());
 
     final pending = request.pendingUserIds;
-    final pendingNames = _getUserNames(pending);
+    final pendingNames = _getUserNames(pending, l10n);
 
     return _frame(
       child: Row(
@@ -230,7 +228,7 @@ class SyncStatusBar extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Waiting for ${pendingNames.join(", ")}...',
+              l10n.waitingForNames(pendingNames.join(l10n.listSeparator)),
               style: _text(),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -248,7 +246,7 @@ class SyncStatusBar extends StatelessWidget {
     );
   }
 
-  Widget _buildConfirmingBar() {
+  Widget _buildConfirmingBar(AppLocalizations l10n) {
     final request = syncState.currentRequest;
     if (request == null) return _frame(child: const SizedBox.shrink());
 
@@ -260,7 +258,7 @@ class SyncStatusBar extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              describeRequest(request),
+              describeRequest(request, l10n: l10n),
               style: _text(bold: true, color: paper),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -278,7 +276,7 @@ class SyncStatusBar extends StatelessWidget {
                 foregroundColor: paper,
                 side: BorderSide(color: paper, width: AppTheme.ruleWidth),
               ),
-              child: const Text('Wait'),
+              child: Text(l10n.wait),
             ),
           ),
           const SizedBox(width: 8),
@@ -293,7 +291,7 @@ class SyncStatusBar extends StatelessWidget {
                 foregroundColor: ink,
                 side: BorderSide(color: paper, width: AppTheme.ruleWidth),
               ),
-              child: Text(request.isJump ? 'Go' : 'Turn'),
+              child: Text(request.isJump ? l10n.go : l10n.turn),
             ),
           ),
         ],
@@ -301,7 +299,7 @@ class SyncStatusBar extends StatelessWidget {
     );
   }
 
-  Widget _buildWaitingBar() {
+  Widget _buildWaitingBar(AppLocalizations l10n) {
     final request = syncState.currentRequest;
     if (request == null) return _frame(child: const SizedBox.shrink());
 
@@ -312,8 +310,10 @@ class SyncStatusBar extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Waiting for others to confirm... '
-              '${request.validConfirmationCount}/${request.requiredUserIds.length}',
+              l10n.waitingForOthersToConfirm(
+                request.validConfirmationCount,
+                request.requiredUserIds.length,
+              ),
               style: _text(),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -324,7 +324,7 @@ class SyncStatusBar extends StatelessWidget {
     );
   }
 
-  Widget _buildTurningBar() {
+  Widget _buildTurningBar(AppLocalizations l10n) {
     return _frame(
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -333,8 +333,8 @@ class SyncStatusBar extends StatelessWidget {
           const SizedBox(width: 8),
           Text(
             syncState.currentRequest?.isJump == true
-                ? 'Jumping to the page...'
-                : 'Turning page...',
+                ? l10n.jumpingToPage
+                : l10n.turningPage,
             style: _text(bold: true),
           ),
         ],
@@ -342,31 +342,37 @@ class SyncStatusBar extends StatelessWidget {
     );
   }
 
-  List<String> _getUserNames(Set<String> userIds) {
+  List<String> _getUserNames(Set<String> userIds, AppLocalizations l10n) {
     return userIds.map((id) {
       final user = onlineUsers.firstWhere(
         (u) => u['user_id'] == id,
-        orElse: () => {'nickname': 'Unknown'},
+        orElse: () => const {},
       );
-      return user['nickname'] as String? ?? 'Unknown';
+      return user['nickname'] as String? ?? l10n.unknownMember;
     }).toList();
   }
 }
 
 /// What [request] asks this reader to agree to, in words.
-String describeRequest(PageTurnRequest request) {
+String describeRequest(PageTurnRequest request, {AppLocalizations? l10n}) {
+  final strings = l10n ?? appStrings;
   final who = request.requestedByNickname;
   switch (request.direction) {
     case PageTurnDirection.next:
-      return '$who wants to go to next page';
+      return strings.wantsNextPage(who);
     case PageTurnDirection.previous:
-      return '$who wants to go to previous page';
+      return strings.wantsPreviousPage(who);
     case PageTurnDirection.jump:
       final target = request.targetLabel;
-      if (target == null) return '$who wants to jump to another page';
+      if (target == null) return strings.wantsJumpElsewhere(who);
       final progress = target.progressLabel;
-      return '$who wants to jump to page ${target.pageLabel}'
-          '${progress == null ? '' : ' ($progress)'}';
+      return progress == null
+          ? strings.wantsJumpToPage(who, target.pageLabel)
+          : strings.wantsJumpToPageWithProgress(
+              who,
+              target.pageLabel,
+              progress,
+            );
   }
 }
 

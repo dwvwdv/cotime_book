@@ -5,6 +5,7 @@ import 'package:flutter_epub_viewer/flutter_epub_viewer.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/local_store.dart';
 import 'local_store_provider.dart';
+import '../l10n/l10n.dart';
 
 /// Preset reading themes for the EPUB reader.
 enum ReadingTheme {
@@ -61,11 +62,11 @@ class ReadingPreferences {
   String get themeLabel {
     switch (theme) {
       case ReadingTheme.day:
-        return 'Paper';
+        return appStrings.themePaper;
       case ReadingTheme.night:
-        return 'Night';
+        return appStrings.themeNight;
       case ReadingTheme.sepia:
-        return 'Sepia';
+        return appStrings.themeSepia;
     }
   }
 
