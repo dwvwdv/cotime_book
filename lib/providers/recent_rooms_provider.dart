@@ -72,7 +72,9 @@ class RecentRoomsNotifier extends StateNotifier<List<RecentRoom>> {
     if (!mounted || generation != _pruneGeneration) return;
     final gone = checked.difference(available);
     if (gone.isEmpty) return;
-    _save(state.where((r) => !gone.contains(r.code)).toList(growable: false));
+    _save(
+      state.where((r) => !gone.contains(r.code)).toList(growable: false),
+    );
   }
 
   void record(Room room) {
@@ -85,12 +87,10 @@ class RecentRoomsNotifier extends StateNotifier<List<RecentRoom>> {
       bookTitle: room.currentBookTitle ?? existing?.bookTitle,
       lastVisitedAt: _now(),
     );
-    _save(
-      [
-        entry,
-        ...state.where((r) => r.code != room.code),
-      ].take(maxEntries).toList(growable: false),
-    );
+    _save([
+      entry,
+      ...state.where((r) => r.code != room.code),
+    ].take(maxEntries).toList(growable: false));
   }
 
   void remove(String code) {

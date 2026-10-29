@@ -7,7 +7,11 @@ class RoomCodeInput extends StatelessWidget {
   final TextEditingController controller;
   final String? errorText;
 
-  const RoomCodeInput({super.key, required this.controller, this.errorText});
+  const RoomCodeInput({
+    super.key,
+    required this.controller,
+    this.errorText,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -38,7 +42,10 @@ class RoomCodeInput extends StatelessWidget {
       decoration: InputDecoration(
         labelText: 'Room code',
         hintText: 'ABC234',
-        hintStyle: const TextStyle(color: AppTheme.inkFaint, letterSpacing: 10),
+        hintStyle: const TextStyle(
+          color: AppTheme.inkFaint,
+          letterSpacing: 10,
+        ),
         counterText: '',
         errorText: errorText,
       ),

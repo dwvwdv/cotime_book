@@ -66,15 +66,10 @@ class RoomService {
       throw Exception('Not authenticated');
     }
 
-    final roomData = await _database
-        .rpc(
-          'create_room',
-          params: {
-            'p_nickname': nickname,
-            'p_avatar_color_index': Random.secure().nextInt(8),
-          },
-        )
-        .single();
+    final roomData = await _database.rpc('create_room', params: {
+      'p_nickname': nickname,
+      'p_avatar_color_index': Random.secure().nextInt(8),
+    }).single();
 
     return Room.fromJson(roomData);
   }
@@ -88,16 +83,11 @@ class RoomService {
     }
 
     try {
-      final roomData = await _database
-          .rpc(
-            'join_room',
-            params: {
-              'p_code': code.toUpperCase(),
-              'p_nickname': nickname,
-              'p_avatar_color_index': Random.secure().nextInt(8),
-            },
-          )
-          .single();
+      final roomData = await _database.rpc('join_room', params: {
+        'p_code': code.toUpperCase(),
+        'p_nickname': nickname,
+        'p_avatar_color_index': Random.secure().nextInt(8),
+      }).single();
 
       return Room.fromJson(roomData);
     } on PostgrestException catch (error) {
@@ -228,16 +218,14 @@ class RoomService {
     int? textSize,
   }) async {
     try {
-      final roomData = await _database
-          .rpc(
-            'set_room_text_size',
-            params: {
-              'p_room_id': roomId,
-              'p_locked': locked,
-              'p_text_size': textSize,
-            },
-          )
-          .single();
+      final roomData = await _database.rpc(
+        'set_room_text_size',
+        params: {
+          'p_room_id': roomId,
+          'p_locked': locked,
+          'p_text_size': textSize,
+        },
+      ).single();
       return Room.fromJson(roomData);
     } on PostgrestException catch (error) {
       if (error.code == '42501' || error.code == 'P0002') {
@@ -269,9 +257,10 @@ class RoomService {
 
   Future<Room> heartbeatRoom(String roomId) async {
     try {
-      final roomData = await _database
-          .rpc('heartbeat_room', params: {'p_room_id': roomId})
-          .single();
+      final roomData = await _database.rpc(
+        'heartbeat_room',
+        params: {'p_room_id': roomId},
+      ).single();
 
       return Room.fromJson(roomData);
     } on PostgrestException catch (error) {

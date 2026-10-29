@@ -84,11 +84,9 @@ String describeVisit(DateTime visitedAt, DateTime now) {
   final visit = visitedAt.toLocal();
   final local = now.toLocal();
   // Compared as UTC dates so a daylight-saving change can't make a day 23h.
-  final days = DateTime.utc(
-    local.year,
-    local.month,
-    local.day,
-  ).difference(DateTime.utc(visit.year, visit.month, visit.day)).inDays;
+  final days = DateTime.utc(local.year, local.month, local.day)
+      .difference(DateTime.utc(visit.year, visit.month, visit.day))
+      .inDays;
   if (days <= 0) return 'Today';
   if (days == 1) return 'Yesterday';
   if (days < 7) return '$days days ago';

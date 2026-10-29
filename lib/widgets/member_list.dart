@@ -73,7 +73,10 @@ class MemberList extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 12),
           child: Row(
             children: [
-              UserAvatar(nickname: member.nickname, isOnline: member.isOnline),
+              UserAvatar(
+                nickname: member.nickname,
+                isOnline: member.isOnline,
+              ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(

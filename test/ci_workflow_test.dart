@@ -51,62 +51,52 @@ void main() {
   // A PR that only touches an unlisted path never triggers Build Check, and
   // shows up as "no checks" instead of red. assets/ used to be missing, so a
   // change to the shared page script (issue #20) skipped CI entirely.
-  test(
-    'Build Check runs for every change that reaches the app or its tests',
-    () {
-      final filters = _buildCheckPaths();
-      for (final path in [
-        'lib/main.dart',
-        'test/widget_test.dart',
-        'assets/reader/shared_page.js',
-        'android/app/build.gradle',
-        'supabase/migrations/x.sql',
-        'pubspec.yaml',
-        'pubspec.lock',
-        'analysis_options.yaml',
-        '.github/workflows/release-apk.yml',
-      ]) {
-        expect(
-          _covered(filters, path),
-          isTrue,
-          reason: '$path is not in build-check.yml paths',
-        );
-      }
+  test('Build Check runs for every change that reaches the app or its tests',
+      () {
+    final filters = _buildCheckPaths();
+    for (final path in [
+      'lib/main.dart',
+      'test/widget_test.dart',
+      'assets/reader/shared_page.js',
+      'android/app/build.gradle',
+      'supabase/migrations/x.sql',
+      'pubspec.yaml',
+      'pubspec.lock',
+      'analysis_options.yaml',
+      '.github/workflows/release-apk.yml',
+    ]) {
+      expect(_covered(filters, path), isTrue,
+          reason: '$path is not in build-check.yml paths');
+    }
 
-      // Every asset bundled into the APK, as declared in pubspec.yaml.
-      final pubspec = File('pubspec.yaml').readAsStringSync();
-      final assets = RegExp(
-        r'^\s+- (assets/\S+)',
-        multiLine: true,
-      ).allMatches(pubspec).map((m) => m.group(1)!);
-      expect(assets, isNotEmpty);
-      for (final asset in assets) {
-        expect(
-          _covered(filters, asset),
-          isTrue,
-          reason: '$asset is bundled but not in build-check.yml paths',
-        );
-      }
-    },
-  );
+    // Every asset bundled into the APK, as declared in pubspec.yaml.
+    final pubspec = File('pubspec.yaml').readAsStringSync();
+    final assets = RegExp(r'^\s+- (assets/\S+)', multiLine: true)
+        .allMatches(pubspec)
+        .map((m) => m.group(1)!);
+    expect(assets, isNotEmpty);
+    for (final asset in assets) {
+      expect(_covered(filters, asset), isTrue,
+          reason: '$asset is bundled but not in build-check.yml paths');
+    }
+  });
 
   // A different SDK reports different lints: analyze would be clean in the
   // Claude Code session and red in CI, or the other way round.
   test('every workflow and the session hook use the same Flutter', () {
     final versions = <String, String>{};
-    for (final file in Directory(
-      '.github/workflows',
-    ).listSync().whereType<File>().where((f) => f.path.endsWith('.yml'))) {
-      for (final match in RegExp(
-        r"flutter-version:\s*'([^']+)'",
-      ).allMatches(file.readAsStringSync())) {
+    for (final file in Directory('.github/workflows')
+        .listSync()
+        .whereType<File>()
+        .where((f) => f.path.endsWith('.yml'))) {
+      for (final match in RegExp(r"flutter-version:\s*'([^']+)'")
+          .allMatches(file.readAsStringSync())) {
         versions[file.path] = match.group(1)!;
       }
     }
-    final hook = RegExp(
-      r'^FLUTTER_VERSION="([^"]+)"',
-      multiLine: true,
-    ).firstMatch(File('.claude/hooks/session-start.sh').readAsStringSync());
+    final hook = RegExp(r'^FLUTTER_VERSION="([^"]+)"', multiLine: true)
+        .firstMatch(
+            File('.claude/hooks/session-start.sh').readAsStringSync());
     expect(hook, isNotNull);
     versions['.claude/hooks/session-start.sh'] = hook!.group(1)!;
 
@@ -122,11 +112,8 @@ void main() {
     const workflow = '.github/workflows/shared-page-check.yml';
     final lists = _workflowPaths(workflow);
     expect(lists, hasLength(2), reason: 'push and pull_request filters');
-    expect(
-      lists.last,
-      lists.first,
-      reason: 'push and pull_request must watch the same paths',
-    );
+    expect(lists.last, lists.first,
+        reason: 'push and pull_request must watch the same paths');
     for (final path in [
       'assets/reader/shared_page.js',
       'assets/fonts/literata/literata-latin-400-normal.woff2',
@@ -142,17 +129,12 @@ void main() {
       'pubspec.lock',
       workflow,
     ]) {
-      expect(
-        _covered(lists.first, path),
-        isTrue,
-        reason: '$path is not in $workflow paths',
-      );
+      expect(_covered(lists.first, path), isTrue,
+          reason: '$path is not in $workflow paths');
     }
     // A change elsewhere in lib/ must not pay for Chromium and the fonts.
-    expect(
-      _covered(lists.first, 'lib/services/realtime_service.dart'),
-      isFalse,
-    );
+    expect(_covered(lists.first, 'lib/services/realtime_service.dart'),
+        isFalse);
 
     final text = File(workflow).readAsStringSync();
     expect(text, contains('workflow_dispatch:'));
@@ -168,9 +150,10 @@ void main() {
       r'comment|review|head_commit|commits))',
     );
     final runKey = RegExp(r'^(\s*)(- )?run:\s*(.*)$');
-    final workflows = Directory(
-      '.github/workflows',
-    ).listSync().whereType<File>().where((file) => file.path.endsWith('.yml'));
+    final workflows = Directory('.github/workflows')
+        .listSync()
+        .whereType<File>()
+        .where((file) => file.path.endsWith('.yml'));
     for (final workflow in workflows) {
       final lines = workflow.readAsLinesSync();
       // The indentation of the `run:` key whose script the line is in.
@@ -188,10 +171,8 @@ void main() {
         } else if (script == null || !untrusted.hasMatch(line)) {
           continue;
         }
-        fail(
-          '${workflow.path}:${i + 1} puts an untrusted value in a '
-          'script; pass it through env: instead',
-        );
+        fail('${workflow.path}:${i + 1} puts an untrusted value in a '
+            'script; pass it through env: instead');
       }
     }
   });

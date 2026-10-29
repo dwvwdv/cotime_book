@@ -7,7 +7,11 @@ import '../services/local_store.dart';
 import 'local_store_provider.dart';
 
 /// Preset reading themes for the EPUB reader.
-enum ReadingTheme { day, night, sepia }
+enum ReadingTheme {
+  day,
+  night,
+  sepia,
+}
 
 class ReadingPreferences {
   static const double minFontSize = 12;
@@ -200,5 +204,5 @@ class ReadingPreferencesNotifier extends StateNotifier<ReadingPreferences> {
 
 final readingPreferencesProvider =
     StateNotifierProvider<ReadingPreferencesNotifier, ReadingPreferences>(
-      (ref) => ReadingPreferencesNotifier(ref.read(localStoreProvider)),
-    );
+  (ref) => ReadingPreferencesNotifier(ref.read(localStoreProvider)),
+);

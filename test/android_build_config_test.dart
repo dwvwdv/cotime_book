@@ -7,17 +7,12 @@ import 'package:flutter_test/flutter_test.dart';
 /// Play accepts, so the build file has to pin each level itself.
 int _sdkLevel(String key) {
   final gradle = File('android/app/build.gradle').readAsStringSync();
-  final match = RegExp(
-    '^\\s*$key\\s*=\\s*(\\S+)',
-    multiLine: true,
-  ).firstMatch(gradle);
+  final match =
+      RegExp('^\\s*$key\\s*=\\s*(\\S+)', multiLine: true).firstMatch(gradle);
   expect(match, isNotNull, reason: '$key must be set in build.gradle');
   final level = int.tryParse(match!.group(1)!);
-  expect(
-    level,
-    isNotNull,
-    reason: '$key must be a literal, not ${match.group(1)}',
-  );
+  expect(level, isNotNull,
+      reason: '$key must be a literal, not ${match.group(1)}');
   return level!;
 }
 
@@ -43,9 +38,8 @@ void main() {
   test('the Android app may watch the network, as WebRTC needs', () {
     final pubspec = File('pubspec.yaml').readAsStringSync();
     expect(pubspec, contains('flutter_webrtc:'));
-    final manifest = File(
-      'android/app/src/main/AndroidManifest.xml',
-    ).readAsStringSync();
+    final manifest =
+        File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
     expect(
       manifest,
       contains(
@@ -57,17 +51,14 @@ void main() {
   // The Mobile Ads SDK stops the app at launch when the manifest has no
   // AdMob app ID.
   test('the manifest carries an AdMob app ID for the interstitial ads', () {
-    final manifest = File(
-      'android/app/src/main/AndroidManifest.xml',
-    ).readAsStringSync();
+    final manifest =
+        File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
     expect(
       manifest,
-      matches(
-        RegExp(
-          r'android:name="com\.google\.android\.gms\.ads\.APPLICATION_ID"'
-          r'\s+android:value="ca-app-pub-\d+~\d+"',
-        ),
-      ),
+      matches(RegExp(
+        r'android:name="com\.google\.android\.gms\.ads\.APPLICATION_ID"'
+        r'\s+android:value="ca-app-pub-\d+~\d+"',
+      )),
     );
   });
 
@@ -82,27 +73,23 @@ void main() {
     expect(match, isNotNull);
     final major = int.parse(match!.group(1)!);
     final minor = int.parse(match.group(2)!);
-    expect(
-      major > 2 || (major == 2 && minor >= 1),
-      isTrue,
-      reason: 'Kotlin ${match.group(1)}.${match.group(2)} is below 2.1',
-    );
+    expect(major > 2 || (major == 2 && minor >= 1), isTrue,
+        reason: 'Kotlin ${match.group(1)}.${match.group(2)} is below 2.1');
   });
 
   // The Chinese name is the official one; other devices keep the English.
   // Android 7+ matches scripts and reads a bare `values-zh` as Simplified, so
   // Traditional Chinese devices need their own folder or they get the English.
   test('the launcher shows 頁間 on Chinese devices', () {
-    final manifest = File(
-      'android/app/src/main/AndroidManifest.xml',
-    ).readAsStringSync();
+    final manifest =
+        File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
     expect(manifest, contains('android:label="@string/app_name"'));
-    String appName(String values) =>
-        RegExp(r'<string name="app_name">([^<]*)</string>')
+    String appName(String values) => RegExp(
+          r'<string name="app_name">([^<]*)</string>',
+        )
             .firstMatch(
-              File(
-                'android/app/src/main/res/$values/strings.xml',
-              ).readAsStringSync(),
+              File('android/app/src/main/res/$values/strings.xml')
+                  .readAsStringSync(),
             )!
             .group(1)!;
     expect(appName('values-zh'), '頁間');

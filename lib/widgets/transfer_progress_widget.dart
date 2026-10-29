@@ -12,7 +12,10 @@ class TransferProgressWidget extends StatelessWidget {
 
   final TransferState transferState;
 
-  const TransferProgressWidget({super.key, required this.transferState});
+  const TransferProgressWidget({
+    super.key,
+    required this.transferState,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -109,9 +112,7 @@ class TransferProgressWidget extends StatelessWidget {
       case TransferStatus.waiting:
         return 'Waiting for the book';
       case TransferStatus.transferring:
-        return transferState.isSending
-            ? 'Sending book...'
-            : 'Receiving book...';
+        return transferState.isSending ? 'Sending book...' : 'Receiving book...';
       case TransferStatus.completed:
         return transferState.isSending ? 'Book sent' : 'Book received';
     }

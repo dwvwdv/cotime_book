@@ -90,9 +90,11 @@ class RoomNotifier extends StateNotifier<RoomState> {
   int _appliedMembersGeneration = 0;
   List<Map<String, dynamic>> _lastPresenceUsers = const [];
 
-  RoomNotifier(this._roomService, {Future<void> Function()? onSessionRevoked})
-    : _onSessionRevoked = onSessionRevoked,
-      super(const RoomState());
+  RoomNotifier(
+    this._roomService, {
+    Future<void> Function()? onSessionRevoked,
+  }) : _onSessionRevoked = onSessionRevoked,
+       super(const RoomState());
 
   Future<Room?> createRoom(String nickname) {
     return _enterRoom(() => _roomService.createRoom(nickname: nickname));
@@ -150,9 +152,7 @@ class RoomNotifier extends StateNotifier<RoomState> {
     }
   }
 
-  Future<void> refreshMembers({
-    List<Map<String, dynamic>>? presenceUsers,
-  }) async {
+  Future<void> refreshMembers({List<Map<String, dynamic>>? presenceUsers}) async {
     final room = state.currentRoom;
     if (room == null) return;
     final roomSessionGeneration = _roomSessionGeneration;
@@ -213,15 +213,13 @@ class RoomNotifier extends StateNotifier<RoomState> {
       for (final user in onlineUsers)
         if (user['user_id'] is String) user['user_id'] as String: user,
     };
-    return members
-        .map((member) {
-          final onlineData = onlineById[member.userId];
-          return member.copyWith(
-            isOnline: onlineData != null,
-            hasBook: (onlineData?['has_book'] as bool?) ?? member.hasBook,
-          );
-        })
-        .toList(growable: false);
+    return members.map((member) {
+      final onlineData = onlineById[member.userId];
+      return member.copyWith(
+        isOnline: onlineData != null,
+        hasBook: (onlineData?['has_book'] as bool?) ?? member.hasBook,
+      );
+    }).toList(growable: false);
   }
 
   bool _membersMatch(List<RoomMember> a, List<RoomMember> b) {
