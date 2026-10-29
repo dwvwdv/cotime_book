@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/theme.dart';
 import '../providers/book_provider.dart' show formatMegabytes;
 import '../providers/txt_convert_provider.dart';
+import '../widgets/ad_privacy_choices.dart';
 import '../widgets/paper.dart';
 import '../widgets/txt_import_sheet.dart';
 import 'book_preview_screen.dart';
@@ -123,6 +124,9 @@ class TxtConvertScreen extends ConsumerWidget {
                     onDismiss: notifier.dismissError,
                   ),
                 ],
+                // Saving shows an ad: its consent is changeable here too,
+                // not only in a room (GH-58).
+                const AdPrivacyChoices(),
               ],
             ),
           ),

@@ -20,6 +20,7 @@ import '../providers/room_provider.dart';
 import '../services/layout_report_service.dart';
 import '../services/shared_page_renderer.dart';
 import '../widgets/ad_break_cover.dart';
+import '../widgets/ad_privacy_choices.dart';
 import '../widgets/jump_preview.dart';
 import '../widgets/layout_report_sheet.dart';
 import '../widgets/member_removal.dart';
@@ -1362,6 +1363,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                     'Tap the left third of the page to go back, anywhere else '
                     'to go forward. Page Up/Down and arrow keys work too.',
                     style: AppTheme.caption,
+                  ),
+                  AdPrivacyChoices(
+                    onOpen: () => Navigator.of(sheetContext).pop(),
                   ),
                   const SizedBox(height: 24),
                   const SectionHeader(label: 'Troubleshooting'),

@@ -250,8 +250,16 @@ supabase/
      不寫進 App；也不要照 Liftoff 後台的說明手動加 Vungle SDK 或在 Gradle 寫
      `com.google.ads.mediation:vungle`（會與外掛帶進的版本衝突）。外掛版本綁死 `google_mobile_ads`
      的主版號，兩者要一起升。外掛的 Kotlin 2 程式碼需要 Kotlin Gradle plugin 2.1 以上
-     （`android/settings.gradle`）。外掛的 Dart API（`setGDPRStatus` 等）不呼叫：之後導入 UMP，
-     Liftoff 會讀 IAB TCF 字串。
+     （`android/settings.gradle`）。外掛的 Dart API（`setGDPRStatus` 等）不呼叫：UMP 寫進的 IAB TCF 字串
+     Liftoff 會自己讀。
+     **同意（UMP，GH-58）**：歐洲經濟區、英國、瑞士要先經 Google 的同意訊息才能要廣告。`AdConsent.gather()`
+     每次開 App 問一次、所有廣告位置共用；`canRequestAds()` 為 false 時連 `MobileAds.initialize()` 都不呼叫，
+     `preload()` 每次請求前都再查 `canRequestAds()`（答覆可能在 Ad Privacy Choices 改過）。查詢逾時或訊息
+     顯示失敗就當作暫時沒廣告，同一次使用中稍後重試（`_sdkReady` 失敗時清掉）——電子閱讀器常常幾天不關 App，
+     不能等下次開 App。不能擋開書與存檔。
+     Google 要求能改答覆，所以 `privacyOptionsRequired` 時，每個會播廣告的流程（閱讀設定、TXT 轉檔工具）
+     都有 `AdPrivacyChoices`；新增廣告位置時也要放。
+     訊息本身在 AdMob 後台的「隱私權與訊息」設定，沒發布時那些地區就沒有廣告。
    - **viewer 周圍的 chrome 必須固定高度。** 任何改變 `EpubViewer` 尺寸的東西都會讓
      epub.js 重新分頁、改掉本機 CFI（見 issue #13）；
      而 viewer 的可用區域就是自己的 `page_fit`，它一變，全房都要重新排版（issue #20）。
@@ -272,6 +280,8 @@ flutter run \
 supabase db reset      # 重放 migrations
 supabase test db       # pgTAP
 ```
+
+`pubspec.lock` 有進版控（GH-50）：CI 照它建置，升級相依用 `flutter pub upgrade` 並把 lockfile 的 diff 一起提交。
 
 正式庫的 migration 版本號要跟 `supabase/migrations/` 的檔名一致。用 Supabase MCP 套用時，
 頂層 `DROP` 與含 `delete` / `update` 的函式定義會被 MCP 自己的確認攔下、逾時且不執行

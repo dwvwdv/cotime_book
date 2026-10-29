@@ -539,8 +539,34 @@
     // Numbers, not "100vw": a window resize (keyboard, rotation) must not
     // put the book back on this screen's own box.
     rendition.resize(page.width, page.height);
+    await displayQueued();
     await fontsReady();
     await nextFrame();
+  }
+
+  // The resize above clears the views and queues a display() of the page
+  // the book was on. A display() called before that one is done cuts it
+  // short — epub.js resolves the display in flight to start the next — and
+  // the next one then measures where its target is on a view still being
+  // laid out: the reader landed pages before the room's page (GH-65). Each
+  // no-op below runs once everything queued before it is done. The second
+  // runs after the location report the display queues when it ends — that
+  // task only asks for a frame, and rendition.location changes in that
+  // frame, so layOut()'s nextFrame() after this is what waits for it.
+  // Bounded, so a section that never loads cannot hold apply() forever, but
+  // well past the reader's own 8 s for a display: an e-reader can take
+  // seconds to lay out a long chapter, and giving up early brings GH-65
+  // back.
+  function displayQueued() {
+    var queue = rendition.q;
+    if (!queue || typeof queue.enqueue !== 'function') return Promise.resolve();
+    var drained = queue.enqueue(function () {}).then(function () {
+      return queue.enqueue(function () {});
+    });
+    return Promise.race([
+      drained,
+      new Promise(function (resolve) { setTimeout(resolve, 20000); }),
+    ]);
   }
 
   function round(value) {

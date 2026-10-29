@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 import '../config/ad_config.dart';
+import 'ad_consent.dart';
 
 /// Full-screen ads shown between pages and before a converted book is saved.
 ///
@@ -43,13 +44,23 @@ bool get platformHasInterstitialAds =>
 class AdMobInterstitialAds implements InterstitialAds {
   final String adUnitId;
 
+  /// After a failed load, or a request consent did not allow, how long
+  /// before trying again. Without it a device offline would ask on every
+  /// page.
+  final Duration retryAfterFailure;
+
+  /// Set by [start]; no ad is requested before it.
+  AdConsent? _consent;
   InterstitialAd? _ad;
   DateTime? _loadedAt;
   DateTime? _failedAt;
   bool _loading = false;
   bool _showing = false;
 
-  AdMobInterstitialAds({required this.adUnitId});
+  AdMobInterstitialAds({
+    required this.adUnitId,
+    this.retryAfterFailure = AdConfig.retryAfterFailure,
+  });
 
   /// [unitId] as this build asks for it (see [AdConfig.unitFor]).
   factory AdMobInterstitialAds.forPlatform(String unitId) =>
@@ -57,12 +68,38 @@ class AdMobInterstitialAds implements InterstitialAds {
         adUnitId: AdConfig.unitFor(unitId, isIOS: Platform.isIOS),
       );
 
-  /// Shared by every placement: the SDK is initialized once.
+  /// Shared by every placement: the SDK is initialized once. Cleared when
+  /// consent did not allow it or it failed, so a later [preload] tries
+  /// again — an e-reader keeps the app alive for days, and a user who says
+  /// yes in Ad Privacy Choices should not have to restart it.
   static Future<bool>? _sdkReady;
 
-  static Future<bool> _initializeSdk() async {
+  /// Starts the SDK. Swapped in tests, which have none.
+  @visibleForTesting
+  static Future<void> Function() initializeSdk = _initializeMobileAds;
+
+  static Future<void> _initializeMobileAds() async {
+    await MobileAds.instance.initialize();
+  }
+
+  @visibleForTesting
+  static void resetForTest() {
+    _sdkReady = null;
+    initializeSdk = _initializeMobileAds;
+  }
+
+  static Future<bool> _sdkStarted(AdConsent consent) =>
+      _sdkReady ??= _initializeSdk(consent).then((started) {
+        if (!started) _sdkReady = null;
+        return started;
+      });
+
+  static Future<bool> _initializeSdk(AdConsent consent) async {
+    // Not even initialized without consent (GH-58): the SDK starts its
+    // adapters and their network requests on initialize.
+    if (!await consent.gather()) return false;
     try {
-      await MobileAds.instance.initialize();
+      await initializeSdk();
       return true;
     } catch (error) {
       debugPrint('Mobile Ads unavailable: $error');
@@ -70,10 +107,12 @@ class AdMobInterstitialAds implements InterstitialAds {
     }
   }
 
-  /// Initializes the SDK and loads the first ad, so the first one due is
-  /// usually ready.
-  Future<void> start() async {
-    if (await (_sdkReady ??= _initializeSdk())) preload();
+  /// Asks for consent where it is needed, initializes the SDK and loads the
+  /// first ad, so the first one due is usually ready. Without consent no ad
+  /// is requested, and [show] resolves false.
+  Future<void> start(AdConsent consent) {
+    _consent = consent;
+    return _preload();
   }
 
   bool get _isStale {
@@ -86,18 +125,30 @@ class AdMobInterstitialAds implements InterstitialAds {
   bool get isReady => _ad != null && !_showing && !_isStale;
 
   @override
-  void preload() {
-    if (_loading || _showing) return;
+  void preload() => unawaited(_preload());
+
+  Future<void> _preload() async {
+    final consent = _consent;
+    if (consent == null || _loading || _showing) return;
     if (_ad != null) {
       if (!_isStale) return;
       _discard();
     }
     final failedAt = _failedAt;
     if (failedAt != null &&
-        DateTime.now().difference(failedAt) < AdConfig.retryAfterFailure) {
+        DateTime.now().difference(failedAt) < retryAfterFailure) {
       return;
     }
     _loading = true;
+    // Checked before every request, as Google asks (GH-58): the answer can
+    // change in Ad Privacy Choices after the SDK started, either way.
+    final allowed = await _sdkStarted(consent) && await consent.canRequestAds();
+    if (!allowed) {
+      _loading = false;
+      _failedAt = DateTime.now();
+      return;
+    }
+
     void failed(Object error) {
       _loading = false;
       _failedAt = DateTime.now();
