@@ -390,10 +390,9 @@ async function recountsOnNewSize(browser, device, turns) {
   const cfi = await tab.evaluate(() => rendition.location.start.cfi);
   const after = await tab.evaluate(async ({ size, cfi }) => {
     await cotimeSharedPage.apply({ ...window.sharedPage, fontSize: size });
-    // epub.js shows the page again by itself after the resize; a display()
-    // straight after lands on the wrong page here (GH-65). The
-    // app displays the room's page a platform round trip later.
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    // Straight after, with no wait: epub.js shows the page again by itself
+    // after the resize, and a display() that cut it short landed pages
+    // before the room's page (GH-65).
     await rendition.display(cfi);
     return cotimeSharedPage.pageInfo();
   }, { size: larger, cfi });
