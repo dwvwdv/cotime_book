@@ -94,7 +94,14 @@ supabase/
      「Page Layout Report」按「Send Report」——這類問題只在真的 WebView 上出現過。報告經
      `submit_layout_report` RPC 存進 `cotime_book_private.layout_reports`（App 讀不到，從 dashboard /
      SQL Editor 查）：裝置、書、房內每個 reader 的 page_fit、最近幾次移動與 `diagnose()`，
-     同一房間同一時刻的報告用 `room_id` 配對；使用者會拿到報告 ID 可以貼進 issue。
+     同一房間同一時刻的報告用 `room_id` 配對。回報畫面不顯示報告內容、也不能複製——使用者在首頁的
+     「回報紀錄」（`LayoutReportHistoryList`，經 `my_layout_reports` RPC，只回自己的回報、只有書名／狀態／時間／
+     修正版本／說明，不回報告本身）看處理進度；有新結果時首頁上方會提示，看過的存在 `LocalStore.seenReportAnswers`。
+     **修好使用者回報的問題、PR 合併後，要把對應的報告標記處理結果**（只有維護者能呼叫，App 不行）：
+     `select cotime_book_private.resolve_layout_reports(array['<id>']::uuid[], 'resolved', '1.0.28', '已修正… / Fixed …');`
+     狀態是 `resolved` / `declined`（不處理，例如無法重現、書本身壞掉）/ `open`（標錯時改回來）；
+     `fixed_in` 是含修正的版本（major.minor.patch），App 比對自己的版本，還沒更新的使用者看到「請更新 App」而不是「已解決」。
+     說明只有一份，會原樣顯示給中英文介面的使用者，所以寫成中英雙語。同一個問題的多筆報告一次標完。
      `diagnose()` 的 `pageNames` 記下本頁與前後兩頁的頁名、怎麼命名的（`line` / `picture` / `epub.js` 的猜測）、
      命名用的元素路徑與它畫在第幾頁，`outOfFlow` 記下這一章 out-of-flow 的盒子種類與落點——不是圖書館的書
      沒辦法重排，這些結構資訊就是查頁名問題的依據（GH-80）。元素路徑只有 tag、class、id。

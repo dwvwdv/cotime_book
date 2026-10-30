@@ -486,23 +486,69 @@
   "previousPage": "Previous page",
   "nextPage": "Next page",
   "positionInBook": "Position in the book",
-  "reportRateLimited": "Too many reports in the last hour. Copy this one instead.",
-  "reportSendFailed": "Couldn't send the report. Try again, or copy it instead.",
+  "reportRateLimited": "Too many reports in the last hour. Try again later.",
+  "reportSendFailed": "Couldn't send the report. Try again.",
   "pageLayoutReportTitle": "Page layout report",
   "pageLayoutReportIntro": "If pages are cut off or a turn skips ahead, send this right after it happens. It holds how this screen laid out the page and where you are in the book, never the book's text.",
   "reportNoteHint": "What went wrong? (optional)",
-  "reportSent": "Sent. Report ID: {id}",
-  "@reportSent": {
+  "reportSentToHistory": "Sent. You can follow it in Report History on the home screen.",
+  "sending": "Sending...",
+  "sendReport": "Send Report",
+  "reportHistory": "Report History",
+  "reportHistoryUpdates": "{count, plural, =1{One of your reports has an answer} other{{count} of your reports have answers}}",
+  "@reportHistoryUpdates": {
     "placeholders": {
-      "id": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "reportHistoryEmpty": "You haven't sent any reports.",
+  "reportHistoryLoadFailed": "Couldn't load your reports. Check the connection and try again.",
+  "reportStatusOpen": "Pending",
+  "reportStatusResolved": "Resolved",
+  "reportStatusDeclined": "Not fixed",
+  "reportFixedIn": "Fixed in {version}",
+  "@reportFixedIn": {
+    "placeholders": {
+      "version": {
         "type": "String"
       }
     }
   },
-  "sending": "Sending...",
-  "sendReport": "Send Report",
-  "reportCopied": "Report copied",
-  "copyReport": "Copy Report",
+  "reportUpdateForFix": "Fixed in {version}. Update the app to get the fix.",
+  "@reportUpdateForFix": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "reportSentAt": "Sent {time}",
+  "@reportSentAt": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "reportHandledAt": "Handled {time}",
+  "@reportHandledAt": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "reportUnknownBook": "Book not recorded",
+  "reportYourNote": "Your note: {note}",
+  "@reportYourNote": {
+    "placeholders": {
+      "note": {
+        "type": "String"
+      }
+    }
+  },
   "languageChineseTraditional": "Chinese (Traditional)",
   "languageChineseSimplified": "Chinese (Simplified)",
   "languageChinese": "Chinese",

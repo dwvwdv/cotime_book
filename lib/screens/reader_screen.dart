@@ -1487,7 +1487,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     await showPaperDialog<void>(
       context: context,
       builder: (_) => LayoutReportSheet(
-        report: report,
         onSend: (note) => LayoutReportService().submit(
           roomId: room?.id,
           appVersion: appVersion,

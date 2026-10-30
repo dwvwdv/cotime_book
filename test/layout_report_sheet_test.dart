@@ -8,7 +8,6 @@ import 'package:cotime_book/services/layout_report_service.dart';
 import 'package:cotime_book/widgets/layout_report_sheet.dart';
 import 'package:cotime_book/widgets/paper.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -146,45 +145,19 @@ void main() {
 
   Future<void> pumpSheet(
     WidgetTester tester, {
-    Future<String> Function(String note)? onSend,
+    required Future<String> Function(String note) onSend,
   }) {
     return tester.pumpWidget(
       MaterialApp(
         theme: AppTheme.paperTheme,
-        home: Scaffold(
-          body: LayoutReportSheet(report: report(), onSend: onSend),
-        ),
+        home: Scaffold(body: LayoutReportSheet(onSend: onSend)),
       ),
     );
   }
 
-  testWidgets('the report can be copied in one tap', (tester) async {
-    String? copied;
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-      SystemChannels.platform,
-      (call) async {
-        if (call.method == 'Clipboard.setData') {
-          copied = (call.arguments as Map)['text'] as String?;
-        }
-        return null;
-      },
-    );
-    addTearDown(
-      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform,
-        null,
-      ),
-    );
-
-    await pumpSheet(tester);
-    await tester.tap(find.text('Copy Report'));
-    await tester.pump();
-
-    expect(copied, layoutReportText(report()));
-    expect(find.text('Report copied'), findsOneWidget);
-  });
-
-  testWidgets('a sent report shows the id to quote', (tester) async {
+  testWidgets('a sent report points to Report History, with nothing to copy', (
+    tester,
+  ) async {
     final notes = <String>[];
     await pumpSheet(
       tester,
@@ -194,12 +167,21 @@ void main() {
       },
     );
 
+    // The report itself is not on screen: it meant nothing to the reader.
+    expect(find.textContaining('"recentMoves"'), findsNothing);
+    expect(find.text('Copy Report'), findsNothing);
+
     await tester.enterText(find.byType(TextField), 'last line cut off');
     await tester.tap(find.text('Send Report'));
     await tester.pump();
 
     expect(notes, ['last line cut off']);
-    expect(find.text('Sent. Report ID: 1a2b3c4d'), findsOneWidget);
+    expect(
+      find.text(
+        'Sent. You can follow it in Report History on the home screen.',
+      ),
+      findsOneWidget,
+    );
     // Sent once: nothing left to tap that would send it again.
     expect(find.text('Send Report'), findsNothing);
   });
@@ -223,7 +205,7 @@ void main() {
 
     await tester.tap(find.text('Send Report'));
     await tester.pump();
-    expect(find.text('Sent. Report ID: 5e6f0000'), findsOneWidget);
+    expect(find.textContaining('Report History'), findsOneWidget);
   });
 
   testWidgets('too many reports says so instead of a generic failure', (
@@ -260,7 +242,6 @@ void main() {
                 onPressed: () => showPaperDialog<void>(
                   context: context,
                   builder: (_) => LayoutReportSheet(
-                    report: report(),
                     onSend: (_) async {
                       sent++;
                       return '9a8b0000-0000-0000-0000-000000000000';

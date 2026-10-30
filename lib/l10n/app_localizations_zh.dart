@@ -624,10 +624,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get positionInBook => '在書中的位置';
 
   @override
-  String get reportRateLimited => '過去一小時內送出的回報太多了，請改用複製。';
+  String get reportRateLimited => '過去一小時內送出的回報太多了，請稍後再試。';
 
   @override
-  String get reportSendFailed => '無法送出回報。請再試一次，或改用複製。';
+  String get reportSendFailed => '無法送出回報，請再試一次。';
 
   @override
   String get pageLayoutReportTitle => '排版問題回報';
@@ -640,9 +640,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get reportNoteHint => '發生了什麼問題？（選填）';
 
   @override
-  String reportSent(String id) {
-    return '已送出。回報 ID：$id';
-  }
+  String get reportSentToHistory => '已送出。可以在首頁的「回報紀錄」查看處理進度。';
 
   @override
   String get sending => '正在送出...';
@@ -651,10 +649,55 @@ class AppLocalizationsZh extends AppLocalizations {
   String get sendReport => '送出回報';
 
   @override
-  String get reportCopied => '已複製回報';
+  String get reportHistory => '回報紀錄';
 
   @override
-  String get copyReport => '複製回報';
+  String reportHistoryUpdates(int count) {
+    return '你有 $count 筆回報有了處理結果';
+  }
+
+  @override
+  String get reportHistoryEmpty => '你還沒有送出任何回報。';
+
+  @override
+  String get reportHistoryLoadFailed => '無法載入你的回報。請確認網路連線後再試一次。';
+
+  @override
+  String get reportStatusOpen => '待處理';
+
+  @override
+  String get reportStatusResolved => '已解決';
+
+  @override
+  String get reportStatusDeclined => '不處理';
+
+  @override
+  String reportFixedIn(String version) {
+    return '已在 $version 修正';
+  }
+
+  @override
+  String reportUpdateForFix(String version) {
+    return '已在 $version 修正，請更新 App 取得修正。';
+  }
+
+  @override
+  String reportSentAt(String time) {
+    return '回報時間：$time';
+  }
+
+  @override
+  String reportHandledAt(String time) {
+    return '處理時間：$time';
+  }
+
+  @override
+  String get reportUnknownBook => '未記錄書名';
+
+  @override
+  String reportYourNote(String note) {
+    return '你的說明：$note';
+  }
 
   @override
   String get languageChineseTraditional => '中文（繁體）';

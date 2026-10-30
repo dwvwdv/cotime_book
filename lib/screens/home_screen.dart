@@ -7,6 +7,7 @@ import '../config/theme.dart';
 import '../providers/announcement_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/external_link_provider.dart';
+import '../providers/layout_report_history_provider.dart';
 import '../providers/book_provider.dart';
 import '../models/recent_room.dart';
 import '../models/room.dart';
@@ -14,6 +15,7 @@ import '../providers/presence_provider.dart';
 import '../providers/recent_rooms_provider.dart';
 import '../providers/room_provider.dart';
 import '../widgets/announcement_sheet.dart';
+import '../widgets/layout_report_history_sheet.dart';
 import '../widgets/masthead.dart';
 import '../widgets/more_apps_sheet.dart';
 import '../widgets/paper.dart';
@@ -42,6 +44,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void initState() {
     super.initState();
     _nicknameController.text = ref.read(authProvider).nickname;
+    // Read whenever Home comes up: a report sent from the reader, or an answer
+    // to one, shows the next time the reader is back here.
+    if (ref.read(authProvider).isAuthenticated) _refreshReportHistory();
+  }
+
+  void _refreshReportHistory() {
+    Future.microtask(
+      () => ref.read(layoutReportHistoryProvider.notifier).refresh(),
+    );
   }
 
   @override
@@ -56,6 +67,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final authState = ref.watch(authProvider);
     final roomState = ref.watch(roomProvider);
     final recentRooms = ref.watch(recentRoomsProvider);
+    final reportAnswers = ref.watch(
+      layoutReportHistoryProvider.select((state) => state.unseenAnswers),
+    );
+    // Signing in (at launch, or after a failed attempt) comes after initState.
+    ref.listen(authProvider.select((state) => state.isAuthenticated), (
+      _,
+      signedIn,
+    ) {
+      if (signedIn) _refreshReportHistory();
+    });
 
     // Feature 2: intercept hardware back on home screen → double-back to exit.
     return PopScope(
@@ -100,6 +121,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         const SizedBox(height: 28),
                         const Divider(thickness: AppTheme.heavyRuleWidth),
                         const SizedBox(height: 28),
+
+                        if (reportAnswers > 0) ...[
+                          // Up here rather than only in the bar: nobody opens
+                          // Report History to check, so an answer has to
+                          // come to them.
+                          OutlinedButton.icon(
+                            onPressed: () => showLayoutReportHistory(context),
+                            icon: const Icon(Icons.mark_email_unread_outlined),
+                            label: Text(
+                              context.l10n.reportHistoryUpdates(reportAnswers),
+                            ),
+                          ),
+                          const SizedBox(height: 28),
+                        ],
 
                         if (roomState.currentRoom != null) ...[
                           SectionHeader(label: context.l10n.activeRoom),
@@ -390,7 +425,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-
 /// Switches the interface between English and Chinese, from whichever is on
 /// screen. Named in the other language, as a language picker is: someone who
 /// cannot read the current one still finds their own.
@@ -413,8 +447,8 @@ class _LanguageToggle extends ConsumerWidget {
 }
 
 /// The bar along the bottom: tools that work on this device alone (bottom
-/// left), kept apart from rooms, and the maker's other apps and the
-/// announcements (bottom right).
+/// left), kept apart from rooms, and the reader's reports, the maker's other
+/// apps and the announcements (bottom right).
 ///
 /// TXT to EPUB lives here rather than in a room's Share Book: the person who
 /// converts a book reads it first, so a bad conversion never has a whole room
@@ -455,6 +489,18 @@ class _ToolsBar extends ConsumerWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // Only once there is something in it: most readers never
+                  // send a report, and an empty list is a button too many.
+                  if (ref.watch(
+                    layoutReportHistoryProvider.select(
+                      (state) => state.hasReports,
+                    ),
+                  ))
+                    TextButton(
+                      onPressed: () => showLayoutReportHistory(context),
+                      style: _compact,
+                      child: Text(context.l10n.reportHistory),
+                    ),
                   // Out here, never in a room: nothing about a reading
                   // session points at another app.
                   TextButton(
