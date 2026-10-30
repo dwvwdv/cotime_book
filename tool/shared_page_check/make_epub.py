@@ -8,7 +8,9 @@
 # a picture on a page of its own, with no text on it, and one holds lines too
 # long for the column. One chapter is wrapped in a box that clips its
 # overflow, and every chapter's last paragraph is marked so the check can
-# tell it was shown.
+# tell it was shown. One marks the printed book's page numbers the way
+# Project Gutenberg does, in boxes taken out of the flow that are all drawn
+# on one page near the chapter's end (GH-80).
 import sys
 import struct, zipfile, zlib, random
 random.seed(7)
@@ -42,9 +44,18 @@ endings = [
 # lines below it, which is what named the next page by a character of this
 # one. Repeated, so one of them lands at the foot of a page.
 url = "可以先尝试通过在线网站CloudFlareWatch（http://www.crimeflare.us/cfs.xhtml#box-and-a-much-longer-anchor-that-cannot-break）对CloudFlare客户网站进行真实IP查询，结果如图1-12所示，" + cjk * 2
+# Gutenberg's `.pagenum { position: absolute; left: 92% }`: placed by the
+# whole section's width, so each number stands among the paragraphs of an
+# early page and is drawn chapters of pages later. The page the first one
+# stands on was the name of every page after it.
+page_number_css = '<style>.pagenum { position: absolute; left: 92%; font-size: x-small; }</style>'
+def page_number(i):
+    return f'<span class="pagenum"><a id="Page_{i}">[{i}]</a></span>'
 def extra(c, i):
     if c == 2 and i == 3:
-        return picture
+        return picture + page_number(i)
+    if c == 2 and i % 4 == 0:
+        return page_number(i)
     if c == 1 and i % 3 == 0:
         return f'<p>{url}</p><p style="overflow-wrap: normal !important">{url}</p>'
     return ""
@@ -57,7 +68,8 @@ for c in range(3):
     text = f'<h1>Chapter {c+1}</h1>{ps}<p id="end-c{c}"><i>Italic tail</i> <b>bold tail</b></p>'
     if c == 0:
         text = f'<div style="overflow: hidden">{text}</div>'
-    chapters.append(f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>C{c}</title></head><body>{text}{endings[c]}</body></html>')
+    head = page_number_css if c == 2 else ""
+    chapters.append(f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>C{c}</title>{head}</head><body>{text}{endings[c]}</body></html>')
 z = zipfile.ZipFile(sys.argv[1], "w")
 z.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
 z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')

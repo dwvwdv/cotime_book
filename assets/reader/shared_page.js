@@ -124,6 +124,38 @@
     return null;
   }
 
+  // Text in a box taken out of the flow (position: absolute or fixed) is
+  // drawn where its containing block puts it, not where it stands in the
+  // document, and in columns that block is the whole section. Project
+  // Gutenberg marks the printed book's page numbers with `.pagenum {
+  // position: absolute; left: 92% }`: every one of a chapter's numbers lands
+  // on one page near its end, while each stands in the document between the
+  // paragraphs of a page long before (GH-80). Per element, and cleared by
+  // layOut() with everything else that hangs on the layout.
+  var outOfFlowCache = new WeakMap();
+
+  function outOfFlow(element) {
+    var body = element.ownerDocument.body;
+    var win = element.ownerDocument.defaultView;
+    var walked = [];
+    var result = false;
+    for (var el = element; el && el.nodeType === 1 && el !== body;
+         el = el.parentElement) {
+      if (outOfFlowCache.has(el)) {
+        result = outOfFlowCache.get(el);
+        break;
+      }
+      walked.push(el);
+      var position = win.getComputedStyle(el).position;
+      if (position === 'absolute' || position === 'fixed') {
+        result = true;
+        break;
+      }
+    }
+    for (var i = 0; i < walked.length; i++) outOfFlowCache.set(walked[i], result);
+    return result;
+  }
+
   // The first character of the first line that begins on this page. epub.js
   // takes the first character, in document order, that lies in the page's
   // strip; but a line that cannot break (a long URL) runs out of its column
@@ -133,6 +165,14 @@
   // and turning from there committed the same name again, so the room could
   // not get past the page (GH-52). Characters of a line that began on an
   // earlier page never name this one. Null when no line begins here.
+  //
+  // Only text in the flow counts (outOfFlow()). The walk stops at the first
+  // text past the page, which holds only for text drawn in document order:
+  // a Gutenberg page number standing before the page and drawn chapters
+  // later stopped it before it got to the page, and epub.js then named the
+  // page by that number. Every page after it got the same name, so a turn
+  // never landed and a follower shown it went to the page with the numbers
+  // on it (GH-80).
   function firstLineStart(mapping, root, start, end) {
     var doc = root.ownerDocument;
     var walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -140,6 +180,7 @@
     var node;
     while ((node = walker.nextNode())) {
       if (!/\S/.test(node.data)) continue;
+      if (node.parentElement && outOfFlow(node.parentElement)) continue;
       range.selectNodeContents(node);
       var bounds = range.getBoundingClientRect();
       if (bounds.width === 0 && bounds.height === 0) continue;
@@ -163,6 +204,21 @@
     return null;
   }
 
+  // How findStart() named the last page it was asked about — `by` 'line',
+  // 'picture', or 'epub.js' for epub.js's own guess — what it named it by,
+  // and where that is drawn. For the diagnostics. The place is read here:
+  // epub.js collapses the range to its start right after, and a collapsed
+  // range at the start of a line reports the end of the line before, which
+  // can be on the page before.
+  var lastNaming = null;
+
+  function noteNaming(by, range) {
+    lastNaming = { by: by, node: null, left: null };
+    if (!range || typeof range.getBoundingClientRect !== 'function') return;
+    lastNaming.node = range.cotimePicture || range.startContainer;
+    lastNaming.left = range.getBoundingClientRect().left;
+  }
+
   // A page with no text on it has no character to be named by, and epub.js
   // then falls back to the last text before it — on an earlier page. A
   // follower shown that name stayed where it was while the requester was
@@ -176,21 +232,30 @@
     var findStart = proto.findStart;
     var rangePairToCfiPair = proto.rangePairToCfiPair;
     proto.findStart = function (root, start, end) {
-      if (!horizontalLtr(this)) return findStart.call(this, root, start, end);
+      if (!horizontalLtr(this)) {
+        lastNaming = null;
+        return findStart.call(this, root, start, end);
+      }
       var line = firstLineStart(this, root, start, end);
-      if (line) return line;
+      if (line) {
+        noteNaming('line', line);
+        return line;
+      }
       var picture = firstPictureOnPage(root, start, end);
       if (picture) {
         var named = root.ownerDocument.createRange();
         named.selectNode(picture);
         named.cotimePicture = picture;
+        noteNaming('picture', named);
         return named;
       }
       // Nothing begins on this page: it holds at most the end of a line that
       // ran over from the page before, which epub.js would name it by. Such
       // a page counts as blank (showsSomething), so a turn never stops on it
       // and that name is never committed.
-      return findStart.call(this, root, start, end);
+      var guessed = findStart.call(this, root, start, end);
+      noteNaming('epub.js', guessed);
+      return guessed;
     };
     // A range always becomes a CFI into a text node, which a picture has
     // none of; the element itself is the name.
@@ -217,6 +282,9 @@
     var node;
     while ((node = walker.nextNode())) {
       if (!/\S/.test(node.data)) continue;
+      // Not what makes a page worth stopping on: a page that holds nothing
+      // else has nothing to be named by but epub.js's guess (GH-80).
+      if (node.parentElement && outOfFlow(node.parentElement)) continue;
       range.selectNodeContents(node);
       var bounds = range.getBoundingClientRect();
       if (bounds.right <= start || bounds.left >= end) continue;
@@ -280,6 +348,7 @@
     var node;
     while ((node = walker.nextNode())) {
       if (!/\S/.test(node.data)) continue;
+      if (node.parentElement && outOfFlow(node.parentElement)) continue;
       range.selectNodeContents(node);
       var lines = range.getClientRects();
       for (var j = 0; j < lines.length; j++) mark(lines[j], true);
@@ -534,6 +603,7 @@
   async function layOut(page) {
     // Every page break may move: a new text size, a new frame, a repair.
     countedKey = null;
+    outOfFlowCache = new WeakMap();
     var manager = rendition.manager;
     if (manager) manager._stageSize = undefined;
     // Numbers, not "100vw": a window resize (keyboard, rotation) must not
@@ -577,6 +647,110 @@
     if (!element) return null;
     var r = element.getBoundingClientRect();
     return [round(r.left), round(r.top), round(r.width), round(r.height)];
+  }
+
+  // "span.ralign > span.pagenum > a#Page_ii": where a name or a box is in the
+  // book, without any of its text.
+  function elementPath(element, depth, withIds) {
+    var parts = [];
+    var body = element.ownerDocument.body;
+    for (var el = element; el && el.nodeType === 1 && el !== body &&
+         parts.length < depth; el = el.parentElement) {
+      var part = el.localName;
+      if (withIds && el.id) part += '#' + el.id;
+      for (var i = 0; i < el.classList.length && i < 3; i++) {
+        part += '.' + el.classList[i];
+      }
+      parts.unshift(part.slice(0, 60));
+    }
+    return parts.join(' > ');
+  }
+
+  function pageOf(left, delta) {
+    return Math.floor((left + 1) / delta);
+  }
+
+  // How the pages around the one in view are named: the name a turn onto
+  // each would commit, how findStart() came by it, what it was named by,
+  // and which page that is drawn on. Two pages with one name, a name drawn
+  // on another page, or a page epub.js had to guess for is what kept a room
+  // from turning (GH-52, GH-80), and none of it needs the book's text.
+  function pageNames(manager) {
+    var layout = manager.layout;
+    var inView = pagesInView(manager)[0];
+    if (!layout || !layout.delta || !inView || !inView.view.contents) return [];
+    var delta = layout.delta;
+    var here = Math.round(inView.start / delta);
+    var count = Math.max(1, Math.round(inView.view.width() / delta));
+    var names = [];
+    for (var i = Math.max(0, here - 2); i <= Math.min(count - 1, here + 2); i++) {
+      lastNaming = null;
+      var start = i * delta;
+      var range = manager.mapping.page(inView.view.contents,
+        inView.view.section.cfiBase, start, start + layout.width);
+      var entry = {
+        page: i,
+        cfi: range && range.start ? range.start : null,
+        by: lastNaming ? lastNaming.by : null,
+      };
+      var node = lastNaming && lastNaming.node;
+      var element = node && (node.nodeType === 1 ? node : node.parentElement);
+      if (element) {
+        entry.element = elementPath(element, 4, true);
+        entry.outOfFlow = outOfFlow(element);
+        entry.drawnOn = pageOf(lastNaming.left, delta);
+      }
+      names.push(entry);
+    }
+    lastNaming = null;
+    return names;
+  }
+
+  // The boxes out of the flow in the section in view (see outOfFlow()), by
+  // kind: how many and which pages they are drawn on. Gutenberg's page
+  // numbers show up as one kind, all on one page.
+  function outOfFlowBoxes(manager) {
+    var layout = manager.layout;
+    var inView = pagesInView(manager)[0];
+    var doc = inView && inView.view.document;
+    if (!layout || !layout.delta || !doc || !doc.body) return [];
+    var win = doc.defaultView;
+    var kinds = [];
+    var byKind = {};
+    var all = doc.body.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      var position = win.getComputedStyle(el).position;
+      if (position !== 'absolute' && position !== 'fixed') continue;
+      // Counted once, as the outermost box taken out.
+      if (el.parentElement && outOfFlow(el.parentElement)) continue;
+      var box = elementPath(el, 1, false);
+      var key = box + ' ' + position;
+      var kind = byKind[key];
+      if (!kind) {
+        if (kinds.length >= 5) continue;
+        kind = byKind[key] = { box: box, position: position, count: 0, pages: [] };
+        kinds.push(kind);
+      }
+      kind.count++;
+      var rect = el.getBoundingClientRect();
+      var drawnOn = rect.width > 0 || rect.height > 0
+        ? pageOf(rect.left, layout.delta)
+        : null;
+      if (kind.pages.indexOf(drawnOn) < 0 && kind.pages.length < 5) {
+        kind.pages.push(drawnOn);
+      }
+    }
+    return kinds;
+  }
+
+  // Diagnostics that must never cost the report the rest of it.
+  function attempt(read, fallback) {
+    try {
+      return read();
+    } catch (e) {
+      return fallback;
+    }
   }
 
   // The last few script errors in this WebView, for the diagnostics.
@@ -808,6 +982,12 @@
         repairs: repairs,
         lastRepair: lastRepair,
         lastTurn: lastTurn,
+        pageNames: manager ? attempt(function () {
+          return pageNames(manager);
+        }, null) : [],
+        outOfFlow: manager ? attempt(function () {
+          return outOfFlowBoxes(manager);
+        }, null) : [],
         errors: errors,
       };
     }

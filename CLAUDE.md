@@ -95,6 +95,9 @@ supabase/
      `submit_layout_report` RPC 存進 `cotime_book_private.layout_reports`（App 讀不到，從 dashboard /
      SQL Editor 查）：裝置、書、房內每個 reader 的 page_fit、最近幾次移動與 `diagnose()`，
      同一房間同一時刻的報告用 `room_id` 配對；使用者會拿到報告 ID 可以貼進 issue。
+     `diagnose()` 的 `pageNames` 記下本頁與前後兩頁的頁名、怎麼命名的（`line` / `picture` / `epub.js` 的猜測）、
+     命名用的元素路徑與它畫在第幾頁，`outOfFlow` 記下這一章 out-of-flow 的盒子種類與落點——不是圖書館的書
+     沒辦法重排，這些結構資訊就是查頁名問題的依據（GH-80）。元素路徑只有 tag、class、id。
      報告的 key 是查詢用的，不要隨意改名；也不要放書的內文、暱稱或 user id。
    - **字級預設由房主決定**：`rooms.text_size_locked`（預設 true）與 `text_size`，只能經
      `set_room_text_size` RPC（host 限定）改。鎖定時每個 reader 在 page_fit 裡要求的是房間的字級
@@ -108,7 +111,10 @@ supabase/
      不能斷行的長網址會溢出到下一頁的範圍，拿溢出的字當下一頁的名字，`display()` 會回到上一頁，
      全房卡住（GH-52）；共享排版也讓過長的字串與 `pre` 在欄內換行。書裡元素的 `overflow` 一律 visible：
      裁切溢出的容器在分欄排版裡不能拆頁，calibre 的 GitBook 轉檔把整章包在 `overflow: hidden` 裡，
-     整章被擠成一頁、其餘被裁掉、翻一頁就跳章（GH-49）。`check.js` 會確認每章最後一段都有某一頁顯示出來。沒有字的頁同理：空白頁在翻頁時
+     整章被擠成一頁、其餘被裁掉、翻一頁就跳章（GH-49）。`check.js` 會確認每章最後一段都有某一頁顯示出來。
+     頁名與「這頁有沒有東西」都只看 in-flow 的字：`position: absolute / fixed` 的盒子在分欄裡相對整章定位，
+     Gutenberg 的 `.pagenum { position: absolute; left: 92% }` 讓全章的頁碼疊在章尾某一頁，文件順序卻散在各頁之間，
+     頁首的走訪碰到它就提早停下、退回 epub.js 的猜測，之後每一頁都叫同一個頁碼，翻頁永遠不 commit（GH-80）。沒有字的頁同理：空白頁在翻頁時
      直接跳過，只有圖的頁以圖的 element CFI 命名（issue #22）。
      底部列的頁數（`PageCounter`）來自 `shared_page.js` 的 `pageInfo()`：章內第幾頁／共幾頁
      與全書百分比。它用和跳過空白頁同一套「這頁有沒有東西」的判斷，不算空白頁——否則翻頁會
@@ -144,8 +150,10 @@ supabase/
      房內有讀者的 App 低於 `AppConstants.pageJumpProtocol` 時，requester 直接不發出跳頁請求。
      版本 5 是表決請離（`member_removal_vote` 與 `membership_changed` 的 `removed`，見第 4 點）：
      舊版忽略兩者、照舊等完重連寬限，所以仍相容。
+     版本 6 是 out-of-flow 的字不再當頁名、也不再讓一頁算有東西（GH-80）：舊版在 Gutenberg 的書上會把一整章
+     都叫成同一個頁碼，所以 `minCompatibleRoomProtocol` 拉到 6。
      只新增可被忽略的欄位不用改。版號只能往上加。舊版（v1.0.5 以前）不送這兩個欄位，算成 0，
-     與目前的版本相容。只提示、不把對方排除在共識之外。
+     會被標示為需要更新。只提示、不把對方排除在共識之外。
 
 3. **房間成員的權威來源是資料庫，不是 Presence。**
    Presence 只負責 online / has_book 這層 overlay。
