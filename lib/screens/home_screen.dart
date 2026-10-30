@@ -31,7 +31,8 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen>
+    with WidgetsBindingObserver {
   final _nicknameController = TextEditingController();
   final _roomCodeController = TextEditingController();
   bool _isJoinMode = false;
@@ -44,19 +45,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void initState() {
     super.initState();
     _nicknameController.text = ref.read(authProvider).nickname;
+    WidgetsBinding.instance.addObserver(this);
     // Read whenever Home comes up: a report sent from the reader, or an answer
     // to one, shows the next time the reader is back here.
     if (ref.read(authProvider).isAuthenticated) _refreshReportHistory();
   }
 
+  /// And on coming back to the app: an e-reader stays open on Home for days,
+  /// and a read that failed offline at launch would otherwise never be tried
+  /// again, hiding Report History until the next restart.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        ref.read(authProvider).isAuthenticated) {
+      _refreshReportHistory();
+    }
+  }
+
   void _refreshReportHistory() {
-    Future.microtask(
-      () => ref.read(layoutReportHistoryProvider.notifier).refresh(),
-    );
+    Future.microtask(() {
+      if (mounted) ref.read(layoutReportHistoryProvider.notifier).refresh();
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _nicknameController.dispose();
     _roomCodeController.dispose();
     super.dispose();

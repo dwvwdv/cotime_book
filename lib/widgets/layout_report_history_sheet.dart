@@ -49,6 +49,9 @@ class _LayoutReportHistoryListState
     // What Home already has is on screen while the new list loads.
     await history.markAnswersSeen();
     await history.refresh();
+    // Closed before the read came back: what it brought was never on screen,
+    // and Home still has to point at it.
+    if (!mounted) return;
     await history.markAnswersSeen();
     if (mounted) setState(() => _loading = false);
   }

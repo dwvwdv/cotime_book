@@ -188,6 +188,33 @@ void main() {
       expect(find.text('Report History'), findsOneWidget);
     });
 
+    testWidgets('a read that failed offline is tried again on coming back', (
+      tester,
+    ) async {
+      reportHistory.results.addAll([
+        Exception('offline'),
+        [reportRecord()],
+      ]);
+      await pumpHome(tester);
+      await tester.pumpAndSettle();
+      expect(find.text('Report History'), findsNothing);
+
+      // Away and back, through the states a phone goes through.
+      for (final state in const [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+        AppLifecycleState.hidden,
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.text('Report History'), findsOneWidget);
+    });
+
     testWidgets('on a small phone the bar with it stays on one line', (
       tester,
     ) async {

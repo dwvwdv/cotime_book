@@ -331,6 +331,20 @@ void main() {
       expect(container.read(layoutReportHistoryProvider).unseenAnswers, 0);
     });
 
+    testWidgets(
+      'closed before the read came back, its answers are still news',
+      (tester) async {
+        final slow = Completer<List<LayoutReportRecord>>();
+        final container = await pumpHistory(tester, FakeReportHistory([slow]));
+        await tester.pumpWidget(const SizedBox());
+
+        slow.complete([reportRecord(status: LayoutReportStatus.resolved)]);
+        await tester.pumpAndSettle();
+
+        expect(container.read(layoutReportHistoryProvider).unseenAnswers, 1);
+      },
+    );
+
     testWidgets('a failed read can be tried again', (tester) async {
       await pumpHistory(
         tester,
