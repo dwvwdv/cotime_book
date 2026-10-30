@@ -140,9 +140,10 @@ build/app/outputs/bundle/release/app-release.aab
   `assets/reader/**`、`assets/fonts/**`（字型以 data URL 進 rules）、`lib/services/shared_page*.dart`、
   `lib/services/txt_book.dart`（第二本受檢的書由 TXT 匯入產生）與它解 GBK 用的 `lib/services/gb18030.dart`、`tool/shared_page_check/**`、`pubspec.yaml` / `pubspec.lock`（flutter_epub_viewer 的版本就是
   epub.js 的版本）與 workflow 本身；push 與 pull_request 兩份清單要一樣，
-  `test/ci_workflow_test.dart` 會檢查。它固定跑在 `ubuntu-latest`，不吃 `CI_RUNNER`：
+  `test/ci_workflow_test.dart` 會檢查。它固定跑在 `ubuntu-24.04`，不吃 `CI_RUNNER`：
   要 sudo apt 裝依賴與字型，self-hosted runner 不一定有。Playwright 版本釘死
-  （換版本就換 Chromium，排版可能跟著變）。沒有產物可送，所以不接 Telegram。
+  （換版本就換 Chromium，排版可能跟著變），runner 也跟著釘死：`ubuntu-latest` 換成 26.04 後，
+  Playwright 1.56.1 裝不了它的系統依賴，job 直接失敗。兩者要一起升。沒有產物可送，所以不接 Telegram。
 - **不要用 `--tests` 指名要跑的測試類別。** 新增測試時很容易忘了回頭改 workflow，
   症狀是「CI 全綠但那個檔案從來沒被執行過」。
 
