@@ -84,7 +84,12 @@ class AppConstants {
   /// from being blank (GH-80). An app on 5 names every page after the first
   /// such page number by that number and shows a commit of it chapters of
   /// pages away, so 5 is not compatible.
-  static const int roomProtocolVersion = 6;
+  ///
+  /// 7: nothing in a book is wider than the box it is in, and table cells
+  /// wrap (GH-83). A figure box or table the book made wider than the page
+  /// used to run on into the next page's column; an app on 6 breaks those
+  /// pages elsewhere, so 6 is not compatible.
+  static const int roomProtocolVersion = 7;
 
   /// The first [roomProtocolVersion] that answers a request to jump to a page.
   static const int pageJumpProtocol = 4;
@@ -94,6 +99,7 @@ class AppConstants {
   /// own minimum is above this app's version tells this one to update.
   ///
   /// Raise it to the new version when a bump is one the previous apps cannot
-  /// follow, as version 2's page breaks and version 6's page names are not.
-  static const int minCompatibleRoomProtocol = 6;
+  /// follow, as the page breaks of versions 2 and 7 and the page names of
+  /// version 6 are not.
+  static const int minCompatibleRoomProtocol = 7;
 }

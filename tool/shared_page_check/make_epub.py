@@ -10,7 +10,9 @@
 # overflow, and every chapter's last paragraph is marked so the check can
 # tell it was shown. One marks the printed book's page numbers the way
 # Project Gutenberg does, in boxes taken out of the flow that are all drawn
-# on one page near the chapter's end (GH-80).
+# on one page near the chapter's end (GH-80). One holds figures the way
+# Gutenberg sets them: a box with a fixed width wider than the page, and two
+# pictures side by side over captions kept on one line (GH-83).
 import sys
 import struct, zipfile, zlib, random
 random.seed(7)
@@ -51,13 +53,30 @@ url = "可以先尝试通过在线网站CloudFlareWatch（http://www.crimeflare.
 page_number_css = '<style>.pagenum { position: absolute; left: 92%; font-size: x-small; }</style>'
 def page_number(i):
     return f'<span class="pagenum"><a id="Page_{i}">[{i}]</a></span>'
+# Wider than any page: the caption centred in it was drawn on the next page,
+# over that page's text.
+wide_figure = ('<div class="figcenter" style="width: 591px; margin: auto; text-align: center">'
+               '<img src="plate.png" alt=""/> <span style="font-weight: bold">Fig. 6. A figure wider '
+               'than the page.</span></div>')
+side_by_side = ('<table style="width: 390px; margin: auto"><tr>'
+                '<td style="text-align: center"><img src="plate.png" alt="" style="width: 150px"/></td>'
+                '<td style="text-align: center"><img src="plate.png" alt="" style="width: 150px"/></td></tr><tr>'
+                '<td style="white-space: nowrap; text-align: center">Fig. 30. Plain Hook Tool</td>'
+                '<td style="white-space: nowrap; text-align: center">Fig. 31. Plain Straight Tool</td>'
+                '</tr></table>')
 def extra(c, i):
+    if c == 0 and i == 5:
+        return wide_figure
+    if c == 0 and i == 11:
+        return side_by_side
     if c == 2 and i == 3:
         return picture + page_number(i)
     if c == 2 and i % 4 == 0:
         return page_number(i)
     if c == 1 and i % 3 == 0:
-        return f'<p>{url}</p><p style="overflow-wrap: normal !important">{url}</p>'
+        # The one kept from breaking runs off its page on purpose, so the
+        # check that no text does knows to leave it out.
+        return f'<p>{url}</p><p data-runs-off="" style="overflow-wrap: normal !important">{url}</p>'
     return ""
 chapters = []
 for c in range(3):

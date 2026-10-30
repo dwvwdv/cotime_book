@@ -119,6 +119,9 @@ supabase/
      全房卡住（GH-52）；共享排版也讓過長的字串與 `pre` 在欄內換行。書裡元素的 `overflow` 一律 visible：
      裁切溢出的容器在分欄排版裡不能拆頁，calibre 的 GitBook 轉檔把整章包在 `overflow: hidden` 裡，
      整章被擠成一頁、其餘被裁掉、翻一頁就跳章（GH-49）。`check.js` 會確認每章最後一段都有某一頁顯示出來。
+     書裡的元素也一律 `max-width: 100%`、表格儲存格 `white-space: normal`：Gutenberg 的圖框寫死 `width: 591px`、
+     並排圖片的圖說 nowrap，比頁面寬的部分延伸到下一欄，圖說畫在下一頁的正文上（GH-83）。`check.js` 逐頁確認沒有文字
+     跨出頁邊。仍放不進頁寬的數據表（每欄最長的數字加起來就超過頁寬）還會溢出，見 GH-84。
      頁名與「這頁有沒有東西」都只看 in-flow 的字：`position: absolute / fixed` 的盒子在分欄裡相對整章定位，
      Gutenberg 的 `.pagenum { position: absolute; left: 92% }` 讓全章的頁碼疊在章尾某一頁，文件順序卻散在各頁之間，
      頁首的走訪碰到它就提早停下、退回 epub.js 的猜測，之後每一頁都叫同一個頁碼，翻頁永遠不 commit（GH-80）。沒有字的頁同理：空白頁在翻頁時
@@ -159,6 +162,7 @@ supabase/
      舊版忽略兩者、照舊等完重連寬限，所以仍相容。
      版本 6 是 out-of-flow 的字不再當頁名、也不再讓一頁算有東西（GH-80）：舊版在 Gutenberg 的書上會把一整章
      都叫成同一個頁碼，所以 `minCompatibleRoomProtocol` 拉到 6。
+     版本 7 是書裡的元素不比容器寬、表格儲存格可換行（GH-83）：分頁點改變，`minCompatibleRoomProtocol` 拉到 7。
      只新增可被忽略的欄位不用改。版號只能往上加。舊版（v1.0.5 以前）不送這兩個欄位，算成 0，
      會被標示為需要更新。只提示、不把對方排除在共識之外。
 
