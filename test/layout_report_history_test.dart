@@ -105,6 +105,14 @@ void main() {
       expect([for (final r in await history.list()) r.id], ['r1']);
     });
 
+    test('a response that is not a list is a failed read, not no reports', () {
+      final history = SupabaseLayoutReportHistory(
+        call: () async => {'error': 'proxy'},
+      );
+
+      expect(history.list(), throwsFormatException);
+    });
+
     test('a fix in a later release asks this app to update', () {
       final fixed = reportRecord(
         status: LayoutReportStatus.resolved,
@@ -184,6 +192,37 @@ void main() {
       expect(history.state.unseenAnswers, 1);
     });
 
+    test('waking the app reads again only once the list is old', () async {
+      var now = DateTime(2026, 10, 30, 9);
+      final fake = FakeReportHistory([
+        [reportRecord()],
+      ]);
+      final history = LayoutReportHistoryNotifier(fake, store, now: () => now);
+      await history.refresh();
+
+      now = now.add(const Duration(minutes: 10));
+      await history.refreshIfStale(const Duration(minutes: 30));
+      expect(fake.calls, 1);
+
+      now = now.add(const Duration(minutes: 21));
+      await history.refreshIfStale(const Duration(minutes: 30));
+      expect(fake.calls, 2);
+    });
+
+    test('a failed read is tried again on the next wake', () async {
+      final fake = FakeReportHistory([
+        Exception('offline'),
+        [reportRecord()],
+      ]);
+      final history = notifier(fake);
+      await history.refresh();
+
+      await history.refreshIfStale(const Duration(minutes: 30));
+
+      expect(fake.calls, 2);
+      expect(history.state.reports, hasLength(1));
+    });
+
     test('a failed read keeps the reports Home already has', () async {
       final history = notifier(
         FakeReportHistory([
@@ -227,12 +266,15 @@ void main() {
       WidgetTester tester,
       FakeReportHistory history, {
       String appVersion = '1.0.27+31',
+      Future<String>? appVersionLoading,
     }) async {
       final container = ProviderContainer(
         overrides: [
           localStoreProvider.overrideWithValue(store),
           layoutReportHistoryServiceProvider.overrideWithValue(history),
-          appVersionProvider.overrideWith((ref) async => appVersion),
+          appVersionProvider.overrideWith(
+            (ref) => appVersionLoading ?? Future.value(appVersion),
+          ),
         ],
       );
       addTearDown(container.dispose);
@@ -295,11 +337,57 @@ void main() {
         ]),
       );
 
-      expect(find.text('Resolved'), findsOneWidget);
+      // Not "Resolved": the bug is still on this reader's screen.
+      expect(find.text('Resolved'), findsNothing);
+      expect(find.text('Update needed'), findsOneWidget);
       expect(
         find.text('Fixed in 1.0.28. Update the app to get the fix.'),
         findsOneWidget,
       );
+    });
+
+    testWidgets('a fix is not shown as done before the app knows its version', (
+      tester,
+    ) async {
+      final version = Completer<String>();
+      await pumpHistory(
+        tester,
+        FakeReportHistory([
+          [
+            reportRecord(
+              status: LayoutReportStatus.resolved,
+              fixedIn: '1.0.28',
+            ),
+          ],
+        ]),
+        appVersionLoading: version.future,
+      );
+      expect(find.text('Fixed in 1.0.28'), findsNothing);
+      expect(find.text('Resolved'), findsNothing);
+
+      version.complete('1.0.27+31');
+      await tester.pumpAndSettle();
+
+      expect(find.text('Update needed'), findsOneWidget);
+    });
+
+    testWidgets('an answer that comes in while it is open is seen', (
+      tester,
+    ) async {
+      final container = await pumpHistory(
+        tester,
+        FakeReportHistory([
+          [reportRecord()],
+          [reportRecord(status: LayoutReportStatus.resolved)],
+        ]),
+      );
+
+      // Home reading again on waking, after the sheet's own read is done.
+      await container.read(layoutReportHistoryProvider.notifier).refresh();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Resolved'), findsOneWidget);
+      expect(container.read(layoutReportHistoryProvider).unseenAnswers, 0);
     });
 
     testWidgets('a fix this app has is just fixed', (tester) async {

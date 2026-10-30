@@ -1220,6 +1220,12 @@ abstract class AppLocalizations {
   /// **'Resolved'**
   String get reportStatusResolved;
 
+  /// No description provided for @reportStatusUpdateNeeded.
+  ///
+  /// In en, this message translates to:
+  /// **'Update needed'**
+  String get reportStatusUpdateNeeded;
+
   /// No description provided for @reportStatusDeclined.
   ///
   /// In en, this message translates to:

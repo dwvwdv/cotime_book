@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(10);
+select plan(12);
 
 insert into auth.users (
   id,
@@ -114,6 +114,36 @@ select results_eq(
   'the reader sees it resolved, in which release, with the note'
 );
 reset role;
+
+-- now() is the same all through a transaction, so what the rerun changed is
+-- read from the count rather than from resolved_at.
+select is(
+  cotime_book_private.resolve_layout_reports(
+    array[
+      '80000000-0000-0000-0000-000000000001',
+      '80000000-0000-0000-0000-000000000003'
+    ]::uuid[],
+    'resolved',
+    '1.0.28',
+    '已修正 / Fixed'
+  ),
+  0,
+  'marking reports again with the outcome they have leaves them as they are'
+);
+
+select is(
+  cotime_book_private.resolve_layout_reports(
+    array[
+      '80000000-0000-0000-0000-000000000001',
+      '80000000-0000-0000-0000-000000000003'
+    ]::uuid[],
+    'resolved',
+    '1.0.29',
+    '已修正 / Fixed'
+  ),
+  2,
+  'a new outcome is a new answer'
+);
 
 select cotime_book_private.resolve_layout_reports(
   array['80000000-0000-0000-0000-000000000002']::uuid[],

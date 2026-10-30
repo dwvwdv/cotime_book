@@ -507,6 +507,7 @@
   "reportHistoryLoadFailed": "Couldn't load your reports. Check the connection and try again.",
   "reportStatusOpen": "Pending",
   "reportStatusResolved": "Resolved",
+  "reportStatusUpdateNeeded": "Update needed",
   "reportStatusDeclined": "Not fixed",
   "reportFixedIn": "Fixed in {version}",
   "@reportFixedIn": {

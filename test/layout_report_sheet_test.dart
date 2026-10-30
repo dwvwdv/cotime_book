@@ -145,7 +145,7 @@ void main() {
 
   Future<void> pumpSheet(
     WidgetTester tester, {
-    required Future<String> Function(String note) onSend,
+    required Future<void> Function(String note) onSend,
   }) {
     return tester.pumpWidget(
       MaterialApp(
@@ -163,7 +163,6 @@ void main() {
       tester,
       onSend: (note) async {
         notes.add(note);
-        return '1a2b3c4d-0000-0000-0000-000000000000';
       },
     );
 
@@ -195,7 +194,6 @@ void main() {
       onSend: (_) async {
         attempts++;
         if (attempts == 1) throw Exception('offline');
-        return '5e6f0000-0000-0000-0000-000000000000';
       },
     );
 
@@ -244,7 +242,6 @@ void main() {
                   builder: (_) => LayoutReportSheet(
                     onSend: (_) async {
                       sent++;
-                      return '9a8b0000-0000-0000-0000-000000000000';
                     },
                   ),
                 ),

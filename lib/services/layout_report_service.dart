@@ -59,7 +59,11 @@ class SupabaseLayoutReportHistory implements LayoutReportHistory {
   @override
   Future<List<LayoutReportRecord>> list() async {
     final rows = await _call().timeout(listTimeout);
-    if (rows is! List) return const [];
+    // Not "no reports": that would take Report History off Home over a
+    // response it could not read. A failed read keeps the list it had.
+    if (rows is! List) {
+      throw FormatException('Unexpected report history: ${rows.runtimeType}');
+    }
     return [
       for (final row in rows)
         if (row is Map<String, dynamic>) ?LayoutReportRecord.fromRow(row),

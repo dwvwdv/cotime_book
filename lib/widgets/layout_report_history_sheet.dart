@@ -59,17 +59,40 @@ class _LayoutReportHistoryListState
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(layoutReportHistoryProvider);
-    final appVersion = ref.watch(appVersionProvider).valueOrNull;
+    // Whatever read brings answers in while the sheet is open (Home reads
+    // again on waking, and may land after _load is done), they are on screen.
+    ref.listen(layoutReportHistoryProvider.select((state) => state.reports), (
+      _,
+      _,
+    ) {
+      if (!_loading) {
+        ref.read(layoutReportHistoryProvider.notifier).markAnswersSeen();
+      }
+    });
+    // Waited for rather than read as "no update needed": a reader who needs
+    // one would first see the fix as done, then the panel refresh to say
+    // otherwise. A version that cannot be read is one with no advice.
+    final appVersion = ref.watch(appVersionProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(context.l10n.reportHistory, style: AppTheme.title),
         const SizedBox(height: 12),
         const Divider(thickness: AppTheme.heavyRuleWidth),
-        Expanded(child: _buildBody(state, appVersion)),
+        Expanded(
+          child: appVersion.isLoading
+              ? _loadingText()
+              : _buildBody(state, appVersion.valueOrNull),
+        ),
       ],
     );
   }
+
+  // Text, not a spinner: e-ink.
+  Widget _loadingText() => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 20),
+    child: Text(context.l10n.loading, style: AppTheme.body),
+  );
 
   Widget _buildBody(LayoutReportHistoryState state, String? appVersion) {
     final reports = state.reports;
@@ -87,11 +110,7 @@ class _LayoutReportHistoryListState
           ],
         );
       }
-      // Text, not a spinner: e-ink.
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 20),
-        child: Text(context.l10n.loading, style: AppTheme.body),
-      );
+      return _loadingText();
     }
     if (reports.isEmpty) {
       return Padding(
@@ -120,8 +139,12 @@ class _ReportEntry extends StatelessWidget {
     final fixedIn = report.fixedIn;
     final appVersion = this.appVersion;
     final needsUpdate = appVersion != null && report.needsUpdate(appVersion);
+    // Not "Resolved" while the fix is in a release this app is behind: the
+    // bug is still on this reader's screen.
     final status = switch (report.status) {
       LayoutReportStatus.open => l10n.reportStatusOpen,
+      LayoutReportStatus.resolved when needsUpdate =>
+        l10n.reportStatusUpdateNeeded,
       LayoutReportStatus.resolved => l10n.reportStatusResolved,
       LayoutReportStatus.declined => l10n.reportStatusDeclined,
     };
@@ -158,8 +181,6 @@ class _ReportEntry extends StatelessWidget {
             ),
           if (fixedIn != null) ...[
             const SizedBox(height: 8),
-            // The reader still on an older release is told what to do, not
-            // that it is solved: the bug is still on their screen.
             Text(
               needsUpdate
                   ? l10n.reportUpdateForFix(fixedIn)

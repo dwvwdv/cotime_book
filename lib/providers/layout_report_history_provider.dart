@@ -52,19 +52,28 @@ class LayoutReportHistoryNotifier
     extends StateNotifier<LayoutReportHistoryState> {
   final LayoutReportHistory _history;
   final LocalStore _store;
+  final DateTime Function() _now;
+
+  /// When the last read came back, for [refreshIfStale].
+  DateTime? _readAt;
 
   /// A read must not be overwritten by a slower one it replaced.
   int _readGeneration = 0;
 
-  LayoutReportHistoryNotifier(this._history, LocalStore store)
-    : _store = store,
-      super(LayoutReportHistoryState(seenAnswers: store.seenReportAnswers));
+  LayoutReportHistoryNotifier(
+    this._history,
+    LocalStore store, {
+    DateTime Function()? now,
+  }) : _store = store,
+       _now = now ?? DateTime.now,
+       super(LayoutReportHistoryState(seenAnswers: store.seenReportAnswers));
 
   Future<void> refresh() async {
     final generation = ++_readGeneration;
     try {
       final reports = await _history.list();
       if (!mounted || generation != _readGeneration) return;
+      _readAt = _now();
       state = LayoutReportHistoryState(
         reports: reports,
         seenAnswers: state.seenAnswers,
@@ -79,6 +88,16 @@ class LayoutReportHistoryNotifier
         seenAnswers: state.seenAnswers,
       );
     }
+  }
+
+  /// Reads again unless the last read came back less than [maxAge] ago. A
+  /// failed read is always tried again.
+  Future<void> refreshIfStale(Duration maxAge) async {
+    final readAt = _readAt;
+    if (!state.failed && readAt != null && _now().difference(readAt) < maxAge) {
+      return;
+    }
+    await refresh();
   }
 
   /// Every answer in the list has been on the reader's screen. Only those:

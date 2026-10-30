@@ -669,6 +669,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get reportStatusResolved => '已解決';
 
   @override
+  String get reportStatusUpdateNeeded => '需要更新';
+
+  @override
   String get reportStatusDeclined => '不處理';
 
   @override

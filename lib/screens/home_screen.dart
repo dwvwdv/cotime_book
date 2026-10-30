@@ -55,12 +55,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   /// and a read that failed offline at launch would otherwise never be tried
   /// again, hiding Report History until the next restart.
   @override
+  ///
+  /// Not on every wake: an e-reader wakes the app each time its panel comes
+  /// on, and answers come in days apart.
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed &&
         ref.read(authProvider).isAuthenticated) {
-      _refreshReportHistory();
+      Future.microtask(() {
+        if (!mounted) return;
+        ref
+            .read(layoutReportHistoryProvider.notifier)
+            .refreshIfStale(_reportHistoryMaxAge);
+      });
     }
   }
+
+  static const _reportHistoryMaxAge = Duration(minutes: 30);
 
   void _refreshReportHistory() {
     Future.microtask(() {
@@ -84,12 +94,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final reportAnswers = ref.watch(
       layoutReportHistoryProvider.select((state) => state.unseenAnswers),
     );
-    // Signing in (at launch, or after a failed attempt) comes after initState.
-    ref.listen(authProvider.select((state) => state.isAuthenticated), (
-      _,
-      signedIn,
-    ) {
-      if (signedIn) _refreshReportHistory();
+    // Signing in (at launch, or after a failed attempt) comes after initState,
+    // and so does a new session in place of a lost one: another account,
+    // whose reports these are not.
+    ref.listen(authProvider.select((state) => state.userId), (_, userId) {
+      if (userId != null) _refreshReportHistory();
     });
 
     // Feature 2: intercept hardware back on home screen → double-back to exit.

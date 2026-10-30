@@ -101,7 +101,7 @@ supabase/
      `select cotime_book_private.resolve_layout_reports(array['<id>']::uuid[], 'resolved', '1.0.28', '已修正… / Fixed …');`
      狀態是 `resolved` / `declined`（不處理，例如無法重現、書本身壞掉）/ `open`（標錯時改回來）；
      `fixed_in` 是含修正的版本（major.minor.patch），App 比對自己的版本，還沒更新的使用者看到「請更新 App」而不是「已解決」。
-     說明只有一份，會原樣顯示給中英文介面的使用者，所以寫成中英雙語。同一個問題的多筆報告一次標完。
+     說明只有一份，會原樣顯示給中英文介面的使用者，所以寫成中英雙語。同一個問題的多筆報告一次標完；之後同一問題又有新回報時，把舊的一起重跑也沒關係——結果沒變的報告不會改時間、不會再通知一次。
      `diagnose()` 的 `pageNames` 記下本頁與前後兩頁的頁名、怎麼命名的（`line` / `picture` / `epub.js` 的猜測）、
      命名用的元素路徑與它畫在第幾頁，`outOfFlow` 記下這一章 out-of-flow 的盒子種類與落點——不是圖書館的書
      沒辦法重排，這些結構資訊就是查頁名問題的依據（GH-80）。元素路徑只有 tag、class、id。

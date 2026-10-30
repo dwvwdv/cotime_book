@@ -113,9 +113,9 @@ List<Map<String, dynamic>> layoutReportReaders(
 /// and a copy of it pasted somewhere was one device's half of the problem.
 /// What became of it is in Report History on Home instead.
 ///
-/// [onSend] gets the reader's note and returns the stored report's id.
+/// [onSend] gets the reader's note and completes once the report is stored.
 class LayoutReportSheet extends StatefulWidget {
-  final Future<String> Function(String note) onSend;
+  final Future<void> Function(String note) onSend;
 
   const LayoutReportSheet({super.key, required this.onSend});
 

@@ -187,6 +187,7 @@
   "reportHistoryLoadFailed": "無法載入你的回報。請確認網路連線後再試一次。",
   "reportStatusOpen": "待處理",
   "reportStatusResolved": "已解決",
+  "reportStatusUpdateNeeded": "需要更新",
   "reportStatusDeclined": "不處理",
   "reportFixedIn": "已在 {version} 修正",
   "reportUpdateForFix": "已在 {version} 修正，請更新 App 取得修正。",

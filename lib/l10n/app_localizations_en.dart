@@ -717,6 +717,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get reportStatusResolved => 'Resolved';
 
   @override
+  String get reportStatusUpdateNeeded => 'Update needed';
+
+  @override
   String get reportStatusDeclined => 'Not fixed';
 
   @override

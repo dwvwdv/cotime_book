@@ -29,6 +29,9 @@ class _SignedInAuth extends AuthNotifier {
   _SignedInAuth(super.store) {
     state = state.copyWith(userId: 'alice');
   }
+
+  /// A new session in place of a lost one.
+  void signInAs(String userId) => state = state.copyWith(userId: userId);
 }
 
 void main() {
@@ -213,6 +216,46 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Report History'), findsOneWidget);
+    });
+
+    testWidgets('waking the app soon after a read does not read again', (
+      tester,
+    ) async {
+      reportHistory.results.add([reportRecord()]);
+      await pumpHome(tester);
+      await tester.pumpAndSettle();
+
+      for (final state in const [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+        AppLifecycleState.hidden,
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+      await tester.pumpAndSettle();
+
+      expect(reportHistory.calls, 1);
+    });
+
+    testWidgets('another account\'s session reads that account\'s reports', (
+      tester,
+    ) async {
+      reportHistory.results.addAll([
+        [reportRecord()],
+        <LayoutReportRecord>[],
+      ]);
+      await pumpHome(tester);
+      await tester.pumpAndSettle();
+      expect(find.text('Report History'), findsOneWidget);
+
+      (container.read(authProvider.notifier) as _SignedInAuth).signInAs('bob');
+      await tester.pumpAndSettle();
+
+      expect(reportHistory.calls, 2);
+      expect(find.text('Report History'), findsNothing);
     });
 
     testWidgets('on a small phone the bar with it stays on one line', (
