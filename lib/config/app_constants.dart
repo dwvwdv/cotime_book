@@ -78,7 +78,13 @@ class AppConstants {
   /// `removed` for the member who is out. An app on 4 ignores both and goes
   /// on waiting out the reconnect grace for the removed reader, as before,
   /// so 4 stays compatible.
-  static const int roomProtocolVersion = 5;
+  ///
+  /// 6: text out of the flow (`position: absolute` or `fixed`, such as
+  /// Project Gutenberg's page numbers) no longer names a page or keeps it
+  /// from being blank (GH-80). An app on 5 names every page after the first
+  /// such page number by that number and shows a commit of it chapters of
+  /// pages away, so 5 is not compatible.
+  static const int roomProtocolVersion = 6;
 
   /// The first [roomProtocolVersion] that answers a request to jump to a page.
   static const int pageJumpProtocol = 4;
@@ -88,6 +94,6 @@ class AppConstants {
   /// own minimum is above this app's version tells this one to update.
   ///
   /// Raise it to the new version when a bump is one the previous apps cannot
-  /// follow, as version 2's page breaks are not.
-  static const int minCompatibleRoomProtocol = 2;
+  /// follow, as version 2's page breaks and version 6's page names are not.
+  static const int minCompatibleRoomProtocol = 6;
 }

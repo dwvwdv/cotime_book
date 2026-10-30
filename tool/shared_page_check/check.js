@@ -14,6 +14,9 @@
 // viewport settings of Android's WebView, where a page scale without a width
 // used to put the book on a 980px layout viewport (GH-48). A layout the
 // frame no longer matches must be found and laid out again (GH-49).
+// Project Gutenberg's page numbers, taken out of the flow and drawn on one
+// page near a chapter's end, must not name the pages they stand among, and
+// the layout report must say what each page was named by (GH-80).
 // A reading theme's colours must win over a book's own white page and black
 // text, and must not move a page break. The jump preview's "go to page n of
 // this chapter" must name exactly the page the counter numbers n, and the
@@ -69,9 +72,13 @@ const bookColours =
   'html body { color: black; background-color: white }' +
   'html body p, html body div { color: #000; background-color: #fff }';
 // `pictures`: the book has a picture-only page, which must be found.
+// `pageNumbers`: it has Gutenberg's page numbers, out of the flow (GH-80).
 const books = {
   'mixed EPUB': {
-    bytes: [...fs.readFileSync(path.join(work, 'book.epub'))], pictures: true, ends: 3,
+    bytes: [...fs.readFileSync(path.join(work, 'book.epub'))],
+    pictures: true,
+    ends: 3,
+    pageNumbers: true,
   },
   'TXT import': {
     bytes: [...fs.readFileSync(path.join(work, 'txt_book.epub'))], pictures: false, ends: 0,
@@ -328,6 +335,8 @@ async function pageStarts(browser, device, shared, turns) {
   const back = [];
   const numbers = [];
   const misnamed = [];
+  const guessed = [];
+  const outOfFlow = new Set();
   for (const direction of ['next', 'prev']) {
     const seen = direction === 'next' ? starts : back;
     for (let i = 0; i < turns; i++) {
@@ -350,6 +359,22 @@ async function pageStarts(browser, device, shared, turns) {
         const named = info &&
           (await tab.evaluate((n) => cotimeSharedPage.pageStart(n), info.page));
         if (named !== cfi) misnamed.push(`${i}: ${named} for ${cfi}`);
+        // What the layout report says about this page: named by a line or
+        // a picture that is drawn on it, never by epub.js's guess (GH-80).
+        const report = await tab.evaluate(() => {
+          const d = cotimeSharedPage.diagnose();
+          const here = Number(/:(\d+)\//.exec(d.at)[1]);
+          return {
+            name: d.pageNames.find((entry) => entry.page === here),
+            boxes: d.outOfFlow.map((kind) => kind.box),
+          };
+        });
+        const name = report.name;
+        if (!name || name.cfi !== cfi || !['line', 'picture'].includes(name.by) ||
+            name.drawnOn !== name.page || name.outOfFlow) {
+          guessed.push(`${i}: ${JSON.stringify(name)}`);
+        }
+        report.boxes.forEach((box) => outOfFlow.add(box));
       }
       if (!shared && (direction === 'next' ? here.atEnd : here.atStart)) break;
       if (!(await turn(tab, direction))) break;
@@ -357,7 +382,9 @@ async function pageStarts(browser, device, shared, turns) {
   }
   back.reverse();
   await context.close();
-  return { starts, blank, pictures, ends, back, scale, numbers, misnamed };
+  return {
+    starts, blank, pictures, ends, back, scale, numbers, misnamed, guessed, outOfFlow,
+  };
 }
 
 /// Whether a frame that no longer matches the book's layout is noticed and
@@ -464,7 +491,7 @@ async function missedCommits(browser, device, starts) {
   });
   const turns = 400;
   let failed = false;
-  for (const [name, { bytes, pictures, ends }] of Object.entries(books)) {
+  for (const [name, { bytes, pictures, ends, pageNumbers }] of Object.entries(books)) {
     book = bytes;
     console.log(`${name}:`);
     for (const shared of [false, true]) {
@@ -520,6 +547,17 @@ async function missedCommits(browser, device, starts) {
         const named = new Set(a).size;
         console.log(`page names  : ${named}/${a.length} distinct`);
         if (named !== a.length) failed = true;
+        // The layout report's account of each page (GH-80), and that it
+        // finds the page numbers taken out of the flow where there are any.
+        const guessed = [...phone.guessed, ...tablet.guessed];
+        console.log(`name report : ${guessed.length === 0 ? 'every page by its own line or picture' :
+          `${guessed.length} pages not, first ${guessed[0]}`}`);
+        if (guessed.length > 0) failed = true;
+        if (pageNumbers) {
+          const found = phone.outOfFlow.has('span.pagenum');
+          console.log(`out of flow : ${[...phone.outOfFlow].join(', ') || 'nothing found'}`);
+          if (!found) failed = true;
+        }
         const backSame = phone.back.length === a.length &&
           phone.back.every((cfi, i) => cfi === a[i]);
         console.log(`backwards   : ${backSame ? 'the same pages' : 'different pages'}`);
