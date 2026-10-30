@@ -63,7 +63,10 @@ jobs:
     name: Two devices lay out identical pages
     # 不吃 CI_RUNNER／CI_LIGHT_RUNNER：要用 apt 裝 Chromium 的系統依賴與 check.js
     # 指名的字型，self-hosted runner 不一定有 sudo，字型也不一定一樣。
-    runs-on: ubuntu-latest
+    # 釘在 24.04 而不是 ubuntu-latest：latest 換成 26.04 後，釘住的 Playwright 1.56.1
+    # 裝不了它的系統依賴（"Playwright does not support chromium on ubuntu26.04-x64"），
+    # job 在跑到 check.js 之前就失敗。要換 runner 就和 Playwright 一起升，並重跑本機的 check.js。
+    runs-on: ubuntu-24.04
     # check.js 本身在 4 核的機器上約 5 分鐘；再加上 Flutter、Chromium 與 apt 的安裝。
     timeout-minutes: 25
 

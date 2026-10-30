@@ -125,6 +125,15 @@ class SharedPageStyle {
         // next page by a character of this one (GH-52).
         'overflow-wrap': 'break-word !important',
       },
+      // A table is as wide as what in it cannot break, so a book's table
+      // wider than the page (two pictures side by side under captions kept
+      // on one line) ran on into the next page's column and was drawn over
+      // its text (GH-83). Its cells wrap between words, never inside one: a
+      // table of figures broken anywhere came out one digit per line. One
+      // whose longest words alone are wider than the page still runs over
+      // (GH-84). Before the rule for code, which keeps its own line breaks
+      // inside a table too.
+      'td, th, td *, th *': {'white-space': 'normal !important'},
       // Code keeps its line breaks but wraps at the column for the same
       // reason: a page is never scrolled sideways.
       'pre, pre *': {'white-space': 'pre-wrap !important'},
@@ -135,7 +144,15 @@ class SharedPageStyle {
       // went to the next chapter (GH-49). Nothing in a paginated book is
       // meant to be scrolled or clipped. Not on body itself: epub.js sets
       // its overflow for the columns.
-      'body *': {'overflow': 'visible !important'},
+      //
+      // Nor is anything wider than the column it is in. A box the book gives
+      // a fixed width (Gutenberg's figures carry `style="width: 591px"`) ran
+      // on into the next page's column, and the caption centred in it was
+      // drawn over that page's text (GH-83).
+      'body *': {
+        'overflow': 'visible !important',
+        'max-width': '100% !important',
+      },
     };
   }
 }

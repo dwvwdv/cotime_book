@@ -16,7 +16,9 @@
 // frame no longer matches must be found and laid out again (GH-49).
 // Project Gutenberg's page numbers, taken out of the flow and drawn on one
 // page near a chapter's end, must not name the pages they stand among, and
-// the layout report must say what each page was named by (GH-80).
+// the layout report must say what each page was named by (GH-80). No text
+// may run off the edge of the page it is on, where it was drawn over the next
+// page's: a figure box wider than the page, captions kept on one line (GH-83).
 // A reading theme's colours must win over a book's own white page and black
 // text, and must not move a page break. The jump preview's "go to page n of
 // this chapter" must name exactly the page the counter numbers n, and the
@@ -238,6 +240,39 @@ function pageShows() {
   return shows;
 }
 
+/// Text on the page in view that runs past its left or right edge: drawn
+/// over the page beside it. Not a line the book itself forbids to break
+/// (`data-runs-off`, the GH-52 case): nothing the room's stylesheet can do
+/// about that, and the check for it is that the pages are still named apart.
+function textAcrossEdges() {
+  const box = document.getElementById('viewer').getBoundingClientRect();
+  const across = [];
+  for (const iframe of document.querySelectorAll('#viewer iframe')) {
+    const frame = iframe.getBoundingClientRect();
+    const doc = iframe.contentDocument;
+    if (!doc || !doc.body) continue;
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const range = doc.createRange();
+    let node;
+    while ((node = walker.nextNode())) {
+      if (!/\S/.test(node.data)) continue;
+      if (node.parentElement && node.parentElement.closest('[data-runs-off]')) continue;
+      range.selectNodeContents(node);
+      for (const r of range.getClientRects()) {
+        if (r.width <= 0 || r.height <= 0) continue;
+        const left = frame.left + r.left;
+        const right = frame.left + r.right;
+        const inView = right > box.left + 1 && left < box.right - 1 &&
+          frame.top + r.bottom > box.top + 1 && frame.top + r.top < box.bottom - 1;
+        if (inView && (left < box.left - 1 || right > box.right + 1)) {
+          across.push(node.data.trim().slice(0, 40));
+        }
+      }
+    }
+  }
+  return across;
+}
+
 /// The marked last paragraphs of chapters ("end-c0", ...) wholly on the page
 /// in view. A chapter squeezed into one clipped page never shows its end
 /// (GH-49).
@@ -335,6 +370,7 @@ async function pageStarts(browser, device, shared, turns) {
   const back = [];
   const numbers = [];
   const misnamed = [];
+  const offEdge = [];
   const guessed = [];
   const outOfFlow = new Set();
   for (const direction of ['next', 'prev']) {
@@ -352,6 +388,9 @@ async function pageStarts(browser, device, shared, turns) {
       if (shows === '') blank.push(`${direction} ${i}`);
       if (shows === 'picture' && direction === 'next') pictures.push(i);
       if (direction === 'next') (await tab.evaluate(endsShown)).forEach((id) => ends.add(id));
+      if (shared && direction === 'next') {
+        for (const text of await tab.evaluate(textAcrossEdges)) offEdge.push(`${i}: ${text}`);
+      }
       if (shared && direction === 'next') {
         const info = await tab.evaluate(() => cotimeSharedPage.pageInfo());
         numbers.push(info ? `${info.section}:${info.page}/${info.pages}` : 'none');
@@ -384,6 +423,7 @@ async function pageStarts(browser, device, shared, turns) {
   await context.close();
   return {
     starts, blank, pictures, ends, back, scale, numbers, misnamed, guessed, outOfFlow,
+    offEdge,
   };
 }
 
@@ -544,6 +584,10 @@ async function missedCommits(browser, device, starts) {
         console.log(`jump preview: ${preview.starts.filter((cfi, i) => cfi === a[i]).length}` +
           `/${a.length} pages start at the same place`);
         if (!previewSame) failed = true;
+        const offEdge = [...phone.offEdge, ...tablet.offEdge];
+        console.log(`page edges  : ${offEdge.length === 0 ? 'no text runs off a page' :
+          `${offEdge.length} lines run off a page, first ${offEdge[0]}`}`);
+        if (offEdge.length > 0) failed = true;
         const named = new Set(a).size;
         console.log(`page names  : ${named}/${a.length} distinct`);
         if (named !== a.length) failed = true;
