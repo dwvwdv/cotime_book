@@ -1,8 +1,5 @@
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../config/theme.dart';
 import '../services/layout_report_service.dart';
@@ -110,18 +107,17 @@ List<Map<String, dynamic>> layoutReportReaders(
   ];
 }
 
-String layoutReportText(Map<String, dynamic> report) =>
-    const JsonEncoder.withIndent('  ').convert(report);
-
-/// Shows [report] with a button that sends it and one that copies it.
+/// Sends a report built by [buildLayoutReport] with the reader's note.
 ///
-/// [onSend] gets the reader's note and returns the stored report's id, which
-/// the reader can quote in an issue.
+/// The report itself is not shown: a page of JSON meant nothing to the reader,
+/// and a copy of it pasted somewhere was one device's half of the problem.
+/// What became of it is in Report History on Home instead.
+///
+/// [onSend] gets the reader's note and completes once the report is stored.
 class LayoutReportSheet extends StatefulWidget {
-  final Map<String, dynamic> report;
-  final Future<String> Function(String note)? onSend;
+  final Future<void> Function(String note) onSend;
 
-  const LayoutReportSheet({super.key, required this.report, this.onSend});
+  const LayoutReportSheet({super.key, required this.onSend});
 
   @override
   State<LayoutReportSheet> createState() => _LayoutReportSheetState();
@@ -129,9 +125,8 @@ class LayoutReportSheet extends StatefulWidget {
 
 class _LayoutReportSheetState extends State<LayoutReportSheet> {
   final _note = TextEditingController();
-  late final String _text = layoutReportText(widget.report);
   bool _sending = false;
-  String? _sentId;
+  bool _sent = false;
 
   @override
   void dispose() {
@@ -140,12 +135,11 @@ class _LayoutReportSheetState extends State<LayoutReportSheet> {
   }
 
   Future<void> _send() async {
-    final onSend = widget.onSend;
-    if (onSend == null || _sending || _sentId != null) return;
+    if (_sending || _sent) return;
     setState(() => _sending = true);
     try {
-      final id = await onSend(_note.text);
-      if (mounted) setState(() => _sentId = id);
+      await widget.onSend(_note.text);
+      if (mounted) setState(() => _sent = true);
     } on LayoutReportRateLimitedException {
       if (mounted) {
         showPaperMessage(context, context.l10n.reportRateLimited);
@@ -161,10 +155,9 @@ class _LayoutReportSheetState extends State<LayoutReportSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final sentId = _sentId;
     // The whole sheet scrolls: on a landscape phone or a small e-reader the
-    // note field, the report and both buttons do not fit at once, least of
-    // all with the keyboard up (the dialog it is shown in stops above it).
+    // note field and the button do not fit at once with the keyboard up (the
+    // dialog it is shown in stops above it).
     return SingleChildScrollView(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -176,36 +169,21 @@ class _LayoutReportSheetState extends State<LayoutReportSheet> {
           const SizedBox(height: 12),
           TextField(
             controller: _note,
-            enabled: sentId == null && !_sending,
+            enabled: !_sent && !_sending,
             maxLines: 2,
             maxLength: 500,
             decoration: InputDecoration(hintText: context.l10n.reportNoteHint),
           ),
-          const SizedBox(height: 8),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 240),
-            child: Container(
-              decoration: BoxDecoration(border: Border.all(width: 1.5)),
-              padding: const EdgeInsets.all(10),
-              child: SingleChildScrollView(
-                child: SelectableText(
-                  _text,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                ),
-              ),
-            ),
-          ),
           const SizedBox(height: 16),
-          if (sentId != null) ...[
-            // The id is the reader's handle on the report, so it is shown, not
-            // flashed in a message.
-            SelectableText(
-              context.l10n.reportSent(sentId.split('-').first),
+          if (_sent) ...[
+            // Shown, not flashed in a message: it says where to look later.
+            Text(
+              context.l10n.reportSentToHistory,
               textAlign: TextAlign.center,
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 12),
-          ] else if (widget.onSend != null) ...[
+          ] else ...[
             ElevatedButton.icon(
               onPressed: _sending ? null : _send,
               icon: const Icon(Icons.send),
@@ -216,16 +194,6 @@ class _LayoutReportSheetState extends State<LayoutReportSheet> {
             ),
             const SizedBox(height: 8),
           ],
-          OutlinedButton.icon(
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: _text));
-              if (context.mounted) {
-                showPaperMessage(context, context.l10n.reportCopied);
-              }
-            },
-            icon: const Icon(Icons.copy),
-            label: Text(context.l10n.copyReport),
-          ),
         ],
       ),
     );

@@ -13,6 +13,7 @@ import '../models/shared_page.dart';
 import '../providers/ads_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/book_provider.dart';
+import '../providers/layout_report_history_provider.dart';
 import '../providers/page_sync_provider.dart';
 import '../providers/presence_provider.dart';
 import '../providers/reading_preferences_provider.dart';
@@ -1439,7 +1440,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   Future<void> _showLayoutReport() async {
     final script = await SharedPageRenderer.diagnose(_epubController);
-    final appVersion = await loadAppVersion();
+    final appVersion = await ref.read(appVersionProvider.future);
     if (!mounted) return;
     final position = _pageSync.position;
     final roomState = ref.read(roomProvider);
@@ -1487,7 +1488,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     await showPaperDialog<void>(
       context: context,
       builder: (_) => LayoutReportSheet(
-        report: report,
         onSend: (note) => LayoutReportService().submit(
           roomId: room?.id,
           appVersion: appVersion,

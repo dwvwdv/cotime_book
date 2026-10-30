@@ -17,6 +17,7 @@ class LocalStore {
   static const _readingFontSizeKey = 'reading_font_size';
   static const _volumeKeysTurnPagesKey = 'volume_keys_turn_pages';
   static const _appLanguageKey = 'app_language';
+  static const _seenReportAnswersKey = 'seen_report_answers';
 
   final SharedPreferences? _prefs;
   String? _nickname;
@@ -84,6 +85,22 @@ class LocalStore {
     languageCode,
     () => _prefs?.setString(_appLanguageKey, languageCode),
   );
+
+  /// The answers to the reader's layout reports they have already seen in
+  /// Report History (`LayoutReportRecord.answerKey`), so Home only points at
+  /// new ones.
+  Set<String> get seenReportAnswers => {
+    ...?_read<List>(_seenReportAnswersKey)?.whereType<String>(),
+  };
+
+  Future<void> saveSeenReportAnswers(Set<String> keys) {
+    final list = keys.toList();
+    return _save(
+      _seenReportAnswersKey,
+      list,
+      () => _prefs?.setStringList(_seenReportAnswersKey, list),
+    );
+  }
 
   /// The typed getters of [SharedPreferences] throw on a value of another
   /// type (an older format, a hand-edited file); this reads it as missing.

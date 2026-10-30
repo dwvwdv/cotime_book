@@ -1139,13 +1139,13 @@ abstract class AppLocalizations {
   /// No description provided for @reportRateLimited.
   ///
   /// In en, this message translates to:
-  /// **'Too many reports in the last hour. Copy this one instead.'**
+  /// **'Too many reports in the last hour. Try again later.'**
   String get reportRateLimited;
 
   /// No description provided for @reportSendFailed.
   ///
   /// In en, this message translates to:
-  /// **'Couldn\'t send the report. Try again, or copy it instead.'**
+  /// **'Couldn\'t send the report. Try again.'**
   String get reportSendFailed;
 
   /// No description provided for @pageLayoutReportTitle.
@@ -1166,11 +1166,11 @@ abstract class AppLocalizations {
   /// **'What went wrong? (optional)'**
   String get reportNoteHint;
 
-  /// No description provided for @reportSent.
+  /// No description provided for @reportSentToHistory.
   ///
   /// In en, this message translates to:
-  /// **'Sent. Report ID: {id}'**
-  String reportSent(String id);
+  /// **'Sent. You can follow it in Report History on the home screen.'**
+  String get reportSentToHistory;
 
   /// No description provided for @sending.
   ///
@@ -1184,17 +1184,89 @@ abstract class AppLocalizations {
   /// **'Send Report'**
   String get sendReport;
 
-  /// No description provided for @reportCopied.
+  /// No description provided for @reportHistory.
   ///
   /// In en, this message translates to:
-  /// **'Report copied'**
-  String get reportCopied;
+  /// **'Report History'**
+  String get reportHistory;
 
-  /// No description provided for @copyReport.
+  /// No description provided for @reportHistoryUpdates.
   ///
   /// In en, this message translates to:
-  /// **'Copy Report'**
-  String get copyReport;
+  /// **'{count, plural, =1{One of your reports has an answer} other{{count} of your reports have answers}}'**
+  String reportHistoryUpdates(int count);
+
+  /// No description provided for @reportHistoryEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'You haven\'t sent any reports.'**
+  String get reportHistoryEmpty;
+
+  /// No description provided for @reportHistoryLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t load your reports. Check the connection and try again.'**
+  String get reportHistoryLoadFailed;
+
+  /// No description provided for @reportStatusOpen.
+  ///
+  /// In en, this message translates to:
+  /// **'Pending'**
+  String get reportStatusOpen;
+
+  /// No description provided for @reportStatusResolved.
+  ///
+  /// In en, this message translates to:
+  /// **'Resolved'**
+  String get reportStatusResolved;
+
+  /// No description provided for @reportStatusUpdateNeeded.
+  ///
+  /// In en, this message translates to:
+  /// **'Update needed'**
+  String get reportStatusUpdateNeeded;
+
+  /// No description provided for @reportStatusDeclined.
+  ///
+  /// In en, this message translates to:
+  /// **'Not fixed'**
+  String get reportStatusDeclined;
+
+  /// No description provided for @reportFixedIn.
+  ///
+  /// In en, this message translates to:
+  /// **'Fixed in {version}'**
+  String reportFixedIn(String version);
+
+  /// No description provided for @reportUpdateForFix.
+  ///
+  /// In en, this message translates to:
+  /// **'Fixed in {version}. Update the app to get the fix.'**
+  String reportUpdateForFix(String version);
+
+  /// No description provided for @reportSentAt.
+  ///
+  /// In en, this message translates to:
+  /// **'Sent {time}'**
+  String reportSentAt(String time);
+
+  /// No description provided for @reportHandledAt.
+  ///
+  /// In en, this message translates to:
+  /// **'Handled {time}'**
+  String reportHandledAt(String time);
+
+  /// No description provided for @reportUnknownBook.
+  ///
+  /// In en, this message translates to:
+  /// **'Book not recorded'**
+  String get reportUnknownBook;
+
+  /// No description provided for @reportYourNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Your note: {note}'**
+  String reportYourNote(String note);
 
   /// No description provided for @languageChineseTraditional.
   ///

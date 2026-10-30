@@ -1,10 +1,12 @@
 import 'package:cotime_book/config/theme.dart';
 import 'package:cotime_book/l10n/l10n.dart';
+import 'package:cotime_book/models/layout_report_record.dart';
 import 'package:cotime_book/models/recent_room.dart';
 import 'package:cotime_book/providers/announcement_provider.dart';
 import 'package:cotime_book/providers/app_locale_provider.dart';
 import 'package:cotime_book/providers/auth_provider.dart';
 import 'package:cotime_book/providers/external_link_provider.dart';
+import 'package:cotime_book/providers/layout_report_history_provider.dart';
 import 'package:cotime_book/providers/local_store_provider.dart';
 import 'package:cotime_book/providers/room_provider.dart';
 import 'package:cotime_book/screens/home_screen.dart';
@@ -20,18 +22,23 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'announcement_test.dart' show FakeAnnouncements, announcement;
+import 'layout_report_history_test.dart' show FakeReportHistory, reportRecord;
 import 'room_provider_test.dart' show FakeRoomService, testRoom;
 
 class _SignedInAuth extends AuthNotifier {
   _SignedInAuth(super.store) {
     state = state.copyWith(userId: 'alice');
   }
+
+  /// A new session in place of a lost one.
+  void signInAs(String userId) => state = state.copyWith(userId: userId);
 }
 
 void main() {
   late LocalStore store;
   late FakeRoomService rooms;
   late FakeAnnouncements announcements;
+  late FakeReportHistory reportHistory;
   late ProviderContainer container;
   late List<String> visitedLobbies;
   late List<Uri> openedLinks;
@@ -42,6 +49,7 @@ void main() {
     store = LocalStore(await SharedPreferences.getInstance());
     rooms = FakeRoomService();
     announcements = FakeAnnouncements();
+    reportHistory = FakeReportHistory();
     visitedLobbies = [];
     openedLinks = [];
     linksOpen = true;
@@ -56,6 +64,8 @@ void main() {
         roomServiceProvider.overrideWithValue(rooms),
         authProvider.overrideWith((ref) => _SignedInAuth(store)),
         announcementServiceProvider.overrideWithValue(announcements),
+        layoutReportHistoryServiceProvider.overrideWithValue(reportHistory),
+        appVersionProvider.overrideWith((ref) async => '1.0.27+31'),
         externalLinkProvider.overrideWithValue((uri) async {
           openedLinks.add(uri);
           return linksOpen;
@@ -134,6 +144,141 @@ void main() {
     expect(announcements.calls, 1);
     expect(find.text('v1.0.18'), findsOneWidget);
     expect(find.text('News on the home screen'), findsOneWidget);
+  });
+
+  group('Report History', () {
+    testWidgets('is not on Home for a reader who never sent a report', (
+      tester,
+    ) async {
+      await pumpHome(tester);
+      await tester.pumpAndSettle();
+
+      expect(reportHistory.calls, 1);
+      expect(find.text('Report History'), findsNothing);
+      expect(find.textContaining('reports ha'), findsNothing);
+    });
+
+    testWidgets('a pending report puts it in the bar, with no news', (
+      tester,
+    ) async {
+      reportHistory.results.add([reportRecord()]);
+      await pumpHome(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Report History'), findsOneWidget);
+      expect(find.textContaining('reports ha'), findsNothing);
+    });
+
+    testWidgets('an answer is announced on Home until it has been seen', (
+      tester,
+    ) async {
+      reportHistory.results.add([
+        reportRecord(status: LayoutReportStatus.resolved, fixedIn: '1.0.28'),
+      ]);
+      await pumpHome(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('One of your reports has an answer'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Fixed in 1.0.28. Update the app to get the fix.'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(find.text('One of your reports has an answer'), findsNothing);
+      expect(find.text('Report History'), findsOneWidget);
+    });
+
+    testWidgets('a read that failed offline is tried again on coming back', (
+      tester,
+    ) async {
+      reportHistory.results.addAll([
+        Exception('offline'),
+        [reportRecord()],
+      ]);
+      await pumpHome(tester);
+      await tester.pumpAndSettle();
+      expect(find.text('Report History'), findsNothing);
+
+      // Away and back, through the states a phone goes through.
+      for (final state in const [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+        AppLifecycleState.hidden,
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.text('Report History'), findsOneWidget);
+    });
+
+    testWidgets('waking the app soon after a read does not read again', (
+      tester,
+    ) async {
+      reportHistory.results.add([reportRecord()]);
+      await pumpHome(tester);
+      await tester.pumpAndSettle();
+
+      for (final state in const [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+        AppLifecycleState.hidden,
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+      await tester.pumpAndSettle();
+
+      expect(reportHistory.calls, 1);
+    });
+
+    testWidgets('another account\'s session reads that account\'s reports', (
+      tester,
+    ) async {
+      reportHistory.results.addAll([
+        [reportRecord()],
+        <LayoutReportRecord>[],
+      ]);
+      await pumpHome(tester);
+      await tester.pumpAndSettle();
+      expect(find.text('Report History'), findsOneWidget);
+
+      (container.read(authProvider.notifier) as _SignedInAuth).signInAs('bob');
+      await tester.pumpAndSettle();
+
+      expect(reportHistory.calls, 2);
+      expect(find.text('Report History'), findsNothing);
+    });
+
+    testWidgets('on a small phone the bar with it stays on one line', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      reportHistory.results.add([reportRecord()]);
+      await pumpHome(tester);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      final line = tester.getCenter(find.text('TXT to EPUB')).dy;
+      expect(
+        tester.getCenter(find.text('Report History')).dy,
+        closeTo(line, 0.5),
+      );
+      expect(
+        tester.getTopRight(find.byTooltip('News')).dx,
+        lessThanOrEqualTo(320),
+      );
+    });
   });
 
   testWidgets('More Apps opens the Google Play page of 無感記帳', (tester) async {

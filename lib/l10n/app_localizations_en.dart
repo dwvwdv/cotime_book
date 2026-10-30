@@ -664,11 +664,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get reportRateLimited =>
-      'Too many reports in the last hour. Copy this one instead.';
+      'Too many reports in the last hour. Try again later.';
 
   @override
-  String get reportSendFailed =>
-      'Couldn\'t send the report. Try again, or copy it instead.';
+  String get reportSendFailed => 'Couldn\'t send the report. Try again.';
 
   @override
   String get pageLayoutReportTitle => 'Page layout report';
@@ -681,9 +680,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String get reportNoteHint => 'What went wrong? (optional)';
 
   @override
-  String reportSent(String id) {
-    return 'Sent. Report ID: $id';
-  }
+  String get reportSentToHistory =>
+      'Sent. You can follow it in Report History on the home screen.';
 
   @override
   String get sending => 'Sending...';
@@ -692,10 +690,65 @@ class AppLocalizationsEn extends AppLocalizations {
   String get sendReport => 'Send Report';
 
   @override
-  String get reportCopied => 'Report copied';
+  String get reportHistory => 'Report History';
 
   @override
-  String get copyReport => 'Copy Report';
+  String reportHistoryUpdates(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count of your reports have answers',
+      one: 'One of your reports has an answer',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get reportHistoryEmpty => 'You haven\'t sent any reports.';
+
+  @override
+  String get reportHistoryLoadFailed =>
+      'Couldn\'t load your reports. Check the connection and try again.';
+
+  @override
+  String get reportStatusOpen => 'Pending';
+
+  @override
+  String get reportStatusResolved => 'Resolved';
+
+  @override
+  String get reportStatusUpdateNeeded => 'Update needed';
+
+  @override
+  String get reportStatusDeclined => 'Not fixed';
+
+  @override
+  String reportFixedIn(String version) {
+    return 'Fixed in $version';
+  }
+
+  @override
+  String reportUpdateForFix(String version) {
+    return 'Fixed in $version. Update the app to get the fix.';
+  }
+
+  @override
+  String reportSentAt(String time) {
+    return 'Sent $time';
+  }
+
+  @override
+  String reportHandledAt(String time) {
+    return 'Handled $time';
+  }
+
+  @override
+  String get reportUnknownBook => 'Book not recorded';
+
+  @override
+  String reportYourNote(String note) {
+    return 'Your note: $note';
+  }
 
   @override
   String get languageChineseTraditional => 'Chinese (Traditional)';

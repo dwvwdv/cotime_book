@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/layout_report_record.dart';
 import 'supabase_service.dart';
 
 /// The account sent its hourly allowance of reports already.
@@ -32,6 +33,41 @@ class LayoutReportService {
       if (error.code == '54000') throw const LayoutReportRateLimitedException();
       rethrow;
     }
+  }
+}
+
+/// The reports this account sent and what became of them, for the home
+/// screen. Injectable so it can be tested without the network.
+abstract interface class LayoutReportHistory {
+  /// Newest first.
+  Future<List<LayoutReportRecord>> list();
+}
+
+/// Reads `cotime_book.my_layout_reports()`: the account's own reports, and
+/// only their outcome, never the report itself.
+class SupabaseLayoutReportHistory implements LayoutReportHistory {
+  static const listTimeout = Duration(seconds: 30);
+
+  final Future<Object?> Function() _call;
+
+  SupabaseLayoutReportHistory({Future<Object?> Function()? call})
+    : _call = call ?? _callRpc;
+
+  static Future<Object?> _callRpc() =>
+      SupabaseService.database.rpc('my_layout_reports');
+
+  @override
+  Future<List<LayoutReportRecord>> list() async {
+    final rows = await _call().timeout(listTimeout);
+    // Not "no reports": that would take Report History off Home over a
+    // response it could not read. A failed read keeps the list it had.
+    if (rows is! List) {
+      throw FormatException('Unexpected report history: ${rows.runtimeType}');
+    }
+    return [
+      for (final row in rows)
+        if (row is Map<String, dynamic>) ?LayoutReportRecord.fromRow(row),
+    ];
   }
 }
 
